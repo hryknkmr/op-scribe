@@ -14,3 +14,6 @@ scripts/pii-guard.patterns.local.txt
 # 送信先・トークンを書いたローカル設定
 .env
 .env.*
+
+# Local-only tooling and data (evaluation harness, captured screens). Never pushed.
+local/
