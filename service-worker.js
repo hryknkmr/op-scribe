@@ -9,7 +9,7 @@
  * Every step is sanitized again here, whatever the content script already
  * did: URLs are aliased, user keywords masked, and redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js', 'shared/narrate.js');
+importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js', 'shared/units.js', 'shared/narrate.js');
 
 const { scrubText, scrubUrl, defaults, finalScan } = self.OpScribeSanitize;
 const { narrate } = self.OpScribeNarrate;
@@ -17,6 +17,9 @@ const { buildReproduction, toMarkdown, toGherkin, isPageRewrite } = self.OpScrib
 const { classifyScreen, describeComponents } = self.OpScribeScreen;
 
 const REC_KEY = 'opsRecording';
+// Screen text read by the built-in AI. Kept apart from the recording: it is never
+// shown, persisted to disk or sent, and is dropped with the recording.
+const UNITS_KEY = 'opsUnits';
 const SETTINGS_KEY = 'opsSettings';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 const MAX_STEPS = 500;
@@ -54,7 +57,7 @@ function mutate(fn) {
     const rec = await getRecording();
     const result = await fn(rec);
     if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
-    if (result?.remove) await chrome.storage.session.remove(REC_KEY);
+    if (result?.remove) await chrome.storage.session.remove([REC_KEY, UNITS_KEY]);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
     return result?.reply;
   });
@@ -166,6 +169,7 @@ function cleanStep(raw, rec, settings) {
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
   if (['user', 'automation', 'script', 'agent'].includes(raw.actor)) step.actor = raw.actor;
+  if (raw.seq) step.seq = String(raw.seq).slice(0, 24);
   if (raw.tool) {
     step.tool = text(raw.tool, 80);
     step.ok = raw.ok !== false;
@@ -223,6 +227,8 @@ function cleanScreen(raw, text) {
 }
 
 function appendStep(rec, step) {
+  rec.nextId = (rec.nextId || 0) + 1;
+  step.id = `s${rec.nextId}`;
   rec.steps.push(step);
   if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
 }
@@ -236,12 +242,27 @@ function appendScreen(rec, step) {
     const s = rec.steps[i];
     if (s.type === 'navigate' || s.type === 'note') continue;
     if (s.type === 'screen' && s.url === step.url) {
-      rec.steps[i] = { ...step, t: s.t };
-      return;
+      rec.steps[i] = { ...step, t: s.t, id: s.id };
+      return s.id;
     }
     break;
   }
   appendStep(rec, step);
+  return step.id;
+}
+
+async function saveUnits(id, units, settings) {
+  if (!Array.isArray(units) || !units.length) return;
+  const clean = units.slice(0, 200).map((u) => ({
+    kind: String(u.kind).slice(0, 16),
+    name: scrubText(u.name, { keywords: settings.keywords, maxLength: 60 }).text,
+    text: scrubText(u.text, { keywords: settings.keywords }).text,
+    order: Number(u.order) || 0,
+    ...(Number.isFinite(u.count) ? { count: u.count } : {})
+  }));
+  const stored = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
+  stored[id] = clean;
+  await chrome.storage.session.set({ [UNITS_KEY]: stored });
 }
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
@@ -273,6 +294,7 @@ async function start({ tabId, url }) {
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
     // Persist before injecting: the injected script immediately asks whether it is being recorded.
+    await chrome.storage.session.remove(UNITS_KEY);
     await chrome.storage.session.set({ [REC_KEY]: rec });
     await injectNow(tabId);
     await setBadge(true);
@@ -294,7 +316,10 @@ const stop = async () => {
     // The last screen may not have been described yet (fast automated runs): ask for it now.
     try {
       const last = await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' });
-      if (last?.screen) appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, await getSettings()));
+      if (last?.screen) {
+        const settings = await getSettings();
+        await saveUnits(appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, settings)), last.units, settings);
+      }
     } catch { /* tab gone or not injected */ }
     await stopTab(rec);
     rec.state = 'stopped';
@@ -337,14 +362,26 @@ async function verbalize() {
   if (!rec?.steps?.length) return { ok: false, error: 'NO_RECORDING' };
   const settings = await getSettings();
   await broadcast({ type: 'NARRATION_STATUS', text: 'Built-in AI で言語化しています…' });
+  const units = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
   const result = await withKeepAlive(() => narrate(rec, {
     LM: self.LanguageModel,
     scan: scanFor(rec, settings),
+    unitsOf: (step) => units[step.id] || null,
     onStatus: (text) => broadcast({ type: 'NARRATION_STATUS', text })
   }));
   await mutate(async (latest) => {
     if (!latest || latest.id !== rec.id) return null;
-    latest.narration = { ...result, at: Date.now(), stepCount: rec.steps.length };
+    const { screens = [], operations = [], ...narration } = result;
+    // Keep the understanding on the steps themselves so Gherkin, the side panel and the payload carry it.
+    for (const s of screens) {
+      const step = latest.steps.find((x) => x.id === s.id);
+      if (step?.screen) step.screen.ai = s.ai;
+    }
+    for (const o of operations) {
+      const step = latest.steps.find((x) => x.id === o.id);
+      if (step) step.ai = o.ai;
+    }
+    latest.narration = { ...narration, at: Date.now(), stepCount: rec.steps.length };
     return { save: latest };
   });
   return { ok: true, generator: result.generator, reason: result.reason };
@@ -437,8 +474,17 @@ async function handle(message, sender) {
       const settings = await getSettings();
       if (type === 'STEP') {
         const step = cleanStep(detail, rec, settings);
-        if (step.type === 'screen') appendScreen(rec, step);
+        if (step.type === 'screen') await saveUnits(appendScreen(rec, step), detail.units, settings);
         else appendStep(rec, step);
+        return { save: rec, reply: { ok: true } };
+      }
+      if (type === 'CHANGE') {
+        // What appeared or disappeared right after an operation belongs to that operation.
+        const step = rec.steps.find((s) => s.seq && s.seq === String(detail.seq));
+        if (!step) return { reply: { ok: false } };
+        const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
+          .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160 }).text);
+        step.change = { appeared: lines(detail.change?.appeared), removed: lines(detail.change?.removed) };
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {

@@ -161,7 +161,8 @@
       url: step.url,
       summary: step.screen?.summary || '',
       reasons: (step.screen?.purposes || []).flatMap((p) => p.reasons || []).slice(0, 4),
-      components: step.screen?.components || []
+      components: step.screen?.components || [],
+      ai: step.screen?.ai || null
     };
   }
 
@@ -228,6 +229,9 @@
       }
       const by = step.actor === 'script' || step.actor === 'agent' ? `（${ACTOR_LABELS[step.actor]}による操作）` : '';
       const item = { action: `${humanize(describeStep(step))}${by}`, screen: current };
+      if (step.change?.appeared?.length) item.appeared = step.change.appeared.slice(0, 3);
+      if (step.ai?.meaning) item.meaning = step.ai.meaning;
+      if (step.ai?.result) item.result = step.ai.result;
       out.push(item);
       lastAction = { type: step.type, t: step.t, item };
     }
@@ -261,7 +265,9 @@
         : titles.length ? `${titles[0]}での操作（${out.length} ステップ）` : `操作の再現手順（${out.length} ステップ）`,
       preconditions,
       screens,
-      steps: out.map(({ action, expected, screen }) => ({ action, expected: expected?.join(' / ') || undefined, screen })),
+      steps: out.map(({ action, expected, screen, appeared, meaning, result }) => ({
+        action, expected: expected?.join(' / ') || undefined, screen, appeared, meaning, result
+      })),
       notes
     };
   }
@@ -273,6 +279,8 @@
       lines.push(`- 画面の目的: ${screen.summary}${screen.reasons?.length ? `（根拠: ${screen.reasons.join('、')}）` : ''}`);
     }
     if (screen.components?.length) lines.push(`- 主な UI: ${screen.components.join(' / ')}`);
+    if (screen.ai?.purpose) lines.push(`- AI の理解（目的）: ${screen.ai.purpose}`);
+    if (screen.ai?.summary) lines.push(`- AI の理解（内容）: ${screen.ai.summary}`);
     return lines;
   }
 
@@ -297,7 +305,10 @@
         shown = step.screen;
       }
       lines.push(`${i + 1}. ${step.action}`);
+      if (step.meaning) lines.push(`   - 意味（AI）: ${step.meaning}`);
+      if (step.appeared?.length) lines.push(`   - 操作後に現れた文字: ${step.appeared.map((t) => `「${t}」`).join(' ')}`);
       if (step.expected) lines.push(`   - 期待結果: ${step.expected}`);
+      if (step.result) lines.push(`   - 結果（AI）: ${step.result}`);
     });
     if (!grouped && screens.length) {
       lines.push('', '## 画面');
@@ -332,6 +343,9 @@
       add('href', step.target.href);
     }
     add('intent', intentOfStep(step)?.label);
+    add('ai-meaning', step.ai?.meaning);
+    add('ai-result', step.ai?.result);
+    for (const text of step.change?.appeared?.slice(0, 3) || []) add('appeared', text);
     add('value', step.value);
     add('checked', step.checked);
     add('key', step.key);
@@ -349,6 +363,8 @@
     if (info.summary) rows.push(['purpose', info.summary]);
     for (const reason of info.reasons) rows.push(['reason', reason]);
     for (const component of info.components) rows.push(['ui', component]);
+    if (info.ai?.purpose) rows.push(['ai-purpose', info.ai.purpose]);
+    if (info.ai?.summary) rows.push(['ai-summary', info.ai.summary]);
     return rows;
   }
 
@@ -434,7 +450,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const STEP_FIELDS = ['type', 't', 'url', 'actor', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source', 'screen'];
+  const STEP_FIELDS = ['id', 'seq', 'type', 't', 'url', 'actor', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source', 'screen', 'change', 'ai'];
   const TARGET_FIELDS = ['role', 'name', 'tag', 'selector', 'href', 'component'];
 
   const pick = (obj, fields) => {

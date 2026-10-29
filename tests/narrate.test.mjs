@@ -1,4 +1,4 @@
-// The built-in AI is replaced by a fake LanguageModel so the acceptance rules can be tested in node.
+// The built-in AI is replaced by a fake LanguageModel so the reading pipeline can be tested in node.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
@@ -8,98 +8,117 @@ const S = require('../shared/sanitize.js');
 const D = require('../shared/describe.js');
 const N = require('../shared/narrate.js');
 
+const scan = (value) => S.finalScan(value);
+
+const screen = (id, url, title) => ({ id, type: 'screen', t: 0, url, screen: { title, summary: '', purposes: [], components: [] } });
+
 const rec = {
   id: 'rec-narrate',
-  privacyLevel: 'strict',
   startUrl: 'https://example.com/',
   steps: [
-    { type: 'navigate', t: 0, url: 'https://example.com/' },
-    { type: 'screen', t: 10, url: 'https://example.com/', screen: { title: 'トップ', summary: '検索の画面', purposes: [], components: ['検索フォーム（キーワード）'] } },
-    { type: 'input', t: 1000, actor: 'automation', target: { role: 'searchbox', name: 'キーワード', component: { kind: 'search' } }, value: '[[text:4]]' },
-    { type: 'key', t: 1100, actor: 'automation', key: 'Enter' }
+    { id: 's1', type: 'navigate', t: 0, url: 'https://example.com/' },
+    screen('s2', 'https://example.com/', 'Example'),
+    { id: 's3', type: 'input', t: 1000, seq: 'a-1', actor: 'automation', url: 'https://example.com/', target: { role: 'searchbox', name: 'キーワード', component: { kind: 'search' } }, value: 'shoes' },
+    { id: 's4', type: 'key', t: 1100, seq: 'a-2', actor: 'automation', url: 'https://example.com/', key: 'Enter', change: { appeared: ['20 件見つかりました'], removed: [] } },
+    { id: 's5', type: 'navigate', t: 1300, url: 'https://example.com/search?q=shoes' },
+    screen('s6', 'https://example.com/search?q=shoes', '検索結果')
   ]
 };
 
-function fakeModel(reply, state = 'available') {
+const units = {
+  s2: [
+    { kind: 'page', text: 'タイトル: Example\nパス: /', order: 0 },
+    { kind: 'form', name: '検索', text: 'キーワード [search]\n検索', order: 1 },
+    { kind: 'landmark', name: '本文', text: 'おすすめの商品をご紹介します。'.repeat(60), order: 2 }
+  ],
+  s6: [
+    { kind: 'page', text: 'タイトル: 検索結果\nパス: /search', order: 0 },
+    { kind: 'list', count: 20, text: 'Running Shoes\nWalking Shoes', order: 1 }
+  ]
+};
+
+/** A fake model: answers by which prompt the session was created with, and records every call. */
+function fakeModel(answers, { quota = 1200 } = {}) {
   const calls = [];
+  const kindOf = (system) => (system.includes('画面が「何をするための画面か」') ? 'screen'
+    : system.includes('1 つの操作') ? 'transition'
+      : system.includes('記録全体を要約') ? 'journey' : 'compact');
+  const session = (kind) => ({
+    inputQuota: quota,
+    inputUsage: 0,
+    measureInputUsage: async (text) => text.length,
+    clone: async () => session(kind),
+    prompt: async (input) => {
+      calls.push({ kind, input });
+      const answer = answers[kind];
+      return JSON.stringify(typeof answer === 'function' ? answer(input, calls) : answer);
+    },
+    destroy() {}
+  });
   return {
     calls,
-    availability: async () => state,
-    create: async (options) => {
-      calls.push(options);
-      return {
-        prompt: async (input, { responseConstraint }) => {
-          calls.push({ input, responseConstraint });
-          return JSON.stringify(typeof reply === 'function' ? reply(input) : reply);
-        },
-        destroy() {}
-      };
-    }
+    availability: async () => 'available',
+    create: async ({ initialPrompts }) => session(kindOf(initialPrompts[0].content))
   };
 }
 
-const scan = (value) => S.finalScan(value);
+const goodAnswers = {
+  screen: (input) => (input.includes('検索結果')
+    ? { purpose: '検索結果を一覧で見る', summary: '商品が 20 件並ぶ', facts: ['20 件'] }
+    : { purpose: '商品を検索する', summary: '検索フォームとおすすめ商品がある', facts: ['検索フォーム'] }),
+  transition: (input) => (input.includes('Enter')
+    ? { meaning: 'キーワードで検索を実行する', result: '20 件の検索結果が表示された' }
+    : { meaning: '検索するキーワードを入れる', result: '' }),
+  journey: { title: '商品のキーワード検索', summary: 'トップで shoes を検索し、20 件の結果一覧を開いた。' },
+  compact: { purpose: '商品を検索する', summary: '検索フォームがある', facts: [] }
+};
 
-test('the model sees screens and numbered masked steps, and its wording is adopted step by step', async () => {
+test('a large screen is read in several pages and the memo is carried from page to page', async () => {
+  const LM = fakeModel(goodAnswers);
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.generator, 'built-in-ai');
+  const reads = LM.calls.filter((c) => c.kind === 'screen' && c.input.includes('次に読む部分'));
+  assert.ok(reads.length >= 3, `expected the large top screen to need several readings, got ${reads.length}`);
+  // the second reading starts from the first reading's memo
+  assert.match(reads[1].input, /これまでのメモ:\n\{"purpose":"商品を検索する"/);
+  assert.equal(result.screens.length, 2);
+});
+
+test('an operation is read with the screen before it, what changed, and the screen after it', async () => {
+  const LM = fakeModel(goodAnswers);
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  const enter = LM.calls.find((c) => c.kind === 'transition' && c.input.includes('Enter'));
+  assert.match(enter.input, /操作前の画面: \{"purpose":"商品を検索する"/);
+  assert.match(enter.input, /現れた文字: 20 件見つかりました/);
+  assert.match(enter.input, /操作後の画面: \{"purpose":"検索結果を一覧で見る"/);
+  assert.deepEqual(result.operations.map((o) => o.id), ['s3', 's4']);
+});
+
+test('the result carries the journey summary and the understanding in the Markdown', async () => {
+  const LM = fakeModel(goodAnswers);
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.title, '商品のキーワード検索');
+  assert.match(result.markdown, /^# 商品のキーワード検索\n\n## 概要\nトップで shoes を検索し/);
+  assert.match(result.markdown, /- AI の理解（目的）: 商品を検索する/);
+  assert.ok(result.markdown.includes('Enter キーを押す\n   - 意味（AI）: キーワードで検索を実行する\n   - 操作後に現れた文字: 「20 件見つかりました」'), result.markdown);
+});
+
+test('an answer with a URL or credential it never read is dropped', async () => {
   const LM = fakeModel({
-    title: 'キーワード検索',
-    summary: 'トップの検索フォームでキーワード検索を行う。',
-    steps: [
-      { index: 1, action: 'トップページ https://example.com/ を開く' },
-      { index: 2, action: '検索フォームのキーワード欄に ‹任意の文字列 4文字› を入力する' },
-      { index: 3, action: 'Enter キーを押して検索を実行する' }
-    ]
+    ...goodAnswers,
+    transition: { meaning: 'https://evil.example/ に送る', result: '' },
+    journey: { title: 't', summary: 'パスワードは token=abcdef123456 を使った' }
   });
-  const result = await N.narrate(rec, { LM, scan });
-  assert.equal(result.generator, 'built-in-ai');
-  assert.equal(result.rewritten, 3);
-  assert.equal(result.reason, undefined);
-  assert.match(result.markdown, /## 概要\nトップの検索フォームでキーワード検索を行う。/);
-  assert.match(result.markdown, /### 画面 1: 「トップ」[\s\S]*3\. Enter キーを押して検索を実行する/);
-
-  const { input } = LM.calls[1];
-  assert.match(input, /【画面】「トップ」— 検索の画面。主な UI: 検索フォーム（キーワード）\n1\. https:\/\/example\.com\/ を開く\n2\. 検索フォームの「キーワード」検索欄に ‹任意の文字列 4文字› を入力する/);
-  assert.ok(!input.includes('[[text:4]]'), 'model input uses the human-readable placeholder');
-});
-
-test('a rewrite that claims an action, URL or placeholder its source step lacks is replaced by the template sentence', async () => {
-  const cases = [
-    { index: 1, action: 'トップのリンクをクリックして https://example.com/ を開く' },  // the source only opened a URL
-    { index: 2, action: '検索欄に ‹パスワード› を入力する' },                             // placeholder not in this step
-    { index: 3, action: 'https://evil.example/ で Enter キーを押す' }                      // URL not in this step
-  ];
-  const LM = fakeModel({ title: '検索', summary: '検索する', steps: [...cases, { index: 9, action: '余計な手順を開く' }] });
-  const result = await N.narrate(rec, { LM, scan });
-  const template = D.buildReproduction(rec).steps.map((s) => s.action);
-  assert.equal(result.generator, 'template');
-  assert.match(result.reason, /1: 元にない動作（click）/);
-  for (const action of template) assert.ok(result.markdown.includes(action), action);
-});
-
-test('only the clean steps are taken when some are rejected', async () => {
-  const LM = fakeModel({ title: '検索', summary: '検索する', steps: [
-    { index: 1, action: 'トップページ https://example.com/ を開く' },
-    { index: 2, action: '検索欄をクリックして ‹任意の文字列 4文字› を入力する' },
-    { index: 3, action: 'Enter キーを押す' }
-  ] });
-  const result = await N.narrate(rec, { LM, scan });
-  assert.equal(result.generator, 'built-in-ai');
-  assert.equal(result.rewritten, 2);
-  assert.match(result.reason, /1 件はテンプレートの文を使用（2: 対象名・値を変えた（「キーワード」））/);
-  assert.match(result.markdown, /2\. 検索フォームの「キーワード」検索欄に ‹任意の文字列 4文字› を入力する/);
-});
-
-test('a title or summary that leaks a personal value is dropped', async () => {
-  const LM = fakeModel({ title: 'someone@example.com の検索', summary: '連絡先 090-1234-5678', steps: [{ index: 3, action: 'Enter キーを押す' }] });
-  const result = await N.narrate(rec, { LM, scan });
-  assert.ok(!result.markdown.includes('someone@'));
-  assert.ok(!result.markdown.includes('090-'));
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.operations.length, 0);
   assert.equal(result.summary, undefined);
+  assert.ok(!result.markdown.includes('evil.example'));
+  assert.ok(!result.markdown.includes('abcdef123456'));
 });
 
 test('without the built-in AI the recording is still described by the template', async () => {
-  for (const LM of [undefined, fakeModel({}, 'unavailable')]) {
-    const result = await N.narrate(rec, { LM, scan });
+  for (const LM of [undefined, { availability: async () => 'unavailable' }]) {
+    const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
     assert.equal(result.generator, 'template');
     assert.equal(result.markdown, D.toMarkdown(D.buildReproduction(rec)));
   }
@@ -107,49 +126,34 @@ test('without the built-in AI the recording is still described by the template',
 
 test('a thrown model error never escapes', async () => {
   const LM = { availability: async () => 'available', create: async () => { throw new Error('boom'); } };
-  const result = await N.narrate(rec, { LM, scan });
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
   assert.equal(result.generator, 'template');
   assert.match(result.reason, /boom/);
 });
 
-test('the actor of each operation is kept in the payload, the template notes and Gherkin', () => {
+test('a long journey is folded into a summary instead of being cut', async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `画面「ページ${i}」: ${'内容'.repeat(30)}`);
+  const LM = fakeModel({ ...goodAnswers, compact: { title: 'x', summary: '前半では一覧を順に見た' } });
+  const ask = N.makeAsk(LM);
+  const out = await N.summarizeJourney(ask, lines, scan);
+  assert.equal(out.title, '商品のキーワード検索');
+  const final = LM.calls.filter((c) => c.kind === 'journey').at(-1).input;
+  assert.ok(final.length <= N.SETTINGS.journeyLimit + 200, `journey input ${final.length}`);
+  assert.match(final, /（ここまでの要約）前半では一覧を順に見た/);
+});
+
+test('the actor of each operation and what it changed are kept in the payload, the notes and Gherkin', () => {
   const repro = D.buildReproduction(rec);
   assert.ok(repro.notes.includes('操作の主体: 自動テスト 2 件'));
   assert.match(D.toGherkin(rec), /\| actor +\| automation +\|/);
+  assert.match(D.toGherkin(rec), /\| appeared +\| 20 件見つかりました \|/);
   const payload = D.buildPayload({ ...rec, startedAt: 0, narration: { generator: 'built-in-ai', markdown: '# x\n', summary: 's' } }, null, {});
   assert.equal(payload.recording.steps[2].actor, 'automation');
+  assert.deepEqual(payload.recording.steps[3].change, { appeared: ['20 件見つかりました'], removed: [] });
   assert.deepEqual([payload.reproduction.generator, payload.reproduction.summary], ['built-in-ai', 's']);
 });
 
 test('script-driven operations are marked in the sentence', () => {
   const repro = D.buildReproduction({ steps: [{ type: 'click', t: 0, actor: 'script', target: { role: 'button', name: '保存' } }] });
   assert.equal(repro.steps[0].action, '「保存」ボタンをクリックする（ページ内スクリプトによる操作）');
-});
-
-test('a judgement the recording does not contain is rejected', async () => {
-  const LM = fakeModel({ title: '不正サイトへのアクセス', summary: '異常な URL を開いた', steps: [{ index: 1, action: '異常な URL https://example.com/ を開く' }] });
-  const result = await N.narrate(rec, { LM, scan });
-  assert.equal(result.generator, 'template');
-  assert.match(result.reason, /元にない動作（judgement）/);
-  assert.ok(!/不正|異常/.test(result.markdown));
-});
-
-test('a rewrite that drops the URL or placeholder of its step is rejected', async () => {
-  const LM = fakeModel({ title: '検索', summary: '検索する', steps: [
-    { index: 1, action: 'トップページを開く' },
-    { index: 2, action: '検索欄にキーワードを入力する' },
-    { index: 3, action: 'Enter キーを押す' }
-  ] });
-  const result = await N.narrate(rec, { LM, scan });
-  assert.match(result.reason, /1: URL を落とした（https:\/\/example\.com\/）/);
-  assert.match(result.reason, /2: 伏せ字を落とした（‹任意の文字列 4文字›）/);
-  assert.equal(result.rewritten, 1);
-});
-
-test('a rewrite that swaps the target name for another is rejected', async () => {
-  const r = { id: 'rec-swap', steps: [{ type: 'click', t: 0, url: 'https://example.com/', target: { role: 'button', name: '検索' } }] };
-  const LM = fakeModel({ title: 't', summary: 's', steps: [{ index: 1, action: '「注文確定」ボタンをクリックする' }] });
-  const result = await N.narrate(r, { LM, scan });
-  assert.equal(result.generator, 'template');
-  assert.match(result.reason, /対象名・値を変えた（「検索」）/);
 });

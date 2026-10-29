@@ -28,6 +28,8 @@
   /** { keywords } while this tab is being recorded, otherwise null. */
   let config = null;
   let lastStep = null;
+  let sequence = 0;
+  const documentId = Math.random().toString(36).slice(2, 8);
   /** Who performed the event being handled: user | automation | script. */
   let actor = 'user';
   const committed = new WeakMap();
@@ -274,6 +276,107 @@
     };
   }
 
+  // ------------------------------------------------------------------ units
+
+  const MAX_UNIT_CHARS = 40000;  // a whole screen; infinite feeds are cut here
+  const MAX_LINE = 400;
+
+  /**
+   * The screen as units (see shared/units.js): every visible line of text,
+   * each claimed by the first - most specific - unit that contains it.
+   * Only lines are read, never field values; credentials and partial ids are
+   * masked before anything leaves the page.
+   */
+  function extractUnits() {
+    const units = [];
+    const seen = new Set();
+    let order = 0;
+    let budget = MAX_UNIT_CHARS;
+    const linesOf = (el) => (el.innerText || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const push = (kind, name, el, extra = {}) => {
+      if (budget <= 0) return;
+      const lines = (Array.isArray(el) ? el : linesOf(el)).filter((line) => !seen.has(line));
+      if (!lines.length) return;
+      lines.forEach((line) => seen.add(line));
+      let text = lines.map((l) => l.slice(0, MAX_LINE)).join('\n');
+      text = S.scrubText(text, { keywords: config?.keywords }).text.slice(0, budget);
+      budget -= text.length;
+      units.push({ kind, name: S.scrubText(name || '', { keywords: config?.keywords }).text.slice(0, 60), text, order: order++, ...extra });
+    };
+    const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+
+    const h1 = all('h1')[0];
+    push('page', '', [`タイトル: ${document.title}`, h1 ? `主見出し: ${textOf(h1)}` : '', `パス: ${location.pathname}`].filter(Boolean));
+    for (const el of all('[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]')) push('feedback', '', el);
+    for (const el of all('dialog[open], [role="dialog"], [aria-modal="true"]')) push('dialog', regionName(el), el);
+    for (const form of all('form, [role="search"]')) {
+      // Labels, field types and choices - what the form asks for, not what was typed.
+      const fields = [...form.querySelectorAll('input, select, textarea')]
+        .filter((f) => f.type !== 'hidden' && visible(f))
+        .map((f) => {
+          const options = f.tagName === 'SELECT' ? `（選択肢: ${[...f.options].map((o) => o.text.trim()).slice(0, 12).join(' / ')}）` : '';
+          return `${accessibleName(f) || '(無名)'} [${f.type || f.tagName.toLowerCase()}]${options}`;
+        });
+      push('form', regionName(form), [...fields, ...linesOf(form)]);
+    }
+    // Lists: groups of links rendered by the same component, read as one unit per group.
+    const groups = new Map();
+    for (const a of contentLinks()) {
+      const key = linkSignature(a);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a);
+    }
+    for (const links of groups.values()) {
+      const hrefs = new Set(links.map((a) => a.href));
+      if (hrefs.size < 5) continue;
+      const cards = unique(links.map((a) => a.closest('li, article') || a));
+      push('list', '', cards.flatMap(linesOf), { count: hrefs.size });
+    }
+    for (const heading of all('h2, h3, h4')) {
+      const container = heading.closest('section, article, [role="region"]') || heading.parentElement;
+      if (container) push('section', textOf(heading).slice(0, 40), container);
+    }
+    for (const [selector, name] of [['header, [role="banner"]', 'ヘッダー'], ['nav, [role="navigation"]', 'ナビゲーション'],
+      ['main, [role="main"]', 'メイン'], ['aside, [role="complementary"]', 'サイドバー'], ['footer, [role="contentinfo"]', 'フッター']]) {
+      for (const el of all(selector)) push('landmark', name, el);
+    }
+    push('landmark', '本文', document.body);
+    return units;
+  }
+
+  // ------------------------------------------------------------ what changed
+
+  /**
+   * Text that appears or disappears right after an operation: the result of
+   * operations that do not change the URL (validation errors, toasts, modals).
+   */
+  function watchChange(seq) {
+    if (!document.body) return;
+    const appeared = new Set();
+    const removed = new Set();
+    const lines = (node) => {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      if (!el || el.closest('[contenteditable="true"]')) return [];
+      const raw = node.nodeType === 3 ? node.textContent : (el.innerText ?? el.textContent);
+      return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
+    };
+    const observer = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => appeared.add(l));
+        for (const n of r.removedNodes) lines(n).forEach((l) => removed.add(l));
+        if (r.type === 'characterData') lines(r.target).forEach((l) => appeared.add(l));
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+    setTimeout(() => {
+      observer.disconnect();
+      const pick = (set) => [...set].filter((l) => !(appeared.has(l) && removed.has(l))).slice(0, 8)
+        .map((l) => S.scrubText(l.slice(0, 160), { keywords: config?.keywords }).text);
+      const change = { appeared: pick(appeared), removed: pick(removed) };
+      if (config && (change.appeared.length || change.removed.length)) send('CHANGE', { seq, change });
+    }, 1500);
+  }
+
   /** Which part of the screen an element belongs to. */
   function componentOf(el) {
     const dialog = el.closest('dialog, [role="dialog"], [aria-modal="true"]');
@@ -307,7 +410,7 @@
     const key = currentKey();
     if (key === screenKey && !force) return;
     screenKey = key;
-    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen() });
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(), units: extractUnits() });
   }
 
   /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
@@ -388,7 +491,11 @@
     // An operation always happens on a known screen: describe it first if it changed.
     if (type !== 'tool' && currentKey() !== screenKey) sendScreen();
     lastStep = { type, at: Date.now() };
-    send('STEP', { type, pageUrl: location.href, actor: type === 'tool' ? 'agent' : actor, ...extra });
+    // A per-document sequence number lets the worker attach what this operation changed.
+    sequence += 1;
+    const seq = `${documentId}-${sequence}`;
+    send('STEP', { type, seq, pageUrl: location.href, actor: type === 'tool' ? 'agent' : actor, ...extra });
+    if (type !== 'tool') watchChange(seq);
   }
 
   function currentValue(el) {
@@ -514,7 +621,7 @@
     if (message?.from !== 'op-scribe/worker') return;
     if (message.type === 'OPS_FLUSH') {
       // Recording is about to stop: hand over the screen as it is now.
-      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen() } : null);
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits() } : null);
     }
     if (message.type === 'OPS_STOP') {
       config = null;
