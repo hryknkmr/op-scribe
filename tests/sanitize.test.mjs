@@ -7,71 +7,81 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const S = require('../shared/sanitize.js');
 
-test('scrubText masks contact details, card numbers and tokens', () => {
+// ------------------------------------------------------------ the policy
+
+test('credentials are replaced entirely', () => {
   const token = ['gh', 'p_', 'A'.repeat(36)].join('');
-  const { text, kinds } = S.scrubText(`連絡先 user@example.com / 090-1234-5678 / 4111 1111 1111 1111 / ${token}`);
-  assert.equal(text, '連絡先 [[email]] / [[phone]] / [[card]] / [[secret]]');
-  assert.deepEqual(new Set(kinds), new Set(['email', 'phone', 'card', 'secret']));
+  const { text, kinds } = S.scrubText(`card 4111 1111 1111 1111 / ${token} / password=hunter22`);
+  assert.equal(text, 'card [[card]] / [[secret]] / password=[[secret]]');
+  assert.deepEqual(new Set(kinds), new Set(['card', 'secret']));
 });
 
-test('scrubText leaves ordinary UI text alone', () => {
-  for (const label of ['ログイン', '検索する', 'Save draft', '2026-10-29', '3件', 'v1.2.0']) {
+test('emails, phone numbers and ids stay recognizable but partial', () => {
+  const { text, kinds } = S.scrubText('連絡先 someone@mail.example.com / 090-1234-5678 / 会員番号 12345678');
+  assert.equal(text, '連絡先 s***@m***.com / ***-****-5678 / 会員番号 12****78');
+  assert.deepEqual(new Set(kinds), new Set(['email', 'phone', 'id']));
+});
+
+test('partial masks do not trip the final scan', () => {
+  const { text } = S.scrubText('someone@example.com 090-1234-5678 12345678 192.168.10.5 0123abcd-0000-4000-8000-1234567890ab');
+  assert.deepEqual(S.finalScan({ text }), []);
+  assert.match(text, /192\.168\.\*\.\*/);
+});
+
+test('ordinary text is kept as typed', () => {
+  for (const label of ['ログイン', '週末 レシピ', 'Save draft', '2026-10-29', '3件', 'v1.2.0', '山田さんのページ']) {
     assert.deepEqual(S.scrubText(label), { text: label, kinds: [] }, label);
   }
 });
 
-test('scrubText does not treat a non-Luhn 16 digit run as a card', () => {
-  assert.equal(S.scrubText('1234567812345678').text, '[[number]]');
+test('a non-Luhn 16 digit run is an id, not a card', () => {
+  assert.equal(S.scrubText('1234567812345678').text, '12******78');
 });
 
-test('scrubText normalizes full-width digits before matching', () => {
-  assert.equal(S.scrubText('０９０－１２３４－５６７８').text, '[[phone]]');
+test('full-width digits are normalized before matching', () => {
+  assert.equal(S.scrubText('０９０－１２３４－５６７８').text, '***-****-5678');
 });
 
-test('keywords are masked case-insensitively, longest first', () => {
+test('listed words are masked case-insensitively, longest first', () => {
   const { text, kinds } = S.scrubText('Acme Labs の acme チーム', { keywords: ['acme', 'Acme Labs'] });
   assert.equal(text, '[[masked]] の [[masked]] チーム');
   assert.deepEqual(kinds, ['keyword', 'keyword']);
 });
 
-test('truncation happens after masking and never splits a placeholder', () => {
+test('truncation happens after masking', () => {
   const { text } = S.scrubText('mail: someone@example.com and more text', { maxLength: 12 });
-  assert.ok(!text.includes('@'), text);
-  assert.ok(!/\[\[[^\]]*$/.test(text.replace(/…$/, '')), text);
+  assert.ok(!text.includes('someone'), text);
 });
 
-test('classifyField recognizes secrets and personal fields', () => {
+// ------------------------------------------------------------ form fields
+
+test('classifyField: only credentials are secret; contact fields are partial', () => {
   assert.equal(S.classifyField({ type: 'password' }).kind, 'secret');
-  assert.equal(S.classifyField({ autocomplete: 'cc-number' }).kind, 'secret');
+  assert.deepEqual(S.classifyField({ autocomplete: 'cc-number' }), { kind: 'secret', label: 'card' });
+  assert.deepEqual(S.classifyField({ label: 'セキュリティコード' }), { kind: 'secret', label: 'card' });
   assert.equal(S.classifyField({ type: 'text', label: '認証コード' }).kind, 'secret');
-  assert.deepEqual(S.classifyField({ type: 'text', name: 'email' }), { kind: 'pii', label: 'email' });
-  assert.deepEqual(S.classifyField({ type: 'text', label: '電話番号' }), { kind: 'pii', label: 'phone' });
-  assert.equal(S.classifyField({ type: 'text', label: '氏名' }).kind, 'pii');
+  assert.equal(S.classifyField({ type: 'text', name: 'email' }).kind, 'email');
+  assert.equal(S.classifyField({ type: 'text', label: '電話番号' }).kind, 'phone');
+  assert.equal(S.classifyField({ type: 'text', label: '氏名' }).kind, 'text');
   assert.equal(S.classifyField({ type: 'hidden' }).kind, 'ignore');
-  assert.equal(S.classifyField({ type: 'search', label: 'キーワード' }).kind, 'free');
-  assert.equal(S.classifyField({ tag: 'select', type: 'select' }).kind, 'choice');
 });
 
-test('maskFieldValue: strict keeps only the length of free text', () => {
-  assert.deepEqual(S.maskFieldValue('週末 レシピ', { type: 'search' }, { privacyLevel: 'strict' }),
-    { value: '[[text:6]]', kinds: ['text'] });
+test('maskFieldValue keeps typed text, hides credentials, partially hides contact details', () => {
+  assert.deepEqual(S.maskFieldValue('週末 レシピ', { type: 'search' }), { value: '週末 レシピ', kinds: [] });
+  assert.equal(S.maskFieldValue('hunter2', { type: 'password' }).value, '[[secret]]');
+  assert.equal(S.maskFieldValue('4111111111111111', { autocomplete: 'cc-number' }).value, '[[card]]');
+  assert.equal(S.maskFieldValue('someone@example.com', { type: 'email' }).value, 's***@e***.com');
+  // Not shaped like an address, but typed into an email field: still partially hidden.
+  assert.equal(S.maskFieldValue('someone', { type: 'email' }).value, 's*****e');
+  assert.equal(S.maskFieldValue('Taro Yamada', { name: 'full_name' }).value, 'Taro Yamada');
 });
 
-test('maskFieldValue: balanced keeps free text but still masks patterns', () => {
-  assert.equal(S.maskFieldValue('問い合わせ user@example.com', { type: 'text' }, { privacyLevel: 'balanced' }).value,
-    '問い合わせ [[email]]');
+test('maskArgs decides by key first, so numeric credentials are hidden too', () => {
+  const out = S.maskArgs({ query: 'shoes', otp: 123456, pin: 1234, email: 'a@example.com', count: 3, nested: { phone: '0312345678' } });
+  assert.deepEqual(out, { query: 'shoes', otp: '[[secret]]', pin: '[[secret]]', email: 'a***@e***.com', count: 3, nested: { phone: '******5678' } });
 });
 
-test('maskFieldValue: personal fields are masked even in balanced mode', () => {
-  assert.equal(S.maskFieldValue('Taro', { name: 'first_name' }, { privacyLevel: 'balanced' }).value, '[[personal]]');
-  assert.equal(S.maskFieldValue('hunter2', { type: 'password' }, { privacyLevel: 'balanced' }).value, '[[secret]]');
-});
-
-test('maskArgs masks strings by key and value', () => {
-  const out = S.maskArgs({ query: 'shoes', email: 'a@example.com', count: 3, nested: { phone: '0312345678' } },
-    { privacyLevel: 'balanced' });
-  assert.deepEqual(out, { query: 'shoes', email: '[[email]]', count: 3, nested: { phone: '[[phone]]' } });
-});
+// -------------------------------------------------------------------- URLs
 
 test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', () => {
   const aliases = {};
@@ -84,18 +94,17 @@ test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', (
   assert.deepEqual(Object.values(aliases), ['site-1.invalid']);
 });
 
-test('scrubUrl replaces ids, user handles and query values', () => {
+test('scrubUrl partially hides ids and handles, keeps ordinary params, hides credential params', () => {
   const { url } = S.scrubUrl(
-    'https://example.com/users/@someone/orders/123456?tab=items&token=abc&q=hello#section',
+    'https://example.com/users/@someone/orders/123456?tab=items&q=週末&token=abcdef&mail=someone@example.com#section',
     { hostAllowlist: ['example.com'] }
   );
-  assert.equal(url, 'https://example.com/users/:user/orders/:id?tab=[[v]]&token=[[v]]&q=[[v]]');
+  assert.equal(url, 'https://example.com/users/@s*****e/orders/12**56?tab=items&q=%E9%80%B1%E6%9C%AB&token=[[secret]]&mail=s***%40e***.com#section');
 });
 
-test('scrubUrl balanced keeps short harmless params and SPA routes', () => {
-  const { url } = S.scrubUrl('https://example.com/app?tab=items&session=abcdef#/settings',
-    { hostAllowlist: ['example.com'], privacyLevel: 'balanced' });
-  assert.equal(url, 'https://example.com/app?tab=items&session=[[v]]#/settings');
+test('scrubUrl checks fragments for listed words and ids', () => {
+  const { url } = S.scrubUrl('https://example.com/app#/projects/AcmeSecret/123456', { hostAllowlist: ['example.com'], keywords: ['AcmeSecret'] });
+  assert.equal(url, 'https://example.com/app#/projects/[[masked]]/12**56');
 });
 
 test('scrubUrl drops credentials embedded in the URL', () => {
@@ -103,13 +112,22 @@ test('scrubUrl drops credentials embedded in the URL', () => {
   assert.equal(url, 'https://example.com/');
 });
 
-test('finalScan ignores placeholders and reports leftovers with their path', () => {
+// ------------------------------------------------------------- final gate
+
+test('finalScan reports leftovers with their path', () => {
   const findings = S.finalScan({
-    steps: [{ value: '[[text:4]]' }, { target: { name: 'Contact user@example.com' } }],
+    steps: [{ value: '[[secret]]' }, { target: { name: 'Contact someone@example.com' } }],
     markdown: '# 手順\n1. Acme にログインする'
   }, { keywords: ['Acme'] });
   assert.deepEqual(findings, [
     { path: 'steps[1].target.name', kinds: ['email'] },
     { path: 'markdown', kinds: ['keyword'] }
   ]);
+});
+
+test('finalScan cannot be bypassed by text dressed up as a placeholder', () => {
+  for (const spoof of ['[[x:Acme]]', '[[note:Acme Labs]]', '[[masked]]Acme']) {
+    assert.deepEqual(S.finalScan({ name: spoof }, { keywords: ['Acme'] }).map((f) => f.kinds), [['keyword']], spoof);
+  }
+  assert.deepEqual(S.finalScan({ name: '[[secret]] [[card]] [[masked]]' }, { keywords: ['Acme'] }), []);
 });

@@ -29,10 +29,10 @@ Feature: 記録された操作の再現
       | purpose | 検索・閲覧の画面 |
       | reason  | 検索フォーム |
       | ui      | 検索フォーム（キーワード） |
-      | ui      | ナビゲーション（リンク 6 件） |
+      | ui      | ナビゲーション（ホーム、ランキング、ヘルプ） |
 
   Scenario: 記録された操作
-    When 検索フォームの「キーワード」検索欄に ‹任意の文字列 5文字› を入力する
+    When 検索フォームの「キーワード」検索欄に 「shoes」 を入力する
       | action    | input |
       | url       | https://example.com/ |
       | component | 検索フォーム |
@@ -40,7 +40,7 @@ Feature: 記録された操作の再現
       | name      | キーワード |
       | tag       | input |
       | selector  | #q |
-      | value     | [[text:5]] |
+      | value     | shoes |
       | actor     | automation |
     And 検索フォームの「キーワード」検索欄で Enter キーを押す
       | action    | key |
@@ -52,31 +52,32 @@ Feature: 記録された操作の再現
       | selector  | #q |
       | key       | Enter |
       | actor     | automation |
-    Then 「検索結果」画面が表示される
-      | url     | https://example.com/search?q=[[v]] |
-      | title   | 検索結果 |
+    Then 「「shoes」の検索結果」画面が表示される
+      | url     | https://example.com/search?q=shoes |
+      | title   | 「shoes」の検索結果 |
       | purpose | 検索・一覧の閲覧の画面 |
       | reason  | URL（/search） |
       | reason  | 同じ形のリンクが 20 件 |
       | ui      | 一覧（同じ形のリンク 20 件） |
       | ui      | ボタン（並び替え、絞り込み） |
-    When 一覧（20 件）の「ある記事」リンクをクリックする
+    When 一覧（20 件）の「Running Shoes 2026」リンクをクリックする
       | action    | click |
-      | url       | https://example.com/search?q=[[v]] |
+      | url       | https://example.com/search?q=shoes |
       | component | 一覧（20 件） |
       | role      | link |
-      | name      | ある記事 |
+      | name      | Running Shoes 2026 |
       | tag       | a |
       | selector  | main > a:nth-of-type(1) |
-      | href      | https://example.com/n/:id |
+      | href      | https://example.com/items/12**56 |
       | actor     | automation |
-    Then 「ある記事」画面が表示される
-      | url     | https://example.com/n/:id |
-      | title   | ある記事 |
-      | purpose | 詳細の閲覧の画面 |
+    Then 「Running Shoes 2026」画面が表示される
+      | url     | https://example.com/items/12**56 |
+      | title   | Running Shoes 2026 |
+      | purpose | 購入・決済・詳細の閲覧の画面 |
+      | reason  | ボタン「カートに入れる」 |
       | reason  | 記事本文 |
       | ui      | 本文（約 4200 文字） |
-      | ui      | ボタン（スキ、フォロー、共有） |
+      | ui      | ボタン（カートに入れる、お気に入り、共有） |
 ```
 
 ### キーワードの割り当て
@@ -108,16 +109,16 @@ Feature: 記録された操作の再現
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
 | `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
-| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/:id` |
+| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/12**56` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
-| `name` | 対象要素のアクセシブルネーム（伏せ済み・厳格モードは 40 字まで） | `ログインする` |
+| `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
 | `tag` | HTML タグ名 | `button` |
 | `selector` | 再特定用の CSS セレクタ。`data-testid` 等 → 安定した `id` → 4 階層までのパスの順で選ぶ。伏せる必要があった場合は出さない | `[data-testid="save"]` |
 | `href` | リンク先（伏せ済み） | |
-| `value` | 入力値（伏せ字のまま） | `[[text:12]]` `[[email]]` |
+| `value` | 入力値（方針どおり伏せたもの） | `週末 レシピ` `s***@e***.com` `[[secret]]` |
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
-| `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
+| `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"shoes"}` |
 | `component` | 操作した部品 | `ヘッダー`、`検索フォーム`、`一覧（32 件）`、`ダイアログ「確認」` |
 | `intent` | ボタン等の表示名から読んだ意図 | `編集・保存`、`削除` |
 | `actor` | 人以外が操作したとき: `automation`（WebDriver / CDP）、`script`（ページ内スクリプト）、`agent`（WebMCP） | |
@@ -126,13 +127,14 @@ Feature: 記録された操作の再現
 再現する側（人・AI）へのルール:
 
 - 要素は `role` + `name` で探し、見つからなければ `selector` を使う（Playwright の `getByRole` に対応）。
-- `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。`[[text:N]]` は N 文字程度の任意文字列。
+- `[[secret]]` / `[[card]]`（Markdown では `‹秘匿値›` など）は伏せた認証情報。元の値を推測せず、テスト用の値を用意して入れる。
+- `s***@e***.com` や `12****78` のように一部を伏せた値も、テスト用の値に置き換えて使う。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 
 ## 簡易手順（Markdown）
 
 ```markdown
-# 「Example」から「ある記事」までの操作（4 ステップ）
+# 「Example」から「Running Shoes 2026」までの操作（4 ステップ）
 
 ## 前提条件
 - https://example.com にアクセスできる状態であること
@@ -142,23 +144,22 @@ Feature: 記録された操作の再現
 ### 画面 1: 「Example」
 - URL: https://example.com/
 - 画面の目的: 検索・閲覧の画面（根拠: 検索フォーム）
-- 主な UI: 検索フォーム（キーワード） / ナビゲーション（リンク 6 件）
+- 主な UI: 検索フォーム（キーワード） / ナビゲーション（ホーム、ランキング、ヘルプ）
 
 1. https://example.com/ を開く
-2. 検索フォームの「キーワード」検索欄に ‹任意の文字列 5文字› を入力する
+2. 検索フォームの「キーワード」検索欄に 「shoes」 を入力する
 3. 検索フォームの「キーワード」検索欄で Enter キーを押す
-   - 期待結果: 「検索結果」画面に遷移する
+   - 期待結果: 「「shoes」の検索結果」画面に遷移する
 
-### 画面 2: 「検索結果」
-- URL: https://example.com/search?q=[[v]]
+### 画面 2: 「「shoes」の検索結果」
+- URL: https://example.com/search?q=shoes
 - 画面の目的: 検索・一覧の閲覧の画面（根拠: URL（/search）、同じ形のリンクが 20 件）
 - 主な UI: 一覧（同じ形のリンク 20 件） / ボタン（並び替え、絞り込み）
 
-4. 一覧（20 件）の「ある記事」リンクをクリックする
-   - 期待結果: 「ある記事」画面に遷移する
+4. 一覧（20 件）の「Running Shoes 2026」リンクをクリックする
+   - 期待結果: 「Running Shoes 2026」画面に遷移する
 
 ## 補足
-- ‹任意の文字列 N文字› は記録時の入力を伏せたもの。再現時は同じ程度の長さの値を使う
 - 操作の主体: 自動テスト 3 件
 ```
 

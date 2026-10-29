@@ -239,7 +239,7 @@
     const first = screens[0]?.url || steps.find((s) => s.url)?.url || rec?.startUrl;
     const preconditions = [];
     if (first) preconditions.push(`${new URL(first).origin} にアクセスできる状態であること`);
-    if (steps.some((s) => /\[\[(?:secret|email|phone|card|personal)\]\]/.test(JSON.stringify(s)))) {
+    if (steps.some((s) => /\[\[(?:secret|card)\]\]/.test(JSON.stringify(s)))) {
       preconditions.push('‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること');
     }
     if (steps.some((s) => /\[\[text:/.test(JSON.stringify(s)))) {

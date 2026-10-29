@@ -85,11 +85,11 @@
       <div class="body">
         <form id="settings-form" class="settings">
           <p class="hint">ここでの設定はこのブラウザ内（chrome.storage.local）にだけ保存されます。</p>
-          <fieldset>
-            <legend>入力値の扱い</legend>
-            <label><input type="radio" name="privacyLevel" value="strict"> 厳格: 自由入力は文字数だけ残す（推奨）</label>
-            <label><input type="radio" name="privacyLevel" value="balanced"> 標準: 自由入力も残し、個人情報らしい部分を伏せる</label>
-          </fieldset>
+          <div class="policy">
+            <p><strong>伏せるもの</strong>: パスワード・カード情報・認証コード・トークンは完全に、
+              メールアドレス・電話番号・ID は一部だけ（例 <code>t***@e***.com</code>）。</p>
+            <p>入力した文字、画面タイトル、ボタン名などはそのまま残ります。残したくない語は下に登録してください。</p>
+          </div>
           <label class="field">
             <span>実名で記録してよいホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
             <textarea name="hostAllowlist" rows="3" placeholder="example.com"></textarea>

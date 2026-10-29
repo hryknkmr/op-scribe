@@ -25,7 +25,7 @@
   // The worker may be waking up or the page may be navigating; retry briefly.
   const TRANSIENT = /Receiving end does not exist|message port closed/i;
 
-  /** { privacyLevel, keywords } while this tab is being recorded, otherwise null. */
+  /** { keywords } while this tab is being recorded, otherwise null. */
   let config = null;
   let lastStep = null;
   /** Who performed the event being handled: user | automation | script. */
@@ -526,7 +526,7 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     const next = changes.opsSettings?.newValue;
     if (area !== 'local' || !next || !config) return;
-    config = { privacyLevel: next.privacyLevel, keywords: next.keywords || [] };
+    config = { keywords: next.keywords || [] };
   });
 
   globalThis.__opScribeRecorder = { hello };

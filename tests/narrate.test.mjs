@@ -85,7 +85,7 @@ test('only the clean steps are taken when some are rejected', async () => {
   const result = await N.narrate(rec, { LM, scan });
   assert.equal(result.generator, 'built-in-ai');
   assert.equal(result.rewritten, 2);
-  assert.match(result.reason, /1 件はテンプレートの文を使用（2: 元にない動作（click））/);
+  assert.match(result.reason, /1 件はテンプレートの文を使用（2: 対象名・値を変えた（「キーワード」））/);
   assert.match(result.markdown, /2\. 検索フォームの「キーワード」検索欄に ‹任意の文字列 4文字› を入力する/);
 });
 
@@ -144,4 +144,12 @@ test('a rewrite that drops the URL or placeholder of its step is rejected', asyn
   assert.match(result.reason, /1: URL を落とした（https:\/\/example\.com\/）/);
   assert.match(result.reason, /2: 伏せ字を落とした（‹任意の文字列 4文字›）/);
   assert.equal(result.rewritten, 1);
+});
+
+test('a rewrite that swaps the target name for another is rejected', async () => {
+  const r = { id: 'rec-swap', steps: [{ type: 'click', t: 0, url: 'https://example.com/', target: { role: 'button', name: '検索' } }] };
+  const LM = fakeModel({ title: 't', summary: 's', steps: [{ index: 1, action: '「注文確定」ボタンをクリックする' }] });
+  const result = await N.narrate(r, { LM, scan });
+  assert.equal(result.generator, 'template');
+  assert.match(result.reason, /対象名・値を変えた（「検索」）/);
 });

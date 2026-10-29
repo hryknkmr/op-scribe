@@ -128,7 +128,6 @@ function cleanStep(raw, rec, settings) {
   const ctx = {
     hostAllowlist: settings.hostAllowlist,
     aliases: rec.aliases,
-    privacyLevel: settings.privacyLevel,
     keywords: settings.keywords
   };
   const kinds = [];
@@ -148,8 +147,7 @@ function cleanStep(raw, rec, settings) {
   if (raw.target) {
     const t = raw.target;
     step.target = { role: text(t.role, 24), tag: text(t.tag, 16) };
-    const nameMax = settings.privacyLevel === 'strict' ? 40 : 80;
-    if (t.name) step.target.name = text(t.name, nameMax);
+    if (t.name) step.target.name = text(t.name, 80);
     // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
     if (t.selector) {
       const r = scrubText(t.selector, { keywords: settings.keywords });
@@ -162,7 +160,8 @@ function cleanStep(raw, rec, settings) {
       if (Number.isFinite(t.component.size)) step.target.component.size = t.component.size;
     }
   }
-  if (raw.screen) step.screen = cleanScreen(raw.screen, text, settings.privacyLevel);
+  // Screens are classified from the masked URL, so no raw path ends up in their reasons.
+  if (raw.screen) step.screen = cleanScreen({ ...raw.screen, url: step.url }, text);
   if (raw.value !== undefined) step.value = text(raw.value, 200);
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
@@ -177,7 +176,11 @@ function cleanStep(raw, rec, settings) {
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
   }
-  if (raw.note) step.note = text(raw.note, 300);
+  if (raw.note) {
+    step.note = text(raw.note, 300);
+    // A note belongs to the page it was written on; WebMCP only returns notes of the asking site.
+    if (!step.url) step.url = [...rec.steps].reverse().find((s) => s.url)?.url;
+  }
   bump(rec, [...kinds, ...(raw.valueKinds || [])]);
   return step;
 }
@@ -186,7 +189,7 @@ function cleanStep(raw, rec, settings) {
  * Masks every label the content script collected, then derives what the
  * screen is for. Only the derived summary and short labels are kept.
  */
-function cleanScreen(raw, text, privacyLevel) {
+function cleanScreen(raw, text) {
   const list = (values, max, limit) => (Array.isArray(values) ? values : []).slice(0, limit).map((v) => text(v, max));
   const features = {
     url: raw.url,
@@ -200,12 +203,8 @@ function cleanScreen(raw, text, privacyLevel) {
         .map((field) => ({ type: text(field.type, 16), label: text(field.label, 30) }))
     })),
     buttons: list(raw.buttons, 30, 15),
-    // Link and heading texts mix UI with content (other people's titles and names).
-    // Strict mode keeps how many there are, not what they say; buttons and field labels stay.
-    navLinks: privacyLevel === 'balanced' ? list(raw.navLinks, 20, 10) : [],
-    navCount: Array.isArray(raw.navLinks) ? raw.navLinks.length : 0,
-    headings: privacyLevel === 'balanced' ? list(raw.headings, 30, 6) : [],
-    headingCount: Array.isArray(raw.headings) ? raw.headings.length : 0,
+    navLinks: list(raw.navLinks, 20, 10),
+    headings: list(raw.headings, 30, 6),
     dialogs: list(raw.dialogs, 30, 3),
     editor: Boolean(raw.editor),
     article: Boolean(raw.article),
@@ -263,7 +262,7 @@ async function start({ tabId, url }) {
       tabId,
       startedAt: Date.now(),
       endedAt: null,
-      privacyLevel: settings.privacyLevel,
+      privacyLevel: 'strict',
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},
@@ -374,21 +373,23 @@ async function webmcpRequest(rec, sender, { op, args }) {
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
   // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`));
+  const scan = scanFor(rec, settings);
 
   if (op === 'status') {
     return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
   }
   if (op === 'reproduction') {
     const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    return {
-      reply: { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) }
-    };
+    const reply = { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) };
+    // Same gate as every other exit: the page gets nothing the final scan would stop.
+    if (scan(reply).length) return { reply: { ok: false, error: 'BLOCKED_BY_FINAL_SCAN' } };
+    return { reply };
   }
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings));
+    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent', pageUrl: `${sender.origin}/` }, rec, settings));
     return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
@@ -429,7 +430,7 @@ async function handle(message, sender) {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
       const settings = await getSettings();
-      return { active: true, config: { privacyLevel: settings.privacyLevel, keywords: settings.keywords } };
+      return { active: true, config: { keywords: settings.keywords } };
     }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };

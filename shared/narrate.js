@@ -29,7 +29,7 @@
 守ること:
 - 番号付きの操作を 1 つずつ、同じ番号（index）で言い換える。操作を追加・統合・省略しない。
 - 元の文にない動作（クリック、入力、選択など）を書かない。「開く」操作を「クリック」と書き換えない。
-- 元の文にある URL と ‹…› の伏せ字は必ずそのまま残す。元の文にない URL・値・画面名を書かない。推測で補わない。
+- 元の文にある URL、‹…› の伏せ字、「」で括られた名前や値は必ずそのまま残す。元の文にない URL・値・画面名を書かない。推測で補わない。
 - URL の site-1.invalid のようなホスト名は、記録した人が公開しないことにした実在サイトの別名です。不正・異常・無効なサイトとして扱わない。
 - 成功・失敗・不正・異常などの評価を書かない。入力に書かれていることだけを書く。
 - ‹…› で囲まれた伏せ字は一字一句そのまま残す。中身を推測・復元・言い換えしない。
@@ -56,6 +56,8 @@
 
   const URLS = /https?:\/\/[^\s)」』>、。]+/g;
   const MARKS = /‹[^›]*›/g;
+  // Names and values as the template quotes them: 「保存する」ボタン, 「週末 レシピ」 を入力する.
+  const QUOTES = /「[^」]+」/g;
 
   // Kinds of action a sentence can claim. A rewrite may not claim one its source does not.
   const ACTIONS = {
@@ -112,7 +114,12 @@
       if (lostUrl) problems.push(`URL を落とした（${lostUrl}）`);
       const lostMark = (source.match(MARKS) || []).find((m) => !text.includes(m));
       if (lostMark) problems.push(`伏せ字を落とした（${lostMark}）`);
+      const lostQuote = (source.match(QUOTES) || []).find((q) => !text.includes(q.slice(1, -1)));
+      if (lostQuote) problems.push(`対象名・値を変えた（${lostQuote}）`);
     }
+    const allowedQuotes = new Set((source.match(QUOTES) || []).map((q) => q.slice(1, -1)));
+    const newQuote = (text.match(QUOTES) || []).find((q) => !allowedQuotes.has(q.slice(1, -1)) && !source.includes(q.slice(1, -1)));
+    if (newQuote) problems.push(`元にない対象名・値（${newQuote}）`);
     const allowedUrls = new Set(source.match(URLS) || []);
     const newUrls = (text.match(URLS) || []).filter((u) => !allowedUrls.has(u));
     if (newUrls.length) problems.push(`元にない URL（${newUrls[0]}）`);
@@ -143,7 +150,7 @@
         return step;
       }
       // May draw on the expected result for wording, must keep what the action itself carries.
-      const problems = [...problemsOf(candidate, step.action, null, true).filter((p) => p.includes('落とした')),
+      const problems = [...problemsOf(candidate, step.action, null, true).filter((p) => /落とした|変えた/.test(p)),
         ...problemsOf(candidate, source, scan)];
       if (problems.length) {
         rejected.push(`${i + 1}: ${problems[0]}`);
