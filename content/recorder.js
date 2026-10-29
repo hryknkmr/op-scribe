@@ -28,6 +28,8 @@
   /** { privacyLevel, keywords } while this tab is being recorded, otherwise null. */
   let config = null;
   let lastStep = null;
+  /** Who performed the event being handled: user | automation | script. */
+  let actor = 'user';
   const committed = new WeakMap();
 
   async function send(type, detail, attempt = 0) {
@@ -47,7 +49,11 @@
   async function hello() {
     const response = await send('HELLO');
     config = response?.active ? response.config : null;
-    if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
+    if (config) {
+      window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
+      screenKey = '';
+      scheduleScreen();
+    }
   }
 
   // ---------------------------------------------------------------- targets
@@ -154,6 +160,200 @@
     return parts.join(' > ');
   }
 
+  // ------------------------------------------------------- screen and parts
+
+  const visible = (el) => {
+    if (!el?.getClientRects().length) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  };
+  const unique = (list) => [...new Set(list.filter(Boolean))];
+  const CHROME_REGION = 'nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]';
+
+  /** Name of a region: aria-label, aria-labelledby, or its first heading. */
+  function regionName(el) {
+    const aria = el.getAttribute('aria-label');
+    if (aria?.trim()) return aria.trim().slice(0, 30);
+    const by = el.getAttribute('aria-labelledby');
+    const labelled = by && document.getElementById(by.split(/\s+/)[0]);
+    if (labelled) return textOf(labelled).slice(0, 30);
+    const heading = el.querySelector('legend, h1, h2, h3, h4');
+    return heading ? textOf(heading).slice(0, 30) : '';
+  }
+
+  function isSearchForm(form) {
+    if (form.getAttribute('role') === 'search' || form.closest('[role="search"]')) return true;
+    if (/search/i.test(form.getAttribute('action') || '')) return true;
+    return [...form.querySelectorAll('input')].some((input) => input.type === 'search'
+      || /^(q|query|keyword|keywords|search)$/i.test(input.getAttribute('name') || ''));
+  }
+
+  /**
+   * Links rendered by the same component share their markup; that signature
+   * is how a list of cards is told apart from one-off links.
+   */
+  const linkSignature = (a) => `${a.className}|${a.parentElement?.tagName}.${a.parentElement?.className}`;
+
+  function contentLinks() {
+    return [...document.querySelectorAll('a[href]')].filter((a) => !a.closest(CHROME_REGION) && visible(a));
+  }
+
+  function repeatedGroup() {
+    const groups = new Map();
+    for (const a of contentLinks()) {
+      const key = linkSignature(a);
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(a.href);
+    }
+    let best = 0;
+    for (const hrefs of groups.values()) best = Math.max(best, hrefs.size);
+    return best >= 5 ? { count: best } : null;
+  }
+
+  /**
+   * Everything the side panel needs to say what this screen is and what it
+   * is for. Labels only - never field values, never body text.
+   */
+  function extractScreen() {
+    const collected = [...document.querySelectorAll('form, [role="search"]')].filter(visible);
+    const forms = collected
+      .filter((el) => !collected.some((other) => other !== el && other.contains(el)))
+      .slice(0, 6)
+      .map((el) => {
+        const fields = [...el.querySelectorAll('input, select, textarea')]
+          .filter((f) => f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button' && visible(f))
+          .slice(0, 12)
+          .map((f) => ({ type: f.tagName === 'INPUT' ? (f.type || 'text') : f.tagName.toLowerCase(), label: accessibleName(f).slice(0, 30) }));
+        const submit = el.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+        return {
+          kind: isSearchForm(el) ? 'search' : 'form',
+          name: regionName(el),
+          fields,
+          submit: submit ? accessibleName(submit).slice(0, 30) : ''
+        };
+      })
+      .filter((form) => form.fields.length);
+
+    const buttons = unique([...document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')]
+      .filter((b) => visible(b) && !b.closest('[contenteditable="true"]'))
+      .map((b) => accessibleName(b).slice(0, 30)))
+      .slice(0, 15);
+    const navLinks = unique([...document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]')]
+      .filter(visible)
+      .map((a) => accessibleName(a).slice(0, 20)))
+      .slice(0, 10);
+    // Section names only. Headings in an article, an editor, a card (inside or around a
+    // link) or a list item are content - other people's titles - not part of the UI.
+    const headings = unique([...document.querySelectorAll('h2, h3')]
+      .filter((h) => visible(h) && !h.closest('article, [contenteditable="true"], a, li') && !h.querySelector('a'))
+      .map((h) => textOf(h).slice(0, 30)))
+      .slice(0, 6);
+    const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]')]
+      .filter(visible).map(regionName).slice(0, 3);
+    const editor = [...document.querySelectorAll('[contenteditable="true"], textarea')]
+      .some((el) => visible(el) && el.getBoundingClientRect().height > 120);
+    const h1 = [...document.querySelectorAll('h1')].find(visible);
+    const main = document.querySelector('main, [role="main"]') || document.body;
+
+    return {
+      url: location.href,
+      title: document.title.slice(0, 120),
+      h1: h1 ? textOf(h1).slice(0, 80) : '',
+      lang: document.documentElement.lang || '',
+      forms,
+      buttons,
+      navLinks,
+      headings,
+      dialogs,
+      editor,
+      article: Boolean(document.querySelector('article') && (main.innerText || '').length > 800),
+      textLength: (main.innerText || '').length,
+      tables: [...document.querySelectorAll('table')].filter(visible).length,
+      links: contentLinks().length,
+      repeated: repeatedGroup()
+    };
+  }
+
+  /** Which part of the screen an element belongs to. */
+  function componentOf(el) {
+    const dialog = el.closest('dialog, [role="dialog"], [aria-modal="true"]');
+    if (dialog) return { kind: 'dialog', name: regionName(dialog) };
+    const form = el.closest('form, [role="search"]');
+    if (form) return { kind: isSearchForm(form) ? 'search' : 'form', name: isSearchForm(form) ? '' : regionName(form) };
+    const nav = el.closest('nav, [role="navigation"]');
+    if (nav) return { kind: 'nav', name: regionName(nav) };
+    if (el.closest('header, [role="banner"]')) return { kind: 'header' };
+    if (el.closest('footer, [role="contentinfo"]')) return { kind: 'footer' };
+    const link = el.closest('a[href]');
+    if (link) {
+      const signature = linkSignature(link);
+      const size = new Set(contentLinks().filter((a) => linkSignature(a) === signature).map((a) => a.href)).size;
+      if (size >= 3) return { kind: 'list', size };
+    }
+    if (el.closest('aside, [role="complementary"]')) return { kind: 'aside' };
+    if (el.closest('article')) return { kind: 'article' };
+    if (el.closest('main, [role="main"]')) return { kind: 'main' };
+    return undefined;
+  }
+
+  // A screen is identified by its URL (without fragment) and its title.
+  let screenKey = '';
+  let screenPending = false;
+  const currentKey = () => `${location.href.split('#')[0]}|${document.title}`;
+
+  /** force: describe the same screen again (the worker replaces the earlier description). */
+  function sendScreen(force = false) {
+    if (!config || !document.body) return;
+    const key = currentKey();
+    if (key === screenKey && !force) return;
+    screenKey = key;
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen() });
+  }
+
+  /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
+  function whenQuiet(quietMs = 700, maxMs = 4000) {
+    return new Promise((resolve) => {
+      let timer = 0;
+      const finish = () => {
+        observer.disconnect();
+        clearTimeout(timer);
+        clearTimeout(cap);
+        resolve();
+      };
+      const observer = new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(finish, quietMs);
+      });
+      observer.observe(document.documentElement, { subtree: true, childList: true });
+      timer = setTimeout(finish, quietMs);
+      const cap = setTimeout(finish, maxMs);
+    });
+  }
+
+  async function scheduleScreen() {
+    if (screenPending || !config) return;
+    screenPending = true;
+    try {
+      if (document.readyState === 'loading') {
+        await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+      }
+      // Automated tests leave a screen within a second: describe it right away,
+      // then again once client-side rendering has settled.
+      sendScreen();
+      const key = currentKey();
+      await whenQuiet();
+      if (currentKey() === key) sendScreen(true);
+      else sendScreen();
+    } finally {
+      screenPending = false;
+    }
+  }
+
+  // SPA transitions change the URL or title without a load; poll for them.
+  setInterval(() => {
+    if (config && currentKey() !== screenKey) scheduleScreen();
+  }, 1000);
+
   function describe(el) {
     if (!el) return undefined;
     const target = {
@@ -163,6 +363,8 @@
       selector: selectorFor(el)
     };
     if (el.tagName === 'A' && el.href) target.href = el.href;
+    const component = componentOf(el);
+    if (component) target.component = component;
     return target;
   }
 
@@ -183,8 +385,10 @@
   // ------------------------------------------------------------------ steps
 
   function emit(type, extra = {}) {
+    // An operation always happens on a known screen: describe it first if it changed.
+    if (type !== 'tool' && currentKey() !== screenKey) sendScreen();
     lastStep = { type, at: Date.now() };
-    send('STEP', { type, pageUrl: location.href, ...extra });
+    send('STEP', { type, pageUrl: location.href, actor: type === 'tool' ? 'agent' : actor, ...extra });
   }
 
   function currentValue(el) {
@@ -266,10 +470,17 @@
     }
   };
 
+  // Operations are recorded whoever performs them; the actor is recorded with them.
+  // Trusted events come from a person or from browser automation (CDP / WebDriver
+  // sets navigator.webdriver). Untrusted ones were dispatched by a script; only
+  // the ones that change state are kept, focus and key noise is not.
+  const SCRIPT_RECORDABLE = new Set(['click', 'change', 'submit']);
+
   for (const [type, handler] of Object.entries(handlers)) {
     window.addEventListener(type, (event) => {
-      // Synthetic events (page scripts, automation) are not human operations.
-      if (!config || !event.isTrusted) return;
+      if (!config) return;
+      if (!event.isTrusted && !SCRIPT_RECORDABLE.has(type)) return;
+      actor = !event.isTrusted ? 'script' : navigator.webdriver ? 'automation' : 'user';
       try { handler(event); } catch (error) { console.warn('[op-scribe] handler failed', type, error); }
     }, true);
   }
@@ -299,8 +510,12 @@
     }
   });
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.from !== 'op-scribe/worker') return;
+    if (message.type === 'OPS_FLUSH') {
+      // Recording is about to stop: hand over the screen as it is now.
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen() } : null);
+    }
     if (message.type === 'OPS_STOP') {
       config = null;
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);

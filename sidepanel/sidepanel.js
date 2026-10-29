@@ -6,10 +6,9 @@
  * call in the click handler (no await before it), which is why the active
  * tab and the settings are cached here instead of being read on click.
  */
-import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
-
 const S = globalThis.OpScribeSanitize;
 const D = globalThis.OpScribeDescribe;
+const N = globalThis.OpScribeNarrate;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -269,39 +268,40 @@ async function generateTemplate(reason = '') {
   ui.genStatus.textContent = reason ? `テンプレートで生成しました（${reason}）` : 'テンプレートで生成しました';
 }
 
+/**
+ * Same path as the automatic verbalization when recording stops: the worker
+ * runs the built-in AI, validates it and stores the result on the recording.
+ */
 async function generateAi() {
   const rec = await loadRecording();
   if (!rec?.steps?.length) {
     ui.genStatus.textContent = 'まだ操作が記録されていません';
     return;
   }
-  const base = D.buildReproduction(rec);
-  if (base.steps.length > MAX_AI_STEPS) {
-    await generateTemplate(`${MAX_AI_STEPS} ステップを超えるため AI は使いません`);
-    return;
-  }
   ui.genAi.disabled = true;
   try {
-    const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
-    const { output, input: prompt } = await rewrite(input, rec.startUrl, (text) => { ui.genStatus.textContent = text; });
-    const problems = validate(output, prompt, scanWith(rec));
-    if (problems.length) {
-      await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
-      return;
-    }
-    const merged = {
-      title: output.title,
-      preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
-      steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])]
-    };
-    await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
-    ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';
-  } catch (error) {
-    await generateTemplate(`AI を使えません: ${error.message}`);
+    await send('NARRATE');
+    await showNarration(await loadRecording(), true);
   } finally {
     ui.genAi.disabled = false;
   }
+}
+
+const GENERATOR_LABELS = { 'built-in-ai': 'Built-in AI で言語化しました。内容を確認してください。', template: 'テンプレートで生成しました' };
+
+/** Shows the stored verbalization unless the user already has text of their own in the editor. */
+async function showNarration(rec, force = false) {
+  const narration = rec?.narration;
+  if (!narration) return;
+  if (narration.generator === 'pending') {
+    ui.genStatus.textContent = 'Built-in AI で言語化しています…';
+    return;
+  }
+  if (!force && ui.repro.value.trim() && generator !== 'none') return;
+  await setRepro(rec, narration.markdown, narration.generator);
+  ui.genStatus.textContent = narration.reason
+    ? `${GENERATOR_LABELS[narration.generator]}（${narration.reason}）`
+    : GENERATOR_LABELS[narration.generator] || '';
 }
 
 ui.genAi.addEventListener('click', generateAi);
@@ -478,7 +478,9 @@ ui.settingsForm.addEventListener('submit', (event) => {
 // ------------------------------------------------------------------ wiring
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.from === 'op-scribe/worker' && message.type === 'REC_CHANGED') refresh();
+  if (message?.from !== 'op-scribe/worker') return;
+  if (message.type === 'REC_CHANGED') refresh().then(() => showNarration(recording));
+  if (message.type === 'NARRATION_STATUS') ui.genStatus.textContent = message.text;
 });
 chrome.tabs.onActivated.addListener(refresh);
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -509,7 +511,8 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     reportFatal('init failed', error);
   }
   // The panel must work even if the model never answers.
-  availability().then((state) => {
+  await showNarration(recording);
+  N.availability(globalThis.LanguageModel).then((state) => {
     ui.aiState.textContent = state === 'available' ? 'AI 利用可' : `AI: ${state}`;
   });
 })();

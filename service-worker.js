@@ -9,10 +9,12 @@
  * Every step is sanitized again here, whatever the content script already
  * did: URLs are aliased, user keywords masked, and redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/describe.js');
+importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js', 'shared/narrate.js');
 
-const { scrubText, scrubUrl, defaults } = self.OpScribeSanitize;
-const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
+const { scrubText, scrubUrl, defaults, finalScan } = self.OpScribeSanitize;
+const { narrate } = self.OpScribeNarrate;
+const { buildReproduction, toMarkdown, toGherkin, isPageRewrite } = self.OpScribeDescribe;
+const { classifyScreen, describeComponents } = self.OpScribeScreen;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -154,10 +156,17 @@ function cleanStep(raw, rec, settings) {
       if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
     }
     if (t.href) step.target.href = url(t.href);
+    if (t.component?.kind) {
+      step.target.component = { kind: text(t.component.kind, 12) };
+      if (t.component.name) step.target.component.name = text(t.component.name, 30);
+      if (Number.isFinite(t.component.size)) step.target.component.size = t.component.size;
+    }
   }
+  if (raw.screen) step.screen = cleanScreen(raw.screen, text, settings.privacyLevel);
   if (raw.value !== undefined) step.value = text(raw.value, 200);
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
+  if (['user', 'automation', 'script', 'agent'].includes(raw.actor)) step.actor = raw.actor;
   if (raw.tool) {
     step.tool = text(raw.tool, 80);
     step.ok = raw.ok !== false;
@@ -173,9 +182,67 @@ function cleanStep(raw, rec, settings) {
   return step;
 }
 
+/**
+ * Masks every label the content script collected, then derives what the
+ * screen is for. Only the derived summary and short labels are kept.
+ */
+function cleanScreen(raw, text, privacyLevel) {
+  const list = (values, max, limit) => (Array.isArray(values) ? values : []).slice(0, limit).map((v) => text(v, max));
+  const features = {
+    url: raw.url,
+    title: text(raw.title, 80),
+    h1: text(raw.h1, 60),
+    forms: (Array.isArray(raw.forms) ? raw.forms : []).slice(0, 6).map((form) => ({
+      kind: form.kind === 'search' ? 'search' : 'form',
+      name: text(form.name, 30),
+      submit: text(form.submit, 30),
+      fields: (Array.isArray(form.fields) ? form.fields : []).slice(0, 12)
+        .map((field) => ({ type: text(field.type, 16), label: text(field.label, 30) }))
+    })),
+    buttons: list(raw.buttons, 30, 15),
+    // Link and heading texts mix UI with content (other people's titles and names).
+    // Strict mode keeps how many there are, not what they say; buttons and field labels stay.
+    navLinks: privacyLevel === 'balanced' ? list(raw.navLinks, 20, 10) : [],
+    navCount: Array.isArray(raw.navLinks) ? raw.navLinks.length : 0,
+    headings: privacyLevel === 'balanced' ? list(raw.headings, 30, 6) : [],
+    headingCount: Array.isArray(raw.headings) ? raw.headings.length : 0,
+    dialogs: list(raw.dialogs, 30, 3),
+    editor: Boolean(raw.editor),
+    article: Boolean(raw.article),
+    textLength: Number(raw.textLength) || 0,
+    tables: Number(raw.tables) || 0,
+    repeated: raw.repeated?.count ? { count: Number(raw.repeated.count) } : null
+  };
+  const { purposes, summary } = classifyScreen(features);
+  return {
+    title: features.title,
+    h1: features.h1 !== features.title ? features.h1 : '',
+    purposes: purposes.map(({ kind, label, reasons }) => ({ kind, label, reasons })),
+    summary,
+    components: describeComponents(features)
+  };
+}
+
 function appendStep(rec, step) {
   rec.steps.push(step);
   if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
+}
+
+/**
+ * A screen described again (after rendering settled, or its title changed)
+ * replaces the earlier description as long as no operation happened in between.
+ */
+function appendScreen(rec, step) {
+  for (let i = rec.steps.length - 1; i >= 0; i -= 1) {
+    const s = rec.steps[i];
+    if (s.type === 'navigate' || s.type === 'note') continue;
+    if (s.type === 'screen' && s.url === step.url) {
+      rec.steps[i] = { ...step, t: s.t };
+      return;
+    }
+    break;
+  }
+  appendStep(rec, step);
 }
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
@@ -206,6 +273,8 @@ async function start({ tabId, url }) {
     rec.startUrl = scrubUrl(url, { ...settings, aliases: rec.aliases }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
+    // Persist before injecting: the injected script immediately asks whether it is being recorded.
+    await chrome.storage.session.set({ [REC_KEY]: rec });
     await injectNow(tabId);
     await setBadge(true);
     return { save: rec, reply: { ok: true } };
@@ -220,13 +289,67 @@ async function stopTab(rec) {
   } catch { /* tab gone or never injected */ }
 }
 
-const stop = () => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording') return { reply: { ok: true } };
-  await stopTab(rec);
-  rec.state = 'stopped';
-  rec.endedAt = Date.now();
-  return { save: rec, reply: { ok: true } };
-});
+const stop = async () => {
+  const reply = await mutate(async (rec) => {
+    if (!rec || rec.state !== 'recording') return { reply: { ok: true, stopped: false } };
+    // The last screen may not have been described yet (fast automated runs): ask for it now.
+    try {
+      const last = await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' });
+      if (last?.screen) appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, await getSettings()));
+    } catch { /* tab gone or not injected */ }
+    await stopTab(rec);
+    rec.state = 'stopped';
+    rec.endedAt = Date.now();
+    rec.narration = { generator: 'pending', markdown: '' };
+    return { save: rec, reply: { ok: true, stopped: true } };
+  });
+  // Whoever operated - a person or an automated test - the recording is verbalized
+  // as soon as it ends, without waiting for anyone to open the side panel.
+  if (reply.stopped) verbalize();
+  return reply;
+};
+
+// ----------------------------------------------------------- verbalizing
+
+/** Words the final scan must not find: the user's list plus every real host that was aliased. */
+function scanFor(rec, settings) {
+  const hosts = Object.keys(rec.aliases || {}).map((origin) => {
+    try { return new URL(origin).hostname; } catch { return ''; }
+  });
+  const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
+  return (value) => finalScan(value, { keywords });
+}
+
+/**
+ * The worker may be stopped after ~30s without extension events, and an
+ * on-device generation can take longer; a cheap API call every 20s keeps it alive.
+ */
+async function withKeepAlive(work) {
+  const timer = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function verbalize() {
+  const rec = await getRecording();
+  if (!rec?.steps?.length) return { ok: false, error: 'NO_RECORDING' };
+  const settings = await getSettings();
+  await broadcast({ type: 'NARRATION_STATUS', text: 'Built-in AI で言語化しています…' });
+  const result = await withKeepAlive(() => narrate(rec, {
+    LM: self.LanguageModel,
+    scan: scanFor(rec, settings),
+    onStatus: (text) => broadcast({ type: 'NARRATION_STATUS', text })
+  }));
+  await mutate(async (latest) => {
+    if (!latest || latest.id !== rec.id) return null;
+    latest.narration = { ...result, at: Date.now(), stepCount: rec.steps.length };
+    return { save: latest };
+  });
+  return { ok: true, generator: result.generator, reason: result.reason };
+}
 
 const addPattern = (url) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
@@ -280,6 +403,7 @@ async function handle(message, sender) {
     switch (type) {
       case 'START': return start(detail);
       case 'STOP': return stop();
+      case 'NARRATE': return verbalize();
       case 'ADD_ORIGIN': return addPattern(detail.url);
       case 'CLEAR': return mutate(async (rec) => {
         if (rec?.state === 'recording') await stopTab(rec);
@@ -311,7 +435,9 @@ async function handle(message, sender) {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        appendStep(rec, cleanStep(detail, rec, settings));
+        const step = cleanStep(detail, rec, settings);
+        if (step.type === 'screen') appendScreen(rec, step);
+        else appendStep(rec, step);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
@@ -346,8 +472,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
     const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings);
-    const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
-    if (last?.url === step.url && rec.steps[rec.steps.length - 1] === last) return null;
+    const last = rec.steps[rec.steps.length - 1];
+    if (last?.type === 'navigate' && last.url === step.url) return null;
+    // The page rewrote its own URL (tracking parameters, canonical form): not a new step.
+    const rewritten = isPageRewrite(rec.steps, step);
+    if (rewritten) {
+      for (const s of rewritten) s.url = step.url;
+      return { save: rec };
+    }
     appendStep(rec, step);
     return { save: rec };
   });

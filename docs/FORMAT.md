@@ -4,7 +4,7 @@
 
 | 表現 | 読み手 | 生成方法 | 編集 |
 | --- | --- | --- | --- |
-| 簡易手順（Markdown） | 人 | テンプレート、またはオンデバイス AI で整形 | 可 |
+| 簡易手順（Markdown） | 人 | 記録から作り、Built-in AI が言い換えと概要を付ける | 可 |
 | Gherkin + 属性表 | AI エージェント・自動化 | 記録から機械的に生成（AI を通さない） | 可 |
 | steps（JSON） | プログラム | 記録そのもの | 不可（操作ログで削除のみ） |
 
@@ -16,57 +16,94 @@
 
 ```gherkin
 # op-scribe: Gherkin + attributes
-# recording: rec-mgx0abcd-1a2b3c / privacy: strict
+# recording: rec-example / privacy: strict
 # ‹…› and [[…]] are masked values: supply test values, never guess the original.
 # site-N.invalid is an alias for a host that is not disclosed.
 @op-scribe @privacy-strict
 Feature: 記録された操作の再現
 
   Background:
-    Given "https://site-1.invalid/" を開いている
-      | url | https://site-1.invalid/ |
+    Given 「Example」画面を開いている
+      | url     | https://example.com/ |
+      | title   | Example |
+      | purpose | 検索・閲覧の画面 |
+      | reason  | 検索フォーム |
+      | ui      | 検索フォーム（キーワード） |
+      | ui      | ナビゲーション（リンク 6 件） |
 
   Scenario: 記録された操作
-    When 「ログイン」リンクをクリックする
-      | action   | click |
-      | url      | https://site-1.invalid/ |
-      | role     | link |
-      | name     | ログイン |
-      | tag      | a |
-      | selector | [data-testid="login-link"] |
-      | href     | https://site-1.invalid/login |
-    Then "https://site-1.invalid/login" に遷移する
-      | url | https://site-1.invalid/login |
-    When 「メールアドレス」入力欄に ‹メールアドレス› を入力する
-      | action   | input |
-      | url      | https://site-1.invalid/login |
-      | role     | textbox |
-      | name     | メールアドレス |
-      | selector | #email |
-      | value    | [[email]] |
-    And 「ログインする」ボタンをクリックする
-      | action   | click |
-      | url      | https://site-1.invalid/login |
-      | role     | button |
-      | name     | ログインする |
-      | selector | form > button |
-    Then "https://site-1.invalid/home" に遷移する
-      | url | https://site-1.invalid/home |
-    And ホーム画面にユーザーメニューが表示される
+    When 検索フォームの「キーワード」検索欄に ‹任意の文字列 5文字› を入力する
+      | action    | input |
+      | url       | https://example.com/ |
+      | component | 検索フォーム |
+      | role      | searchbox |
+      | name      | キーワード |
+      | tag       | input |
+      | selector  | #q |
+      | value     | [[text:5]] |
+      | actor     | automation |
+    And 検索フォームの「キーワード」検索欄で Enter キーを押す
+      | action    | key |
+      | url       | https://example.com/ |
+      | component | 検索フォーム |
+      | role      | searchbox |
+      | name      | キーワード |
+      | tag       | input |
+      | selector  | #q |
+      | key       | Enter |
+      | actor     | automation |
+    Then 「検索結果」画面が表示される
+      | url     | https://example.com/search?q=[[v]] |
+      | title   | 検索結果 |
+      | purpose | 検索・一覧の閲覧の画面 |
+      | reason  | URL（/search） |
+      | reason  | 同じ形のリンクが 20 件 |
+      | ui      | 一覧（同じ形のリンク 20 件） |
+      | ui      | ボタン（並び替え、絞り込み） |
+    When 一覧（20 件）の「ある記事」リンクをクリックする
+      | action    | click |
+      | url       | https://example.com/search?q=[[v]] |
+      | component | 一覧（20 件） |
+      | role      | link |
+      | name      | ある記事 |
+      | tag       | a |
+      | selector  | main > a:nth-of-type(1) |
+      | href      | https://example.com/n/:id |
+      | actor     | automation |
+    Then 「ある記事」画面が表示される
+      | url     | https://example.com/n/:id |
+      | title   | ある記事 |
+      | purpose | 詳細の閲覧の画面 |
+      | reason  | 記事本文 |
+      | ui      | 本文（約 4200 文字） |
+      | ui      | ボタン（スキ、フォロー、共有） |
 ```
 
 ### キーワードの割り当て
 
 | キーワード | 何を表すか |
 | --- | --- |
-| `Given`（Background） | 記録開始時の画面 |
-| `When` | ユーザー（または agent）の操作 1 つ |
-| `Then` | 操作の直後 4 秒以内に起きた画面遷移、操作ログに追加した期待結果・確認点 |
+| `Given`（Background） | 記録開始時の画面（画面の属性表つき） |
+| `When` | 操作 1 つ（人・自動テスト・スクリプト・エージェントのいずれでも） |
+| `Then` | 操作の結果表示された画面（画面の属性表つき）、操作ログに追加した期待結果・確認点 |
 | `And` | 直前と同じ種類が続くとき |
 
 操作に起因しない遷移（アドレスバーへの直接入力など）は `When "…" を開く` になります。
 
-### 属性（+α）
+### 画面の属性（`Given` / `Then … 画面が表示される` の表）
+
+| 属性 | 内容 | 例 |
+| --- | --- | --- |
+| `url` | 画面の URL（伏せ済み） | `https://example.com/trend` |
+| `title` | `head > title`（伏せ済み） | `急上昇` |
+| `h1` | 主見出し（title と違うときだけ） | |
+| `purpose` | 推定した画面の目的 | `一覧の閲覧の画面`、`検索・一覧の閲覧の画面` |
+| `reason` | 推定の根拠（複数行） | `検索フォーム`、`同じ形のリンクが 32 件`、`URL（/search）` |
+| `ui` | 主な UI（複数行） | `検索フォーム（キーワード）`、`入力フォーム（3 項目: 氏名、メール、件名） → 「送信」` |
+
+目的は、検索・作成・投稿・編集・保存・削除・ログイン・購入・出力・共有・反応・情報の入力・一覧の閲覧・詳細の閲覧から推定します（`shared/screen.js`）。
+
+### 操作の属性（+α）
 
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
@@ -81,7 +118,10 @@ Feature: 記録された操作の再現
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
 | `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
-| `source` | agent による操作・追記のとき `agent` | |
+| `component` | 操作した部品 | `ヘッダー`、`検索フォーム`、`一覧（32 件）`、`ダイアログ「確認」` |
+| `intent` | ボタン等の表示名から読んだ意図 | `編集・保存`、`削除` |
+| `actor` | 人以外が操作したとき: `automation`（WebDriver / CDP）、`script`（ページ内スクリプト）、`agent`（WebMCP） | |
+| `source` | エージェントが追記した期待結果のとき `agent` | |
 
 再現する側（人・AI）へのルール:
 
@@ -92,17 +132,34 @@ Feature: 記録された操作の再現
 ## 簡易手順（Markdown）
 
 ```markdown
-# 操作の再現手順（4 ステップ）
+# 「Example」から「ある記事」までの操作（4 ステップ）
 
 ## 前提条件
-- https://site-1.invalid にアクセスできる状態であること
-- ‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること
+- https://example.com にアクセスできる状態であること
 
 ## 手順
-1. https://site-1.invalid/ を開く
-2. 「ログイン」リンクをクリックする
-   - 期待結果: https://site-1.invalid/login に遷移する
-...
+
+### 画面 1: 「Example」
+- URL: https://example.com/
+- 画面の目的: 検索・閲覧の画面（根拠: 検索フォーム）
+- 主な UI: 検索フォーム（キーワード） / ナビゲーション（リンク 6 件）
+
+1. https://example.com/ を開く
+2. 検索フォームの「キーワード」検索欄に ‹任意の文字列 5文字› を入力する
+3. 検索フォームの「キーワード」検索欄で Enter キーを押す
+   - 期待結果: 「検索結果」画面に遷移する
+
+### 画面 2: 「検索結果」
+- URL: https://example.com/search?q=[[v]]
+- 画面の目的: 検索・一覧の閲覧の画面（根拠: URL（/search）、同じ形のリンクが 20 件）
+- 主な UI: 一覧（同じ形のリンク 20 件） / ボタン（並び替え、絞り込み）
+
+4. 一覧（20 件）の「ある記事」リンクをクリックする
+   - 期待結果: 「ある記事」画面に遷移する
+
+## 補足
+- ‹任意の文字列 N文字› は記録時の入力を伏せたもの。再現時は同じ程度の長さの値を使う
+- 操作の主体: 自動テスト 3 件
 ```
 
 ## 送信ペイロード（`op-scribe.recording/v1`）
@@ -125,7 +182,7 @@ Feature: 記録された操作の再現
     "webmcpTools": [{ "site": "https://site-1.invalid", "tools": ["search_catalog"] }]
   },
   "reproduction": {
-    "generator": "template | on-device-ai | manual | none",
+    "generator": "built-in-ai | template | manual | none",
     "markdown": "…",
     "gherkin": "…"
   },
