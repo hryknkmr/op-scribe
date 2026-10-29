@@ -1,0 +1,10 @@
+# scripts/pii-guard.patterns.local.txt の書き方の例（このファイル自体は公開してよいダミー）。
+# コピーして .local.txt にし、実際の語に置き換える。.local.txt は gitignore 済み。
+# 1 行 1 パターン（拡張正規表現・大文字小文字無視）。
+#
+# 社名・部署名・製品コードネーム
+# your-company-name
+# 社内ホスト名・ドメイン
+# internal\.your-company\.example
+# 自分の実名・社用メールアドレス
+# your-real-name

@@ -1,0 +1,30 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - name: Unit tests (privacy filter, step rendering)
+        run: node --test tests/*.test.mjs
+      - name: Manifest is valid JSON and files it references exist
+        run: |
+          node -e "
+            const m = require('./manifest.json'); const fs = require('fs');
+            const files = [m.background.service_worker, m.side_panel.default_path, ...Object.values(m.icons)];
+            const missing = files.filter((f) => !fs.existsSync(f));
+            if (missing.length) { console.error('missing:', missing); process.exit(1); }
+          "

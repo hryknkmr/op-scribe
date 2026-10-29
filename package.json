@@ -1,0 +1,16 @@
+{
+  "name": "op-scribe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that records browser operations with privacy masking and renders them as reproduction steps (natural language + Gherkin).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "guard": "bash scripts/pii-guard.sh scan-tree",
+    "setup-hooks": "git config core.hooksPath .githooks",
+    "receiver": "node tools/receiver.mjs",
+    "pack": "bash scripts/pack.sh"
+  }
+}

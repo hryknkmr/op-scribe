@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "op-scribe",
+  "version": "0.1.0",
+  "description": "Records clicks and inputs on sites you allow, masks personal and confidential values, and turns them into reproduction steps.",
+  "minimum_chrome_version": "138",
+  "permissions": ["sidePanel", "storage", "scripting", "tabs"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": { "service_worker": "service-worker.js" },
+  "action": { "default_title": "op-scribe" },
+  "side_panel": { "default_path": "sidepanel/sidepanel.html" },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

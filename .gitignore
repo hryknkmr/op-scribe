@@ -1,0 +1,16 @@
+.DS_Store
+node_modules/
+*.log
+dist/
+tmp/
+
+# 記録データ・受信サーバの保存先。実サイトの操作記録はリポジトリに入れない。
+recordings/
+*.opscribe.json
+
+# 社名・実ホスト名などの denylist。公開しない（scripts/pii-guard.patterns.local.example.txt 参照）。
+scripts/pii-guard.patterns.local.txt
+
+# 送信先・トークンを書いたローカル設定
+.env
+.env.*

@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>op-scribe</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="bar">
+    <h1>op-scribe</h1>
+    <p id="tab-status" class="status">アクティブタブを確認中…</p>
+  </header>
+
+  <main class="panel">
+    <details name="ops" open>
+      <summary>記録 <span id="rec-state" class="pill">停止中</span></summary>
+      <div class="body">
+        <p class="hint">
+          開始すると、このタブのサイトに対する記録許可を求めます。入力値は既定で文字数だけを残し、
+          記録データはブラウザを閉じると消えます。
+        </p>
+        <div class="row">
+          <button id="rec-start" type="button">記録開始</button>
+          <button id="rec-stop" type="button" class="secondary" disabled>停止</button>
+          <button id="rec-clear" type="button" class="secondary" disabled>破棄</button>
+        </div>
+        <div id="origin-gate" class="callout" hidden>
+          <p>このサイトはまだ記録を許可していないため、ページ遷移以外の操作は記録されません。</p>
+          <button id="add-origin" type="button" class="secondary">このサイトも記録する</button>
+        </div>
+      </div>
+    </details>
+
+    <details name="ops">
+      <summary>操作ログ <span id="step-count" class="pill">0</span></summary>
+      <div class="body">
+        <ol id="steps" class="steps"></ol>
+        <form id="note-form" class="row">
+          <input id="note-input" type="text" maxlength="300" placeholder="期待結果・確認点を追加（例: 一覧に結果が表示される）">
+          <button type="submit" class="secondary">追加</button>
+        </form>
+        <p id="redactions" class="hint"></p>
+      </div>
+    </details>
+
+    <details name="ops">
+      <summary>再現手順 <span id="ai-state" class="pill">AI 未確認</span></summary>
+      <div class="body">
+        <div class="row">
+          <button id="gen-ai" type="button">AI で整理</button>
+          <button id="gen-template" type="button" class="secondary">テンプレートで生成</button>
+        </div>
+        <p id="gen-status" class="hint"></p>
+        <label class="field">
+          <span>簡易手順（自然言語・人向け）</span>
+          <textarea id="repro" rows="12" spellcheck="false"
+            placeholder="生成した再現手順がここに入ります。送信前に自由に編集できます。"></textarea>
+        </label>
+        <label class="field">
+          <span>Gherkin + 属性表（AI・自動化向け。記録から機械的に生成）</span>
+          <textarea id="gherkin" rows="14" spellcheck="false"
+            placeholder="Feature / Scenario 形式。各ステップの下に画面 URL や対象要素の属性表が付きます。"></textarea>
+        </label>
+      </div>
+    </details>
+
+    <details name="ops">
+      <summary>出力・送信</summary>
+      <div class="body">
+        <p class="hint">
+          送る内容は必ずプレビューで確認します。伏せ忘れの疑いが 1 件でもあると送信できません。
+        </p>
+        <div class="row">
+          <button id="preview" type="button">プレビュー</button>
+          <button id="copy-md" type="button" class="secondary">Markdown をコピー</button>
+          <button id="copy-gherkin" type="button" class="secondary">Gherkin をコピー</button>
+          <button id="download" type="button" class="secondary">JSON を保存</button>
+        </div>
+        <p id="output-status" class="hint"></p>
+      </div>
+    </details>
+
+    <details name="ops">
+      <summary>プライバシーと送信先</summary>
+      <div class="body">
+        <form id="settings-form" class="settings">
+          <p class="hint">ここでの設定はこのブラウザ内（chrome.storage.local）にだけ保存されます。</p>
+          <fieldset>
+            <legend>入力値の扱い</legend>
+            <label><input type="radio" name="privacyLevel" value="strict"> 厳格: 自由入力は文字数だけ残す（推奨）</label>
+            <label><input type="radio" name="privacyLevel" value="balanced"> 標準: 自由入力も残し、個人情報らしい部分を伏せる</label>
+          </fieldset>
+          <label class="field">
+            <span>実名で記録してよいホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
+            <textarea name="hostAllowlist" rows="3" placeholder="example.com"></textarea>
+            <small>ここに無いホストは site-1.invalid のような別名に置き換えます。</small>
+          </label>
+          <label class="field">
+            <span>必ず伏せる語（社名・製品名・人名など、1 行 1 語）</span>
+            <textarea name="keywords" rows="4"></textarea>
+          </label>
+          <label class="field">
+            <span>送信先 URL（https、または http://localhost）</span>
+            <input name="endpoint" type="url" placeholder="https://collector.example.com/recordings">
+          </label>
+          <label class="field">
+            <span>Authorization ヘッダ（任意）</span>
+            <input name="authHeader" type="password" autocomplete="off" placeholder="Bearer …">
+          </label>
+          <div class="row">
+            <button type="submit">保存</button>
+            <span id="settings-status" class="hint"></span>
+          </div>
+        </form>
+      </div>
+    </details>
+  </main>
+
+  <dialog id="preview-dialog">
+    <form method="dialog" class="dialog">
+      <h2>送信内容のプレビュー</h2>
+      <div id="findings" class="findings"></div>
+      <pre id="payload" class="payload"></pre>
+      <p id="send-target" class="hint"></p>
+      <div class="row">
+        <button id="send" type="button">この内容で送信</button>
+        <button value="cancel" class="secondary">閉じる</button>
+      </div>
+      <p id="send-status" class="hint"></p>
+    </form>
+  </dialog>
+
+  <script src="../shared/sanitize.js"></script>
+  <script src="../shared/describe.js"></script>
+  <script src="sidepanel.js" type="module"></script>
+</body>
+</html>

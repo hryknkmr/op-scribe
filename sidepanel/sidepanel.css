@@ -1,0 +1,202 @@
+/* op-scribe side panel */
+
+:root {
+  color-scheme: light dark;
+  --accent: #1a73e8;
+  --danger: #d93025;
+  --hairline: color-mix(in srgb, CanvasText 15%, transparent);
+  --muted: color-mix(in srgb, CanvasText 60%, Canvas);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 1rem;
+  font: 0.8125rem/1.5 system-ui, sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+.bar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 1;
+  padding: 0.7rem 0.9rem;
+  border-block-end: 1px solid var(--hairline);
+  background: Canvas;
+}
+
+.bar h1 { margin: 0; font-size: 0.9375rem; }
+
+.status {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  overflow-wrap: anywhere;
+}
+
+.status.bad { color: var(--danger); font-weight: 700; }
+
+.panel { padding: 0.5rem 0.75rem 0; display: grid; gap: 0.4rem; }
+
+details {
+  border: 1px solid var(--hairline);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+
+summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pill {
+  margin-inline-start: auto;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 16%, Canvas);
+  color: var(--accent);
+  font-size: 0.6875rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.pill.live {
+  background: color-mix(in srgb, var(--danger) 16%, Canvas);
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.body { padding: 0 0.7rem 0.7rem; display: grid; gap: 0.55rem; }
+
+.hint { margin: 0; color: var(--muted); font-size: 0.6875rem; overflow-wrap: anywhere; }
+
+code { font-family: ui-monospace, monospace; font-size: 0.6875rem; }
+
+button {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.45rem;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  border-color: var(--hairline);
+  background: Canvas;
+  color: CanvasText;
+  font-weight: 400;
+}
+
+button.icon {
+  padding: 0 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+button:disabled { opacity: 0.5; cursor: default; }
+
+.row { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.row input { flex: 1; min-inline-size: 8rem; }
+
+.callout {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, Canvas);
+  border-radius: 0.45rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.callout p { margin: 0; font-size: 0.75rem; }
+.callout button { justify-self: start; }
+
+.steps {
+  margin: 0;
+  padding-inline-start: 1.4rem;
+  max-block-size: 18rem;
+  overflow: auto;
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+}
+
+.step span:first-child { overflow-wrap: anywhere; }
+.step { overflow-wrap: anywhere; }
+.step.note { color: var(--muted); }
+.step .icon { float: inline-end; }
+
+.tag {
+  margin-inline-end: 0.3rem;
+  padding: 0.02rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.settings { display: grid; gap: 0.6rem; }
+
+fieldset {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.45rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+legend, .field span { font-size: 0.6875rem; color: var(--muted); }
+.field { display: grid; gap: 0.25rem; }
+.field small { color: var(--muted); font-size: 0.625rem; }
+
+textarea, input[type="text"], input[type="url"], input[type="password"] {
+  inline-size: 100%;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.45rem;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+}
+
+textarea { resize: vertical; }
+#repro, #gherkin { font-family: ui-monospace, monospace; font-size: 0.75rem; }
+
+dialog {
+  inline-size: min(40rem, 94vw);
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 0.6rem;
+  background: Canvas;
+  color: CanvasText;
+}
+
+dialog::backdrop { background: color-mix(in srgb, #000 40%, transparent); }
+
+.dialog { padding: 0.9rem; display: grid; gap: 0.6rem; }
+.dialog h2 { margin: 0; font-size: 0.9375rem; }
+
+.findings p { margin: 0; font-size: 0.75rem; }
+.findings .bad { color: var(--danger); font-weight: 700; }
+
+.payload {
+  margin: 0;
+  max-block-size: 50vh;
+  overflow: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.45rem;
+  font: 0.6875rem/1.45 ui-monospace, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

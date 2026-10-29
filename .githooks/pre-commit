@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# pre-commit: identity と staged 内容に PII / 社内情報 / secret が無いか検査し、unit test を通す。
+# 一時バイパス: PII_GUARD_SKIP=1 git commit ...（CI では効かない）
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+GUARD="$ROOT/scripts/pii-guard.sh"
+[[ -x "$GUARD" ]] || { echo "pre-commit: pii-guard.sh が無い/実行不可のためスキップ"; exit 0; }
+
+if [[ "${PII_GUARD_SKIP:-}" == "1" ]]; then
+  echo "⚠ pre-commit: PII_GUARD_SKIP=1 によりバイパス（CI では遮断されます）"
+  exit 0
+fi
+
+if [[ ! -f "$ROOT/scripts/pii-guard.patterns.local.txt" ]]; then
+  echo "⚠ pre-commit: scripts/pii-guard.patterns.local.txt がありません。社名・実ホスト名などは検査されません（README 参照）。" >&2
+fi
+
+fail=0
+"$GUARD" check-config || fail=1
+echo "pii-guard: staged 内容を走査中..."
+"$GUARD" scan-staged || { echo "✗ staged 内容に PII/社内情報/secret の疑いがあります。" >&2; fail=1; }
+
+if command -v node >/dev/null 2>&1; then
+  (cd "$ROOT" && node --test tests/*.test.mjs >/dev/null 2>&1) || { echo "✗ unit test が失敗しました（pnpm test）。" >&2; fail=1; }
+fi
+
+[[ "$fail" == "0" ]] || { echo "コミットを中止しました。" >&2; exit 1; }
+echo "pii-guard + test: OK"

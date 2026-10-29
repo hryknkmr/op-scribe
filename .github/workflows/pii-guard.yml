@@ -1,0 +1,41 @@
+name: PII Guard
+
+# 公開リポジトリへの PII / 社内情報 / secret 混入の最終遮断（server 側）。
+# ローカル hooks は回避できるため、branch protection で required check にすること。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pii-guard:
+    name: PII / identity guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout (full history for identity scan)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Scan tracked files
+        run: |
+          chmod +x scripts/pii-guard.sh
+          scripts/pii-guard.sh scan-tree || { echo "✗ tracked ファイルに PII/社内情報/secret の疑い" >&2; exit 1; }
+
+      - name: Check commit identities
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+            RANGE="${BASE_SHA}..${HEAD_SHA}"
+          else
+            RANGE="$(git rev-list --max-parents=0 HEAD | tail -1)..HEAD"
+          fi
+          scripts/pii-guard.sh check-identities "$RANGE"
