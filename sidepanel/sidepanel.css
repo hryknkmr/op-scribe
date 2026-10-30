@@ -200,3 +200,12 @@ dialog::backdrop { background: color-mix(in srgb, #000 40%, transparent); }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.policy {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 0.45rem;
+  font-size: 0.6875rem;
+}
+
+.policy p { margin: 0.15rem 0; }

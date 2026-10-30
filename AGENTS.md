@@ -11,6 +11,8 @@ AI エージェント向けの作業ルール。人向けの説明は README.md�
 - 隠したい語を denylist としてリポジトリ内に列挙しない。`scripts/pii-guard.patterns.local.txt`（gitignore）にだけ書く。
 - 実サイトの操作記録（`*.opscribe.json`、`recordings/`）はコミットしない。
 - コミットの identity は `users.noreply.github.com` のみ。
+- AI ツールの共著者行（`Co-Authored-By: … <noreply@anthropic.com>`）は固定の noreply アドレスで、社名・社用メールの禁止の
+  対象外とする（オーナー判断）。`scripts/pii-guard.sh` はこのアドレスだけを完全一致で許可する。
 
 ## 設計上の不変条件（壊さないこと）
 

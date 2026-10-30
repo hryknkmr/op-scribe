@@ -73,20 +73,20 @@ Feature: 記録された操作の再現
 | `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
 | `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/:id` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
-| `name` | 対象要素のアクセシブルネーム（伏せ済み・厳格モードは 40 字まで） | `ログインする` |
+| `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
 | `tag` | HTML タグ名 | `button` |
 | `selector` | 再特定用の CSS セレクタ。`data-testid` 等 → 安定した `id` → 4 階層までのパスの順で選ぶ。伏せる必要があった場合は出さない | `[data-testid="save"]` |
 | `href` | リンク先（伏せ済み） | |
-| `value` | 入力値（伏せ字のまま） | `[[text:12]]` `[[email]]` |
+| `value` | 入力値（方針どおり伏せたもの） | `週末 レシピ` `s***@e***.com` `[[secret]]` |
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
-| `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
+| `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"shoes"}` |
 | `source` | agent による操作・追記のとき `agent` | |
 
 再現する側（人・AI）へのルール:
 
 - 要素は `role` + `name` で探し、見つからなければ `selector` を使う（Playwright の `getByRole` に対応）。
-- `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。`[[text:N]]` は N 文字程度の任意文字列。
+- `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 
 ## 簡易手順（Markdown）

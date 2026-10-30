@@ -11,7 +11,7 @@
  */
 importScripts('shared/sanitize.js', 'shared/describe.js');
 
-const { scrubText, scrubUrl, defaults } = self.OpScribeSanitize;
+const { scrubText, scrubUrl, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 
 const REC_KEY = 'opsRecording';
@@ -126,12 +126,11 @@ function cleanStep(raw, rec, settings) {
   const ctx = {
     hostAllowlist: settings.hostAllowlist,
     aliases: rec.aliases,
-    privacyLevel: settings.privacyLevel,
     keywords: settings.keywords
   };
   const kinds = [];
   const text = (value, maxLength) => {
-    const r = scrubText(value, { keywords: settings.keywords, maxLength });
+    const r = scrubText(value, { keywords: settings.keywords, maxLength, hosts: ctx });
     kinds.push(...r.kinds);
     return r.text;
   };
@@ -146,8 +145,7 @@ function cleanStep(raw, rec, settings) {
   if (raw.target) {
     const t = raw.target;
     step.target = { role: text(t.role, 24), tag: text(t.tag, 16) };
-    const nameMax = settings.privacyLevel === 'strict' ? 40 : 80;
-    if (t.name) step.target.name = text(t.name, nameMax);
+    if (t.name) step.target.name = text(t.name, 80);
     // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
     if (t.selector) {
       const r = scrubText(t.selector, { keywords: settings.keywords });
@@ -163,7 +161,7 @@ function cleanStep(raw, rec, settings) {
     step.ok = raw.ok !== false;
     step.source = 'agent';
     if (raw.args && typeof raw.args === 'object') {
-      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords });
+      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
@@ -196,7 +194,7 @@ async function start({ tabId, url }) {
       tabId,
       startedAt: Date.now(),
       endedAt: null,
-      privacyLevel: settings.privacyLevel,
+      privacyLevel: 'strict',
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},
@@ -228,6 +226,13 @@ const stop = () => mutate(async (rec) => {
   return { save: rec, reply: { ok: true } };
 });
 
+/** Words the final scan must not find: the user's list plus every real host that was aliased. */
+function scanFor(rec, settings) {
+  const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
+  const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
+  return (value) => finalScan(value, { keywords });
+}
+
 const addPattern = (url) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const pattern = originPattern(url);
@@ -258,9 +263,10 @@ async function webmcpRequest(rec, sender, { op, args }) {
   }
   if (op === 'reproduction') {
     const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    return {
-      reply: { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) }
-    };
+    const reply = { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) };
+    // Same gate as every other exit: the page gets nothing the final scan would stop.
+    if (scanFor(rec, settings)(reply).length) return { reply: { ok: false, error: 'BLOCKED_BY_FINAL_SCAN' } };
+    return { reply };
   }
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
@@ -305,7 +311,7 @@ async function handle(message, sender) {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
       const settings = await getSettings();
-      return { active: true, config: { privacyLevel: settings.privacyLevel, keywords: settings.keywords } };
+      return { active: true, config: { keywords: settings.keywords } };
     }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };

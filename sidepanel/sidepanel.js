@@ -92,9 +92,7 @@ const lines = (text) => String(text || '').split('\n').map((s) => s.trim()).filt
 
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanKeywords(rec) {
-  const hosts = Object.keys(rec?.aliases || {}).map((origin) => {
-    try { return new URL(origin).hostname; } catch { return ''; }
-  });
+  const hosts = S.aliasedHosts(rec?.aliases).map(([host]) => host);
   return [...settings.keywords, ...hosts].filter(Boolean);
 }
 
@@ -440,7 +438,6 @@ ui.download.addEventListener('click', async () => {
 
 function fillSettingsForm() {
   const form = ui.settingsForm.elements;
-  for (const radio of form.privacyLevel) radio.checked = radio.value === settings.privacyLevel;
   form.hostAllowlist.value = settings.hostAllowlist.join('\n');
   form.keywords.value = settings.keywords.join('\n');
   form.endpoint.value = settings.endpoint;
@@ -459,7 +456,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   // Ask for the endpoint now, while we still hold the click.
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }) : Promise.resolve(true);
   const next = {
-    privacyLevel: form.privacyLevel.value === 'balanced' ? 'balanced' : 'strict',
+    privacyLevel: 'strict',
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),
     keywords: [...new Set(lines(form.keywords.value))],
     endpoint,
