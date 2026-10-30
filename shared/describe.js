@@ -126,6 +126,10 @@
 
   const NAVIGATION_CAUSES = new Set(['click', 'submit', 'key', 'tool']);
   const FOLLOW_MS = 4000;
+
+  /** A navigation the operation caused (a link, a submit), not one opened by itself (address bar, much later). */
+  const causedBy = (action, navigation) => Boolean(action) && NAVIGATION_CAUSES.has(action.type)
+    && navigation.t - action.t <= FOLLOW_MS;
   const REWRITE_MS = 3000;
 
   const samePage = (a, b) => {
@@ -448,7 +452,7 @@
       } else if (step.type === 'note') {
         push('Then', humanize(step.note), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
-        const caused = lastAction && NAVIGATION_CAUSES.has(lastAction.type) && step.t - lastAction.t <= FOLLOW_MS;
+        const caused = causedBy(lastAction, step);
         if (caused) {
           if (!screenAhead(i, step.url)) push('Then', `"${step.url}" に遷移する`, [['url', step.url]]);
         } else {
@@ -516,7 +520,7 @@
     };
   }
 
-  const api = { SCHEMA, ACTOR_LABELS, humanize, describeStep, buildReproduction, toMarkdown, toGherkin, isPageRewrite, buildPayload };
+  const api = { SCHEMA, ACTOR_LABELS, humanize, describeStep, buildReproduction, toMarkdown, toGherkin, isPageRewrite, causedBy, buildPayload };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

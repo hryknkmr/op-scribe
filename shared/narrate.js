@@ -329,6 +329,9 @@ ${COMMON_RULES}`,
           }
           screenMemo = memo;
           screenNotices = notices;
+        } else if (step.type === 'navigate' && pending && !D.causedBy(pending.step, step)) {
+          // Opened by itself (address bar, much later): the screen it shows is not the operation's result.
+          await settle(null);
         } else if (ACTIONS.has(step.type)) {
           await settle(null);
           pending = { step, from: screenMemo };

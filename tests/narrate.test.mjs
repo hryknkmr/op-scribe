@@ -292,3 +292,12 @@ test('what a status area on the reached screen says is the result, whatever its 
   const result = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
   assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '「3 results」と表示された');
 });
+
+test('a screen opened by itself later is not the result of the operation before it', async () => {
+  const later = { ...rec, steps: rec.steps.map((s) => (s.id === 's5' ? { ...s, t: 20000 } : s)) };
+  const withStatus = { ...units, s6: [...units.s6, { kind: 'feedback', text: 'ようこそ', order: 3 }] };
+  const result = await N.narrate(later, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
+  assert.equal(result.operations.find((o) => o.id === 's4')?.ai.result, undefined);
+  const caused = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
+  assert.equal(caused.operations.find((o) => o.id === 's4').ai.result, '「ようこそ」と表示された');
+});
