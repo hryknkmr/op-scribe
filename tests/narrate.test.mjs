@@ -116,6 +116,17 @@ test('an answer with a URL or credential it never read is dropped', async () => 
   assert.ok(!result.markdown.includes('abcdef123456'));
 });
 
+test('a screen memo that copies the instructions instead of the screen is dropped', async () => {
+  const LM = fakeModel({
+    ...goodAnswers,
+    screen: (input) => (input.includes('検索結果')
+      ? { purpose: 'この画面で利用者ができること・この画面の目的', summary: '一覧', facts: [] }
+      : goodAnswers.screen(input))
+  });
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.deepEqual(result.screens.map((s) => s.id), ['s2']);
+});
+
 test('without the built-in AI the recording is still described by the template', async () => {
   for (const LM of [undefined, { availability: async () => 'unavailable' }]) {
     const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
@@ -156,4 +167,65 @@ test('the actor of each operation and what it changed are kept in the payload, t
 test('script-driven operations are marked in the sentence', () => {
   const repro = D.buildReproduction({ steps: [{ type: 'click', t: 0, actor: 'script', target: { role: 'button', name: '保存' } }] });
   assert.equal(repro.steps[0].action, '「保存」ボタンをクリックする（ページ内スクリプトによる操作）');
+});
+
+test('a notice the page showed becomes the result as recorded, whatever the model wrote', async () => {
+  const withNotice = { ...rec, steps: rec.steps.map((s) => (s.id === 's4' ? { ...s, change: { appeared: ['20 件'], removed: [], transient: ['検索しました'] } } : s)) };
+  const result = await N.narrate(withNotice, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '「検索しました」と表示された');
+});
+
+test('an answer with a number it never read is dropped', async () => {
+  const LM = fakeModel({ ...goodAnswers, transition: { meaning: '検索する', result: '35 件が表示された' } });
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.operations.length, 0);
+});
+
+test('the screen kind judged from the record is given to the model before the first page', async () => {
+  const kinded = { ...rec, steps: rec.steps.map((s) => (s.id === 's6' ? { ...s, screen: { ...s.screen, purposes: [{ kind: 'list', label: '一覧の閲覧' }] } } : s)) };
+  const LM = fakeModel(goodAnswers);
+  await N.narrate(kinded, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.ok(LM.calls.some((c) => c.kind === 'screen' && c.input.startsWith('記録から判定した画面の種類: 一覧の閲覧\n')));
+});
+
+test('one answer that fails (cut at the output limit) does not stop the rest of the reading', async () => {
+  const LM = fakeModel(goodAnswers);
+  const create = LM.create;
+  LM.create = async (options) => {
+    const session = await create(options);
+    if (!options.initialPrompts[0].content.includes('画面が「何をするための画面か」')) return session;
+    const fail = (s) => ({ ...s, clone: async () => fail(await s.clone()), prompt: async (input) => {
+      if (input.includes('検索結果')) throw new Error('The response exceeded output limits and was truncated.');
+      return s.prompt(input);
+    } });
+    return fail(session);
+  };
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.generator, 'built-in-ai');
+  assert.deepEqual(result.screens.map((s) => s.id), ['s2']);
+  assert.ok(result.operations.length > 0);
+});
+
+test('a notice on the screen an operation led to is its result and part of that screen', async () => {
+  const withToast = { ...units, s6: [...units.s6, { kind: 'feedback', text: '保存しました', order: 2 }] };
+  const result = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withToast[s.id] });
+  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '「保存しました」と表示された');
+  assert.match(result.screens.find((s) => s.id === 's6').ai.summary, /「保存しました」と表示されている。$/);
+});
+
+test('a key the operation did not use is not accepted in its meaning', async () => {
+  const LM = fakeModel({ ...goodAnswers, transition: (input) => (input.includes('Enter') ? goodAnswers.transition(input) : { meaning: 'Enter キーで確定する', result: '' }) });
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.deepEqual(result.operations.map((o) => o.id), ['s4']);
+});
+
+test('a notice that was already on the previous screen is not given to the next operation as its result', async () => {
+  const both = { ...units, s2: [...units.s2, { kind: 'feedback', text: '保存しました', order: 3 }], s6: [...units.s6, { kind: 'feedback', text: '保存しました', order: 2 }] };
+  const result = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => both[s.id] });
+  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '20 件の検索結果が表示された');
+});
+
+test('a number written without its thousands separator is the same number', () => {
+  assert.deepEqual(N.problemsOf({ summary: '約10000件、¥5000' }, '約10,000件 ¥5,000', null), []);
+  assert.match(N.problemsOf({ summary: '約20000件' }, '約10,000件', null)[0], /読んだ文章にない数字/);
 });

@@ -45,19 +45,25 @@
   const PROMPTS = {
     screen: `あなたは、ブラウザの画面が「何をするための画面か」を理解する担当者です。
 画面の文章を少しずつ渡します。毎回、これまでのメモに新しく読んだ部分を反映して、メモ全体を返してください。
-- purpose: この画面で利用者ができること・する目的（例: 記事を検索して結果を一覧で見る、会員情報を入力して登録する）
+最初に「記録から判定した画面の種類」を渡します。これは画面の部品から機械的に判定した事実なので、それと食い違う説明をしないでください（例: 種類が「詳細の閲覧」なのに「検索結果の一覧」と書かない）。
+「タイトル」「主見出し」「パス」も画面の種類を判断する手がかりにしてください。
+- purpose: この画面で利用者ができること・この画面の目的を、この画面の内容に即して 1 文で
 - summary: 画面に何があるか（主な部品と内容の要点）を 2〜3 文で
-- facts: 操作の理解に役立つ具体的な事実（見出し、件数、エラー文、ボタン名など）を短く最大 6 件
+- facts: 操作の理解に役立つ具体的な事実（見出し、件数、通知やエラーの文、ボタン名、価格など）を短く最大 6 件
 ${COMMON_RULES}`,
     transition: `あなたは、ブラウザ上の 1 つの操作が「何のために行われ、何が起きたか」を説明する担当者です。
 操作前の画面のメモ、行われた操作、操作直後に画面に現れた／消えた文字、操作後の画面のメモを渡します。
-- meaning: その操作が何のための操作か（画面の目的を踏まえて 1 文）
-- result: 操作の結果として何が起きたか（画面に現れた文字や遷移先の画面から言えることだけを 1 文。言えなければ空文字）
+- meaning: その操作が何のための操作か（画面の目的を踏まえて 1 文。操作の種類やキーは、渡した操作の文にあるものだけを書く）
+- result: 操作の結果として何が起きたか 1 文。次の順で根拠を探す:
+  1. 操作直後に現れた文字・一時的に表示された文字に通知・確認・エラーの文（「〜しました」「〜しますか」「〜してください」など）があれば、その文をそのまま含める
+  2. 操作後の画面が変わっていれば、どの画面が表示されたか
+  3. 入力や選択なら、どの欄に何が入ったか
+  どれからも言えなければ空文字
 ${COMMON_RULES}`,
     journey: `あなたは、ブラウザ操作の記録全体を要約する担当者です。
-画面ごとの理解と、操作ごとの意味・結果を順に渡します。
+画面ごとの理解と、操作ごとの意味・結果を起きた順に渡します。
 - title: この一連の操作を表す短い題名
-- summary: 利用者（または自動テスト）が何をしようとして、何をして、どうなったかを 2〜4 文で
+- summary: 利用者（または自動テスト）が何をしようとして、何をして、どうなったかを、起きた順に 2〜4 文で。結果に「」で示した通知・確認・エラーの文は必ず含める。入力した値や対象の名前も具体的に書く
 ${COMMON_RULES}`,
     compact: '渡されたメモを、意味を失わないように短くまとめ直してください。新しい情報は加えないこと。'
   };
@@ -68,7 +74,7 @@ ${COMMON_RULES}`,
       properties: {
         purpose: { type: 'string' },
         summary: { type: 'string' },
-        facts: { type: 'array', items: { type: 'string' } }
+        facts: { type: 'array', items: { type: 'string' }, maxItems: 6 }
       },
       required: ['purpose', 'summary', 'facts']
     },
@@ -86,6 +92,10 @@ ${COMMON_RULES}`,
 
   const URLS = /https?:\/\/[^\s)」』>、。"]+/g;
   const MARKS = /‹[^›]*›|\[\[[^\]]+\]\]/g;
+  /** Phrases of the instructions themselves: an answer containing one copied the prompt instead of reading the screen. */
+  /** Keys the model likes to invent for a click ("pressed Enter to confirm"). */
+  const KEYS = ['Enter', 'エンター', 'Tab キー', 'Esc', 'スペースキー'];
+  const ECHOES = ['利用者ができること・', 'この画面の内容に即して', '主な部品と内容の要点', '操作の理解に役立つ'];
 
   /** availability() can hang while Chrome resolves the model component; never wait on it forever. */
   async function availability(LM) {
@@ -110,6 +120,16 @@ ${COMMON_RULES}`,
     if (newMark) problems.push(`読んだ文章にない伏せ字（${newMark}）`);
     const findings = scan ? scan({ value }) : [];
     if (findings.length) problems.push(`伏せるべき値（${findings[0].kinds.join('/')}）`);
+    const echo = ECHOES.find((phrase) => value.includes(phrase) && !source.includes(phrase));
+    if (echo) problems.push(`指示文の書き写し（${echo}）`);
+    // 5,000 and 5000 are the same number: compare values, not how they were written.
+    const digits = (text) => new Set((text.normalize('NFKC').replace(/(\d)[,，](?=\d{3})/g, '$1').match(/\d+/g) || [])
+      .map((n) => n.replace(/^0+(?=\d)/, '')));
+    const known = digits(source);
+    const newNumber = [...digits(value)].find((n) => !known.has(n));
+    if (newNumber) problems.push(`読んだ文章にない数字（${newNumber}）`);
+    const newKey = KEYS.find((key) => value.includes(key) && !source.includes(key));
+    if (newKey) problems.push(`記録にないキー操作（${newKey}）`);
     return problems;
   }
 
@@ -138,9 +158,22 @@ ${COMMON_RULES}`,
       const session = typeof parent.clone === 'function' ? await parent.clone() : parent;
       try {
         return JSON.parse(await session.prompt(input, { responseConstraint: schema }));
+      } catch (error) {
+        // One failed answer (output cut at the limit, unparsable JSON) is rejected like a bad one;
+        // the rest of the recording is still read.
+        ask.failures.push(error?.message || String(error));
+        return null;
       } finally {
         if (session !== parent) session.destroy();
       }
+    };
+    ask.failures = [];
+    ask.rejected = [];
+    /** problemsOf, remembering why an answer was not used (returned with the result for diagnosis). */
+    ask.check = (kind, output, source, scan) => {
+      const problems = problemsOf(output, source, scan);
+      if (problems.length) ask.rejected.push(`${kind}: ${problems.join(' / ')}`);
+      return problems;
     };
     /** Characters per reading, from the measured quota and the measured cost of Japanese text. */
     ask.budget = async () => {
@@ -165,30 +198,42 @@ ${COMMON_RULES}`,
   const memoText = (memo) => (memo ? JSON.stringify({ purpose: memo.purpose, summary: memo.summary, facts: memo.facts }) : '（まだなし）');
 
   /** Reads one screen's units page by page into a memo { purpose, summary, facts, pages }. */
-  async function readScreen(ask, units, { budget = SETTINGS.fallbackBudget, scan, onStatus = () => {} } = {}) {
+  async function readScreen(ask, units, { budget = SETTINGS.fallbackBudget, scan, onStatus = () => {}, kind = '' } = {}) {
     const reserve = SETTINGS.memoLimit + 300;
     const pages = U.paginate(units, Math.max(budget - reserve, 300)).slice(0, SETTINGS.maxPagesPerScreen);
     let memo = null;
     let read = '';
     for (let i = 0; i < pages.length; i += 1) {
       onStatus(`画面を読んでいます（${i + 1}/${pages.length}）`);
-      read += `\n${pages[i]}`;
-      const next = await ask('screen', `これまでのメモ:\n${memoText(memo)}\n\n次に読む部分（${i + 1}/${pages.length}）:\n${pages[i]}`);
-      if (problemsOf(next, read, scan).length) continue;  // keep the last clean memo
+      const header = i === 0 && kind ? `記録から判定した画面の種類: ${kind}\n` : '';
+      read += `\n${header}${pages[i]}`;
+      const next = await ask('screen', `${header}これまでのメモ:\n${memoText(memo)}\n\n次に読む部分（${i + 1}/${pages.length}）:\n${pages[i]}`);
+      if (!next || ask.check('screen', next, read, scan).length) continue;  // keep the last clean memo
       memo = next;
       if (JSON.stringify(memo).length > SETTINGS.memoLimit) {
         const compact = await ask('compact', `メモ（${SETTINGS.memoLimit} 文字以内に）:\n${memoText(memo)}`, SCHEMAS.screen);
-        if (!problemsOf(compact, read, scan).length) memo = compact;
+        if (compact && !ask.check('compact', compact, read, scan).length) memo = compact;
       }
     }
     return memo ? { purpose: memo.purpose, summary: memo.summary, facts: memo.facts || [], pages: pages.length } : null;
   }
 
+  /** Notices, confirmations and errors among the text an operation made appear. */
+  const NOTICE = /(しました|されました|できました|ますか|ですか|してください|できません|ありません|失敗|エラー|完了)[。.!！?？]*$/;
+  const noticesOf = (change) => [...(change?.transient || []), ...(change?.appeared || [])]
+    .filter((t) => t.length <= 80 && NOTICE.test(t)).slice(0, 2);
+
+  /** Notices in the screen's status and alert areas. */
+  const feedbackOf = (units) => (units || []).filter((u) => u.kind === 'feedback')
+    .flatMap((u) => String(u.text || '').split('\n')).map((t) => t.trim())
+    .filter((t) => t.length <= 80 && NOTICE.test(t)).slice(0, 2);
+
   function changeText(change) {
     if (!change) return '';
     return [
       change.appeared?.length ? `現れた文字: ${change.appeared.join(' / ')}` : '',
-      change.removed?.length ? `消えた文字: ${change.removed.join(' / ')}` : ''
+      change.removed?.length ? `消えた文字: ${change.removed.join(' / ')}` : '',
+      change.transient?.length ? `一時的に表示されて消えた文字（通知など）: ${change.transient.join(' / ')}` : ''
     ].filter(Boolean).join('\n');
   }
 
@@ -200,7 +245,7 @@ ${COMMON_RULES}`,
       `操作後の画面: ${to ? memoText(to) : '（同じ画面）'}`
     ].join('\n');
     const out = await ask('transition', input);
-    return problemsOf(out, input, scan).length ? null : out;
+    return !out || ask.check('transition', out, input, scan).length ? null : out;
   }
 
   async function summarizeJourney(ask, lines, scan) {
@@ -209,11 +254,11 @@ ${COMMON_RULES}`,
     while (items.join('\n').length > SETTINGS.journeyLimit && items.length > 2) {
       const half = Math.ceil(items.length / 2);
       const head = await ask('compact', `メモ（${Math.floor(SETTINGS.journeyLimit / 2)} 文字以内に）:\n${items.slice(0, half).join('\n')}`, SCHEMAS.journey);
-      items = [`（ここまでの要約）${head.summary}`, ...items.slice(half)];
+      items = head ? [`（ここまでの要約）${head.summary}`, ...items.slice(half)] : items.slice(half);
     }
     const input = items.join('\n');
     const out = await ask('journey', input);
-    return problemsOf(out, lines.join('\n'), scan).length ? null : out;
+    return !out || ask.check('journey', out, lines.join('\n'), scan).length ? null : out;
   }
 
   const ACTIONS = new Set(['click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool']);
@@ -235,9 +280,11 @@ ${COMMON_RULES}`,
       const steps = rec.steps.map((s) => ({ ...s, screen: s.screen ? { ...s.screen } : s.screen }));
       const journey = [];
       let screenMemo = null;
+      let screenNotices = [];
       let pending = null;
 
-      const settle = async (to) => {
+      // arrived: notices on the screen the operation led to (a toast shown after the page changed).
+      const settle = async (to, arrived = []) => {
         if (!pending) return;
         const { step, from } = pending;
         pending = null;
@@ -245,6 +292,9 @@ ${COMMON_RULES}`,
         const operation = D.humanize(D.describeStep(step));
         const ai = await readTransition(ask, { from, operation, change: step.change, to }, scan);
         if (!ai) return;
+        // A notice the page showed is the result itself: state it from the record, not in the model's words.
+        const shown = [...new Set([...noticesOf(step.change), ...arrived])].slice(0, 2);
+        if (shown.length) ai.result = `${shown.map((t) => `「${t}」`).join('、')}と表示された`;
         step.ai = ai;
         journey.push(`操作: ${operation} → 意味: ${ai.meaning}${ai.result ? ` / 結果: ${ai.result}` : ''}`);
       };
@@ -252,13 +302,21 @@ ${COMMON_RULES}`,
       for (const step of steps) {
         if (step.type === 'screen') {
           const units = unitsOf(step);
-          const memo = step.screen?.ai || (units?.length ? await readScreen(ask, units, { budget, scan, onStatus }) : null);
+          const kind = (step.screen?.purposes || []).map((p) => p.label).join('・');
+          const memo = step.screen?.ai || (units?.length ? await readScreen(ask, units, { budget, scan, onStatus, kind }) : null);
+          const notices = feedbackOf(units);
+          if (memo && notices.length && !step.screen?.ai) {
+            // Stated from the record: the model tends to leave a toast out of the screen it summarizes.
+            memo.summary = `${memo.summary} ${notices.map((t) => `「${t}」`).join('、')}と表示されている。`;
+          }
           if (memo) {
             step.screen.ai = memo;
             journey.push(`画面「${step.screen.title || ''}」: ${memo.purpose}`);
           }
-          await settle(memo);
+          // A notice that was already on the previous screen (a toast that stays) is not this operation's result.
+          await settle(memo, notices.filter((t) => !screenNotices.includes(t)));
           screenMemo = memo;
+          screenNotices = notices;
         } else if (ACTIONS.has(step.type)) {
           await settle(null);
           pending = { step, from: screenMemo };
@@ -267,7 +325,9 @@ ${COMMON_RULES}`,
       await settle(null);
 
       const summary = journey.length ? await summarizeJourney(ask, journey, scan) : null;
-      if (!summary && !steps.some((s) => s.screen?.ai || s.ai)) return template('AI の理解を採用できませんでした');
+      if (!summary && !steps.some((s) => s.screen?.ai || s.ai)) {
+        return template(`AI の理解を採用できませんでした${ask.failures.length ? `（${ask.failures[0]}）` : ''}`);
+      }
       const repro = D.buildReproduction({ ...rec, steps });
       if (summary) {
         repro.title = summary.title;
@@ -280,7 +340,9 @@ ${COMMON_RULES}`,
         summary: summary?.summary,
         screens: steps.filter((s) => s.screen?.ai).map((s) => ({ id: s.id, url: s.url, ai: s.screen.ai })),
         operations: steps.filter((s) => s.ai).map((s) => ({ id: s.id, seq: s.seq, ai: s.ai })),
-        budget
+        budget,
+        // Why some answers are missing: calls that failed and answers that were rejected.
+        issues: { failures: ask.failures.slice(0, 10), rejected: ask.rejected.slice(0, 20) }
       };
     } catch (error) {
       return template(`AI で失敗しました: ${error?.message || error}`);
