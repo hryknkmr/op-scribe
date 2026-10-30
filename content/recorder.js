@@ -192,6 +192,11 @@
     return { left, top, right: left + el.clientWidth, bottom: top + el.clientHeight };
   };
 
+  /** Effects that hide or cut what is inside in a way not computed here: not read rather than guessed. */
+  const hidesInside = (st) => st.clipPath !== 'none' || Boolean(st.maskImage && st.maskImage !== 'none')
+    || ((st.position === 'absolute' || st.position === 'fixed') && Boolean(st.clip) && st.clip !== 'auto')
+    || /opacity\(\s*0(\.0*)?%?\s*\)/.test(st.filter || '');
+
   /**
    * Whether a box (viewport coordinates) inside `from` can be brought into view. Each axis is judged on its own.
    * memo: element -> computed style, shared within one reading.
@@ -206,10 +211,7 @@
     let fixed = false;
     for (let el = from; el && el !== root && el !== document.body; el = el.parentElement) {
       const st = style(el);
-      // Effects whose visible area is not computed here: not read rather than guessed.
-      if (st.clipPath !== 'none' || (st.maskImage && st.maskImage !== 'none')) return false;
-      if ((st.position === 'absolute' || st.position === 'fixed') && st.clip && st.clip !== 'auto') return false;
-      if (/opacity\(\s*0(\.0*)?%?\s*\)/.test(st.filter || '')) return false;
+      if (hidesInside(st)) return false;
       let inner = null;
       for (const [axis, lo, hi, offset, size] of AXES) {
         const overflow = st[`overflow${axis}`];
@@ -232,6 +234,7 @@
     const page = document.scrollingElement || root;
     const pageStyle = style(root);
     const bodyStyle = document.body ? style(document.body) : pageStyle;
+    if (hidesInside(pageStyle) || hidesInside(bodyStyle)) return false;
     for (const [axis, lo, hi, scroll, size, view] of [['X', 'left', 'right', scrollX, 'scrollWidth', innerWidth], ['Y', 'top', 'bottom', scrollY, 'scrollHeight', innerHeight]]) {
       const locked = CUTS.test(pageStyle[`overflow${axis}`]) || CUTS.test(bodyStyle[`overflow${axis}`]);
       // Wholly inside: text partly off the screen (fixed) or off the page shows only in part.
@@ -261,7 +264,7 @@
     if (!el?.getClientRects().length) return false;
     if (el.checkVisibility && !el.checkVisibility(PAINTED)) return false;
     const style = getComputedStyle(el);
-    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    if (style.visibility === 'hidden' || style.display === 'none' || hidesInside(style)) return false;
     const rect = el.getBoundingClientRect();
     if (sized && !(rect.width > 1 && rect.height > 1)) return false;
     // The element's own overflow clips what is inside it, not itself: judged from its parent up.
@@ -559,7 +562,8 @@
     let order = 0;
     let budget = MAX_UNIT_CHARS;
     // Each text node goes to the first unit that reads it, so the same words in two places are both kept.
-    const reader = textReader({ ms: Math.max(30, SCREEN_MS - (performance.now() - started)) });
+    // No time left after the structure: no text is read (only the page title and path).
+    const reader = textReader({ ms: SCREEN_MS - (performance.now() - started) });
     const memo = taskMemo();
     const linesOf = (el) => splitGluedLinks(el, reader.lines(el, { claim: true }));
     const push = (kind, name, el, extra = {}) => {
@@ -584,8 +588,8 @@
     for (const el of all('dialog[open], [role="dialog"], [aria-modal="true"]')) push('dialog', regionName(el), el);
     for (const form of all('form, [role="search"]')) {
       // Labels, field types and choices - what the form asks for, not what was typed.
-      const fields = [...form.querySelectorAll('input, select, textarea')]
-        .filter((f) => f.type !== 'hidden' && visible(f))
+      const fields = [...form.querySelectorAll('input, select, textarea')].slice(0, 50)
+        .filter((f) => f.type !== 'hidden' && visible(f, {}, memo))
         .map((f) => {
           // What is chosen, masked like any field value. The other choices are not read, also in a list box
           // (size > 1, multiple) where some of them are on screen.
@@ -685,6 +689,12 @@
       const el = node.nodeType === 1 ? node : node.parentElement;
       return Boolean(el) && visible(el, { sized });
     };
+    // What the notification areas already showed before the operation: shown again by a class or style
+    // change (an animation), it is not something that appeared.
+    const before = new Set();
+    for (const el of [...document.querySelectorAll(NOTICE)].slice(0, 50)) {
+      if ((el.textContent || '').length <= 300 && visible(el)) lines(el).forEach((l) => before.add(l.replace(/\s+/g, '')));
+    }
     const take = (records) => {
       // One reader per batch: a style read now may change before the next batch (a toast fading in).
       const read = textReader({ ms: 30 });
@@ -692,7 +702,7 @@
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || (el.textContent || '').length > 300) continue;
-          if (visible(el)) lines(el, null, read).forEach((l) => note('add', l, true));
+          if (visible(el)) lines(el, null, read).filter((l) => !before.has(l.replace(/\s+/g, ''))).forEach((l) => note('add', l, true));
           // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
           else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
@@ -703,7 +713,16 @@
         // put back: no change). What was removed is never handed over: a removed element is detached and
         // how it was styled (hidden by a class, transparent) is lost.
         if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
-        for (const n of r.addedNodes) if (shown(n)) lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
+        for (const n of r.addedNodes) {
+          if (!shown(n)) continue;
+          // A notice may come inside a wrapper (a portal or container added in one piece).
+          if (n.nodeType === 1 && !inNotice(n)) {
+            for (const inner of [...n.querySelectorAll(NOTICE)].slice(0, 10)) {
+              if (visible(inner)) lines(inner, null, read).forEach((l) => note('add', l, true));
+            }
+          }
+          lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
+        }
         if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l, inNotice(r.target)));
       }
     };
