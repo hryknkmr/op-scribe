@@ -301,3 +301,12 @@ test('a screen opened by itself later is not the result of the operation before 
   const caused = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
   assert.equal(caused.operations.find((o) => o.id === 's4').ai.result, '「ようこそ」と表示された');
 });
+
+test('without a downloaded model the recording is described by the template, pointing at the button that downloads it', async () => {
+  let created = 0;
+  const LM = { availability: async () => 'downloadable', create: async () => { created += 1; throw new Error('not here'); } };
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.equal(result.generator, 'template');
+  assert.match(result.reason, /押すとダウンロード/);
+  assert.equal(created, 0);
+});

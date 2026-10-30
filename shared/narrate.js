@@ -279,6 +279,10 @@ ${COMMON_RULES}`,
     const template = (reason) => ({ generator: 'template', markdown: D.toMarkdown(D.buildReproduction(rec)), reason });
     if (!rec?.steps?.length) return template('操作が記録されていません');
     const state = await availability(LM);
+    if (state === 'downloadable' || state === 'downloading') {
+      // Downloading needs a person's action: the button in the side panel starts it.
+      return template('Built-in AI のモデルがまだありません。「Built-in AI で言語化」を押すとダウンロードします');
+    }
     if (state !== 'available') return template(`Built-in AI を使えません (${state})`);
 
     const ask = makeAsk(LM, onStatus);

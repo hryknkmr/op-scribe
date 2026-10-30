@@ -180,7 +180,7 @@
    */
   const visible = (el, { sized = true } = {}) => {
     if (!el?.getClientRects().length) return false;
-    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     const rect = el.getBoundingClientRect();
@@ -423,6 +423,9 @@
     // whitespace-free text -> { text, first, last }. Removed nodes are detached, so their
     // innerText loses the cell/line spacing: lines are compared without whitespace.
     const seen = new Map();
+    // The text as it was rendered before the operation. A removed element is detached, so how it was
+    // styled is lost: its text counts only if it was rendered (not hidden by a class, for instance).
+    const rendered = (document.body.innerText || '').replace(/\s+/g, '');
     // notice: shown in a notification area (status, alert, toast), so it is the page telling the result.
     const note = (kind, text, notice = false) => {
       const k = text.replace(/\s+/g, '');
@@ -469,7 +472,11 @@
         }
         // One record can both remove and add (replaceChildren): the removal came first.
         // Removed from where it was shown: the parent it left is still in the page.
-        if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
+        if (shown(r.target, false)) {
+          // Rendered before the operation, or shown during the watch (a toast going away).
+          const wasShown = (l) => { const k = l.replace(/\s+/g, ''); return seen.has(k) || rendered.includes(k); };
+          for (const n of r.removedNodes) lines(n, r.target).filter(wasShown).forEach((l) => note('remove', l));
+        }
         for (const n of r.addedNodes) if (shown(n)) lines(n).forEach((l) => note('add', l, inNotice(n)));
         if (r.type === 'characterData' && shown(r.target)) lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
       }

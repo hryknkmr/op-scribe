@@ -309,6 +309,32 @@ async function generateTemplate(reason = '') {
  * Same path as the automatic verbalization when recording stops: the worker
  * runs the built-in AI, validates it and stores the result on the recording.
  */
+/**
+ * Chrome downloads the model only when a person asks for it: start the download here, in the click,
+ * so that the worker finds the model available. Returns false if it could not be had.
+ */
+async function ensureModel() {
+  const LM = globalThis.LanguageModel;
+  const state = await N.availability(LM);
+  if (state !== 'downloadable' && state !== 'downloading') return true;
+  ui.genStatus.textContent = 'Built-in AI のモデルをダウンロードしています…';
+  try {
+    const session = await LM.create({
+      ...N.LANGUAGES,
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          ui.genStatus.textContent = `Built-in AI のモデルをダウンロードしています（${Math.round(e.loaded * 100)}%）`;
+        });
+      }
+    });
+    session.destroy();
+    return true;
+  } catch (error) {
+    ui.genStatus.textContent = `Built-in AI のモデルをダウンロードできませんでした（${error?.name || error}）`;
+    return false;
+  }
+}
+
 async function generateAi() {
   const rec = await loadRecording();
   if (!rec?.steps?.length) {
@@ -317,6 +343,7 @@ async function generateAi() {
   }
   ui.genAi.disabled = true;
   try {
+    if (!(await ensureModel())) return;
     const result = await send('NARRATE');
     if (result?.error === 'RECORDING_CHANGED') {
       ui.genStatus.textContent = '言語化の途中で記録が変わったため、結果を使いませんでした。もう一度実行してください';
