@@ -166,10 +166,21 @@ test('the actor of each operation and what it changed are kept in the payload, t
   assert.ok(repro.notes.includes('操作の主体: 自動テスト 2 件'));
   assert.match(D.toGherkin(rec), /\| actor +\| automation +\|/);
   assert.match(D.toGherkin(rec), /\| appeared +\| 20 件見つかりました \|/);
-  const payload = D.buildPayload({ ...rec, startedAt: 0, narration: { generator: 'built-in-ai', markdown: '# x\n', summary: 's' } }, null, {});
+  const payload = D.buildPayload({ ...rec, startedAt: 0 }, { generator: 'built-in-ai', markdown: '# x\n', summary: 's' }, {});
   assert.equal(payload.recording.steps[2].actor, 'automation');
   assert.deepEqual(payload.recording.steps[3].change, { appeared: ['20 件見つかりました'], removed: [] });
   assert.deepEqual([payload.reproduction.generator, payload.reproduction.summary], ['built-in-ai', 's']);
+});
+
+test('the model\'s text reaches the payload only as the reproduction it was previewed in', () => {
+  const tainted = { ...rec, startedAt: 0, narration: { generator: 'built-in-ai', markdown: 'AI の文' }, steps: rec.steps.map((step) => ({
+    ...step, ai: { meaning: 'AI の意味' }, ...(step.screen ? { screen: { ...step.screen, ai: { purpose: 'AI の目的' } } } : {})
+  })) };
+  const payload = D.buildPayload(tainted, null, {});
+  assert.ok(!JSON.stringify(payload.recording).includes('AI の'));
+  assert.ok(!payload.reproduction.markdown.includes('AI の'));
+  assert.equal(payload.reproduction.generator, 'none');
+  assert.ok(payload.recording.steps.some((step) => step.screen?.title));
 });
 
 test('script-driven operations are marked in the sentence', () => {

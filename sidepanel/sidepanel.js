@@ -13,6 +13,7 @@ const N = globalThis.OpScribeNarrate;
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const DRAFT_KEY = 'opsDraft';
+const NARRATION_KEY = 'opsNarration';
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -57,6 +58,8 @@ let recording = null;
 let generator = 'none';
 // The user changed the generated text by hand: it is theirs and is never rebuilt over.
 let edited = false;
+// The verbalization's summary, sent with the Markdown it belongs to while that is unedited.
+let summary = '';
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
 
@@ -210,6 +213,7 @@ ui.start.addEventListener('click', () => {
     ui.gherkin.value = '';
     generator = 'none';
     edited = false;
+    summary = '';
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
@@ -238,6 +242,7 @@ ui.clear.addEventListener('click', async () => {
   ui.gherkin.value = '';
   generator = 'none';
   edited = false;
+  summary = '';
   await chrome.storage.session.remove(DRAFT_KEY);
   await refresh();
 });
@@ -253,15 +258,16 @@ ui.noteForm.addEventListener('submit', async (event) => {
 // ------------------------------------------------------------ reproduction
 
 const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited }
+  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited, summary }
 });
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording. */
-async function setRepro(rec, markdown, by) {
+async function setRepro(rec, markdown, by, about = '') {
   ui.repro.value = markdown;
   ui.gherkin.value = D.toGherkin(rec);
   generator = by;
   edited = false;
+  summary = about;
   await saveDraft();
 }
 
@@ -277,6 +283,7 @@ async function afterDelete() {
     ui.repro.value = '';
     ui.gherkin.value = '';
     generator = 'none';
+    summary = '';
     await saveDraft();
     return;
   }
@@ -318,16 +325,22 @@ async function generateAi() {
 
 const GENERATOR_LABELS = { 'built-in-ai': 'Built-in AI で言語化しました。内容を確認してください。', template: 'テンプレートで生成しました' };
 
+/** The verbalization, if it was made from the recording as it is now (not before a step was deleted). */
+async function loadNarration(rec) {
+  const narration = (await chrome.storage.session.get(NARRATION_KEY))[NARRATION_KEY];
+  return narration && rec && narration.recordingId === rec.id && narration.sourceRevision === rec.revision ? narration : null;
+}
+
 /** Shows the stored verbalization unless the user already has text of their own in the editor. */
 async function showNarration(rec, force = false) {
-  const narration = rec?.narration;
+  const narration = await loadNarration(rec);
   if (!narration) return;
   if (narration.generator === 'pending') {
     ui.genStatus.textContent = 'Built-in AI で言語化しています…';
     return;
   }
   if (!force && ui.repro.value.trim() && generator !== 'none') return;
-  await setRepro(rec, narration.markdown, narration.generator);
+  await setRepro(rec, narration.markdown, narration.generator, narration.summary);
   ui.genStatus.textContent = narration.reason
     ? `${GENERATOR_LABELS[narration.generator]}（${narration.reason}）`
     : GENERATOR_LABELS[narration.generator] || '';
@@ -352,7 +365,8 @@ async function preparePayload() {
     generator: ui.repro.value.trim() ? (generator === 'none' ? 'manual' : generator) : 'none',
     markdown: ui.repro.value,
     // Empty means "not generated yet": buildPayload then renders it from the recording.
-    gherkin: ui.gherkin.value
+    gherkin: ui.gherkin.value,
+    ...(summary && !edited ? { summary } : {})
   };
   const payload = D.buildPayload(rec, reproduction, environment());
   const findings = scanWith(rec)(payload);
@@ -538,6 +552,7 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
       ui.gherkin.value = draft.gherkin || '';
       generator = draft.generator;
       edited = Boolean(draft.edited);
+      summary = draft.summary || '';
     }
     await refresh();
   } catch (error) {

@@ -467,7 +467,9 @@
     return `${out.join('\n')}\n`;
   }
 
-  const STEP_FIELDS = ['id', 'seq', 'type', 't', 'url', 'actor', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source', 'screen', 'change', 'ai'];
+  // Facts of the recording only: the model's text reaches the payload as reproduction.markdown, nowhere else.
+  const STEP_FIELDS = ['id', 'seq', 'type', 't', 'url', 'actor', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source', 'change'];
+  const SCREEN_FIELDS = ['title', 'h1', 'purposes', 'summary', 'components'];
   const TARGET_FIELDS = ['role', 'name', 'tag', 'selector', 'href', 'component'];
 
   const pick = (obj, fields) => {
@@ -497,14 +499,15 @@
         environment: pick(environment || {}, ['browser', 'platform', 'language']),
         steps: (rec.steps || []).map((step, i) => {
           const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
+          if (step.screen) out.screen = pick(step.screen, SCREEN_FIELDS);
           if (step.target) out.target = pick(step.target, TARGET_FIELDS);
           return out;
         }),
         webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site, tools }))
       },
-      // What the side panel shows (possibly edited) wins; otherwise what was verbalized when recording stopped.
+      // What the side panel shows (possibly edited), as it was previewed.
       reproduction: (() => {
-        const chosen = reproduction?.markdown ? reproduction : rec.narration?.markdown ? rec.narration : reproduction || {};
+        const chosen = reproduction || {};
         const out = { generator: chosen.generator || 'none', markdown: chosen.markdown || '', gherkin: reproduction?.gherkin || toGherkin(rec) };
         if (chosen.summary) out.summary = chosen.summary;
         return out;
