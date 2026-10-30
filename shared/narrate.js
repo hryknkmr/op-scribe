@@ -101,7 +101,8 @@ ${COMMON_RULES}`,
   const KANJI_RUN = /[〇零一二三四五六七八九十百千万億兆]+/g;
   // Every run of number kanji is read as a number (第七章, 七番, 二十件), except these words, which are
   // not counts. A word missing here only rejects a good answer; a number missing would let one through.
-  const KANJI_WORDS = /一覧|一時|一部|一般|一緒|一度|一方|一括|一致|一意|一定|一旦|一連|一言|一応|一見|一斉|一切|一層|一体|一気|一挙|一瞬|一通り|一向|一新|一環|一面|一律|一同|一人ひとり|統一|唯一|同一|均一|画一|単一|万一|万全|万能|十分|十字|千葉|百貨|四角|三角|八百屋|七夕|五月雨|二重|一つひとつ/g;
+  // A word only when no number kanji (or 第) comes right before it: 二十一時 is 21 o'clock, 一時間 an hour.
+  const KANJI_WORDS = /(?<![〇零一二三四五六七八九十百千万億兆第])(?:一覧|一時(?!間)|一部|一般|一緒|一度|一方|一括|一致|一意|一定|一旦|一連|一言|一応|一見|一斉|一切|一層|一体|一気|一挙|一瞬|一通り|一向|一新|一環|一面|一律|一同|一人ひとり|統一|唯一|同一|均一|画一|単一|万一|万全|万能|十分|十字|千葉|百貨|四角|三角|八百屋|七夕|五月雨|二重|一つひとつ)/g;
 
   function kanjiValue(text) {
     let total = 0, section = 0, digit = null;

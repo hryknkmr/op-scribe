@@ -174,55 +174,173 @@
 
   // ------------------------------------------------------- screen and parts
 
+  // What counts as shown: painted (not display:none, hidden or transparent, here or above), larger than a
+  // point (not text for screen readers only), and where a person can bring it into view - by scrolling the
+  // page or a scrolling area (overflow: auto/scroll), not past an area that cuts it off (overflow: hidden/clip),
+  // and, for a fixed element that never scrolls, inside the screen. Covering by other elements is not judged.
+
+  const PAINTED = { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true };
+  const SCROLLS = /^(auto|scroll)$/;
+  const CUTS = /^(hidden|clip)$/;
+  const AXES = [['X', 'left', 'right', 'scrollLeft', 'scrollWidth'], ['Y', 'top', 'bottom', 'scrollTop', 'scrollHeight']];
+
+  /** The padding box of an element: where its content shows, and what an overflow setting clips to. */
+  const paddingBox = (el) => {
+    const r = el.getBoundingClientRect();
+    const left = r.left + el.clientLeft;
+    const top = r.top + el.clientTop;
+    return { left, top, right: left + el.clientWidth, bottom: top + el.clientHeight };
+  };
+
   /**
-   * Shown to the person: not hidden by itself or an ancestor (display, visibility, opacity), not placed
-   * off the page, and not shrunk to a point (text for screen readers only, which nobody sees).
+   * Whether a box (viewport coordinates) inside `from` can be brought into view. Each axis is judged on its own.
+   * memo: element -> computed style, shared within one reading.
    */
-  const visible = (el, { sized = true } = {}) => {
+  function reachable(from, rect, memo = new Map()) {
+    const style = (el) => {
+      if (!memo.has(el)) memo.set(el, getComputedStyle(el));
+      return memo.get(el);
+    };
+    let box = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    const root = document.documentElement;
+    let fixed = false;
+    for (let el = from; el && el !== root && el !== document.body; el = el.parentElement) {
+      const st = style(el);
+      // Effects whose visible area is not computed here: not read rather than guessed.
+      if (st.clipPath !== 'none' || (st.maskImage && st.maskImage !== 'none')) return false;
+      if ((st.position === 'absolute' || st.position === 'fixed') && st.clip && st.clip !== 'auto') return false;
+      let inner = null;
+      for (const [axis, lo, hi, offset, size] of AXES) {
+        const overflow = st[`overflow${axis}`];
+        if (overflow === 'visible') continue;
+        inner ||= paddingBox(el);
+        if (CUTS.test(overflow)) {
+          if (box[lo] < inner[lo] - 0.5 || box[hi] > inner[hi] + 0.5) return false;
+        } else if (SCROLLS.test(overflow)) {
+          // Somewhere in the scrolled content: in view once the area is scrolled there. Seen from further
+          // out, it is then where the area is.
+          const start = box[lo] - inner[lo] + el[offset];
+          if (start + (box[hi] - box[lo]) <= 0 || start >= el[size]) return false;
+          box = { ...box, [lo]: inner[lo], [hi]: inner[hi] };
+        }
+      }
+      if (st.position === 'fixed') { fixed = true; break; }
+    }
+    const page = document.scrollingElement || root;
+    const pageStyle = style(root);
+    const bodyStyle = document.body ? style(document.body) : pageStyle;
+    for (const [axis, lo, hi, scroll, size, view] of [['X', 'left', 'right', scrollX, 'scrollWidth', innerWidth], ['Y', 'top', 'bottom', scrollY, 'scrollHeight', innerHeight]]) {
+      const locked = CUTS.test(pageStyle[`overflow${axis}`]) || CUTS.test(bodyStyle[`overflow${axis}`]);
+      if (fixed || locked) {
+        if (box[hi] <= 0 || box[lo] >= view) return false;
+      } else if (box[hi] + scroll <= 0 || box[lo] + scroll >= page[size]) return false;
+    }
+    return true;
+  }
+
+  /** An element shown to the person (see above); sized: false for one that may have been emptied. */
+  // Also used as a filter callback ((el, index, array)): anything but an options object and a Map is ignored.
+  const visible = (el, options, memo) => {
+    const sized = !(options && typeof options === 'object' && !Array.isArray(options) && options.sized === false);
+    if (!(memo instanceof Map)) memo = undefined;
     if (!el?.getClientRects().length) return false;
-    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    if (el.checkVisibility && !el.checkVisibility(PAINTED)) return false;
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     const rect = el.getBoundingClientRect();
-    // Off the page on any side: nobody can scroll to it.
-    const page = document.scrollingElement || document.documentElement;
-    if (rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0) return false;
-    if (rect.left + scrollX >= page.scrollWidth || rect.top + scrollY >= page.scrollHeight) return false;
-    // A fixed element does not scroll with the page: off the viewport, it is never shown.
-    const offViewport = rect.left >= innerWidth || rect.top >= innerHeight || rect.right <= 0 || rect.bottom <= 0;
-    if (offViewport && isFixed(el)) return false;
-    return !sized || (rect.width > 1 && rect.height > 1);
+    if (sized && !(rect.width > 1 && rect.height > 1)) return false;
+    // The element's own overflow clips what is inside it, not itself: judged from its parent up.
+    return !el.parentElement || reachable(el.parentElement, rect, memo);
   };
-  /** Inside a fixed element: the offsetParent chain of one ends at it, not at the body. */
-  function isFixed(el) {
-    let last = el;
-    while (last.offsetParent) last = last.offsetParent;
-    return last !== document.body && last !== document.documentElement && getComputedStyle(last).position === 'fixed';
-  }
+
+  // Text nodes inside these are not screen text: code, a closed box's other choices, typed values.
+  const NOT_TEXT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SELECT', 'DATALIST', 'TEXTAREA', 'OPTION']);
+  const INLINE = /^(inline|inline-block|inline-flex|inline-grid|contents|ruby|ruby-text)$/;
 
   /**
-   * innerText reads every rendered descendant, also one placed off the page, made transparent or shrunk
-   * to a point for screen readers: what those say is taken out, so only text that can be seen is read.
+   * Reads only text that can be seen, one text node at a time: the characters' own boxes must all be
+   * shown and reachable. Stops for good at the deadline (fail-closed: nothing after that point is read).
+   * claimed: text nodes already given to a unit, so each is read once, by the most specific unit.
    */
-  function shownText(el, hidden = new Map()) {  // hidden: element -> not seen, shared within one reading
-    const text = el.innerText || '';
-    if (!text.trim()) return '';
-    const unseen = new Set();
-    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-    for (let node = walker.nextNode(), n = 0; node && n < 20000; node = walker.nextNode(), n += 1) {
+  function textReader({ ms = 150 } = {}) {
+    const deadline = performance.now() + ms;
+    const memo = new Map();
+    const verdict = new Map();
+    const claimed = new Set();
+    const reader = { cut: false };
+    const style = (el) => {
+      if (!memo.has(el)) memo.set(el, getComputedStyle(el));
+      return memo.get(el);
+    };
+    const blockOf = (el) => {
+      for (let node = el; node; node = node.parentElement) {
+        if (node.tagName === 'BODY' || !INLINE.test(style(node).display)) return node;
+      }
+      return null;
+    };
+    const painted = (el) => {
+      for (let node = el; node; node = node.parentElement) {
+        // display: contents has no box of its own: what it shows is judged by the ancestor that has one.
+        if (style(node).display !== 'contents') {
+          return !node.checkVisibility || node.checkVisibility(PAINTED);
+        }
+      }
+      return false;
+    };
+    const shown = (node) => {
+      if (verdict.has(node)) return verdict.get(node);
       const parent = node.parentElement;
-      const words = node.textContent.replace(/\s+/g, ' ').trim();
-      if (!parent || words.length < 2) continue;
-      if (!hidden.has(parent)) hidden.set(parent, parent.getClientRects().length > 0 && !visible(parent));
-      if (hidden.get(parent)) unseen.add(words);
-    }
-    if (!unseen.size) return text;
-    return text.split('\n').map((line) => {
-      let out = line.replace(/\s+/g, ' ');
-      for (const words of unseen) out = out.split(words).join(' ');
-      return out;
-    }).join('\n');
+      let ok = Boolean(parent) && painted(parent);
+      if (ok) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
+        ok = rects.length > 0 && rects.every((r) => r.width > 1 && r.height > 1 && reachable(parent, r, memo));
+      }
+      verdict.set(node, ok);
+      return ok;
+    };
+    /** The shown lines under a node (an element or a text node), in page order. */
+    reader.lines = (start, { claim = false } = {}) => {
+      const lines = [];
+      let line = '';
+      let block = null;
+      const flush = () => {
+        const text = line.replace(/\s+/g, ' ').trim();
+        if (text) lines.push(text);
+        line = '';
+      };
+      const take = (node) => {
+        if (claimed.has(node) || !node.textContent.trim()) return;
+        if (!shown(node)) return;
+        const nodeBlock = blockOf(node.parentElement);
+        if (nodeBlock !== block) { flush(); block = nodeBlock; }
+        line += node.textContent;
+        if (claim) claimed.add(node);
+      };
+      if (reader.cut) return lines;
+      if (start.nodeType === 3) {
+        take(start);
+        flush();
+        return lines;
+      }
+      const walker = document.createTreeWalker(start, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        // Not rendered at all (display: none, content-visibility: hidden): nothing inside can show.
+        acceptNode: (node) => (node.nodeType === 1 && (NOT_TEXT.has(node.tagName)
+          || (node.checkVisibility && !node.checkVisibility() && style(node).display !== 'contents'))
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+      });
+      for (let node = walker.currentNode; node; node = walker.nextNode()) {
+        if (performance.now() > deadline) { reader.cut = true; break; }
+        if (node.nodeType === 3) take(node);
+        else if (node.tagName === 'BR') flush();
+      }
+      flush();
+      return lines;
+    };
+    return reader;
   }
+
   const unique = (list) => [...new Set(list.filter(Boolean))];
   const CHROME_REGION = 'nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]';
 
@@ -266,17 +384,32 @@
     return [...parent.children].filter((c) => c.tagName === button.tagName && c.className === button.className).length >= 3;
   }
 
-  /** Articles in a row are cards, not one article to read. */
+  /**
+   * Articles repeated side by side in one container are cards, not an article to read; a main article
+   * with a row of related cards keeps its body. Each card may sit in its own wrapper (<div><article>).
+   */
   const CARDS_AT = 3;
-  const articlesIn = (root) => [...root.querySelectorAll('article, [role="article"]')].filter((a) => visible(a));
+  function articlesIn(root) {
+    const articles = [...root.querySelectorAll('article, [role="article"]')].filter((a) => visible(a));
+    const rowOf = (a) => {
+      let node = a;
+      for (let i = 0; i < 3 && node.parentElement && node.parentElement.children.length === 1; i += 1) node = node.parentElement;
+      return node.parentElement;
+    };
+    const rows = new Map();
+    for (const a of articles) rows.set(rowOf(a), (rows.get(rowOf(a)) || 0) + 1);
+    const cards = new Set(articles.filter((a) => rows.get(rowOf(a)) >= CARDS_AT));
+    return { cards, main: articles.filter((a) => !cards.has(a)) };
+  }
 
   /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
   function proseLength(root) {
-    const cards = articlesIn(root).length >= CARDS_AT;
+    const { cards } = articlesIn(root);
     let total = 0;
     for (const p of root.querySelectorAll('p')) {
       if (p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) continue;
-      if (cards && p.closest('article, [role="article"]')) continue;
+      const card = p.closest('article, [role="article"]');
+      if (card && cards.has(card)) continue;
       total += textOf(p).length;
       if (total > 100000) break;
     }
@@ -341,7 +474,7 @@
       .some((el) => visible(el) && el.getBoundingClientRect().height > 120);
     const h1 = [...document.querySelectorAll('h1')].find(visible);
     const main = document.querySelector('main, [role="main"]') || document.body;
-    const articles = articlesIn(main).length;
+    const articles = articlesIn(main).main.length;
 
     return {
       url: location.href,
@@ -354,7 +487,7 @@
       headings,
       dialogs,
       editor,
-      article: articles > 0 && articles < CARDS_AT && (main.innerText || '').length > 800,
+      article: articles > 0 && (main.innerText || '').length > 800,
       textLength: (main.innerText || '').length,
       prose: proseLength(main),
       tables: [...document.querySelectorAll('table')].filter(visible).length,
@@ -397,21 +530,21 @@
    */
   function extractUnits() {
     const units = [];
-    const seen = new Set();
     let order = 0;
     let budget = MAX_UNIT_CHARS;
-    const hidden = new Map();
-    const linesOf = (el) => splitGluedLinks(el, shownText(el, hidden).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean));
+    // Each text node goes to the first unit that reads it, so the same words in two places are both kept.
+    const reader = textReader();
+    const memo = new Map();
+    const linesOf = (el) => splitGluedLinks(el, reader.lines(el, { claim: true }));
     const push = (kind, name, el, extra = {}) => {
       if (budget <= 0) return;
-      const lines = (Array.isArray(el) ? el : linesOf(el)).filter((line) => !seen.has(line));
+      const lines = Array.isArray(el) ? el : linesOf(el);
       if (!lines.length) return;
-      lines.forEach((line) => seen.add(line));
       const text = lines.map((l) => clip(l, MAX_LINE)).join('\n').slice(0, budget);
       budget -= text.length;
       units.push({ kind, name: clip(name, 60), text, order: order++, ...extra });
     };
-    const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+    const all = (selector) => [...document.querySelectorAll(selector)].filter((el) => visible(el, {}, memo));
 
     const h1 = all('h1')[0];
     // Under the URL policy first (ids and @handles partly hidden, like every recorded URL),
@@ -427,7 +560,10 @@
       const fields = [...form.querySelectorAll('input, select, textarea')]
         .filter((f) => f.type !== 'hidden' && visible(f))
         .map((f) => {
-          const options = f.tagName === 'SELECT' ? `（選択肢: ${[...f.options].map((o) => o.text.trim()).slice(0, 12).join(' / ')}）` : '';
+          // Only the choice shown in the closed box, masked like any field value; the others are not on screen.
+          const chosen = f.tagName === 'SELECT' && f.selectedOptions[0]
+            ? S.maskFieldValue(f.selectedOptions[0].text.trim(), fieldMeta(f), config)?.value : '';
+          const options = chosen ? `（表示中の選択: ${chosen}）` : '';
           return `${accessibleName(f) || '(無名)'} [${f.type || f.tagName.toLowerCase()}]${options}`;
         });
       push('form', regionName(form), [...fields, ...linesOf(form)]);
@@ -454,6 +590,8 @@
       for (const el of all(selector)) push('landmark', name, el);
     }
     push('landmark', '本文', document.body);
+    // Stopped at the time limit: what was not read is left out, and the model is told so.
+    if (reader.cut && units[0]?.kind === 'page') units[0].text += '\n（画面が大きいため、途中までだけ読みました）';
     return units;
   }
 
@@ -504,10 +642,12 @@
       return copy.textContent;
     };
     // parent: where a removed text node was (it has no parentElement any more).
-    const lines = (node, parent = null) => {
+    // read: the text reader of this batch, for what is still in the page (only shown text is read).
+    const lines = (node, parent = null, read = null) => {
       const el = node.nodeType === 1 ? node : node.parentElement || parent;
       if (!el || el.closest('[contenteditable="true"]')) return [];
-      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : el.isConnected ? shownText(el) : detachedText(el);
+      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node).filter((l) => l.length > 1);
+      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : detachedText(el);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
     // Only what was on screen: text added or changed inside something hidden never counts.
@@ -517,11 +657,13 @@
       return Boolean(el) && visible(el, { sized });
     };
     const take = (records) => {
+      // One reader per batch: a style read now may change before the next batch (a toast fading in).
+      const read = textReader({ ms: 30 });
       for (const r of records) {
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || (el.textContent || '').length > 300) continue;
-          if (visible(el)) lines(el).forEach((l) => note('add', l, true));
+          if (visible(el)) lines(el, null, read).forEach((l) => note('add', l, true));
           // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
           else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
@@ -532,8 +674,8 @@
         // put back: no change). What was removed is never handed over: a removed element is detached and
         // how it was styled (hidden by a class, transparent) is lost.
         if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
-        for (const n of r.addedNodes) if (shown(n)) lines(n).forEach((l) => note('add', l, inNotice(n)));
-        if (r.type === 'characterData' && shown(r.target)) lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
+        for (const n of r.addedNodes) if (shown(n)) lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
+        if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l, inNotice(r.target)));
       }
     };
     const observer = new MutationObserver(take);
