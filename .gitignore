@@ -17,3 +17,6 @@ scripts/pii-guard.patterns.local.txt
 
 # Local-only tooling and data (evaluation harness, captured screens). Never pushed.
 local/
+
+# Playwright output
+test-results/
