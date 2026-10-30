@@ -131,3 +131,15 @@ test('finalScan cannot be bypassed by text dressed up as a placeholder', () => {
   }
   assert.deepEqual(S.finalScan({ name: '[[secret]] [[card]] [[masked]]' }, { keywords: ['Acme'] }), []);
 });
+
+test('URLs written in text follow the URL policy when the recording hosts are given', () => {
+  const hosts = { hostAllowlist: ['example.com'], aliases: {} };
+  const r = S.scrubText('詳しくは https://docs.internal.test/orders/1234567 を見てください。https://example.com/help も。', { hosts });
+  assert.equal(r.text, '詳しくは https://site-1.invalid/orders/12***67 を見てください。https://example.com/help も。');
+  assert.deepEqual(hosts.aliases, { 'https://docs.internal.test': 'site-1.invalid' });
+  assert.ok(r.kinds.includes('host'));
+  // The same host is given the same alias, and a trailing period stays outside the URL.
+  assert.equal(S.scrubText('再掲: HTTPS://docs.internal.test/a.', { hosts }).text, '再掲: https://site-1.invalid/a.');
+  // Without the hosts (in the page), text is left to the worker, which knows them.
+  assert.equal(S.scrubText('https://docs.internal.test/a').text, 'https://docs.internal.test/a');
+});

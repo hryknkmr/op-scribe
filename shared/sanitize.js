@@ -121,12 +121,25 @@
    * Applies the policy to free text. Masking runs before truncation so a cut
    * can never expose half an address.
    */
+  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+/gi;
+
   function scrubText(input, opts = {}) {
     const kinds = [];
     if (input == null) return { text: '', kinds };
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
     text = text.replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
+
+    // URLs written in the text follow the URL policy (hosts not allowed under their alias, ids partly
+    // hidden) when the caller knows the recording's hosts: opts.hosts = { hostAllowlist, aliases }.
+    if (opts.hosts) {
+      text = text.replace(TEXT_URL, (match) => {
+        const [, url, tail] = match.match(/^(.*?)([.,;:!?]*)$/);
+        const r = scrubUrl(url, { ...opts.hosts, keywords: opts.keywords });
+        kinds.push(...r.kinds);
+        return `${r.url}${tail}`;
+      });
+    }
 
     const keywords = keywordPattern(opts.keywords);
     if (keywords) {

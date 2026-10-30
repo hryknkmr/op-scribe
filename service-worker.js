@@ -142,7 +142,7 @@ function cleanStep(raw, rec, settings) {
   };
   const kinds = [];
   const text = (value, maxLength) => {
-    const r = scrubText(value, { keywords: settings.keywords, maxLength });
+    const r = scrubText(value, { keywords: settings.keywords, maxLength, hosts: ctx });
     kinds.push(...r.kinds);
     return r.text;
   };
@@ -182,7 +182,7 @@ function cleanStep(raw, rec, settings) {
     step.ok = raw.ok !== false;
     step.source = 'agent';
     if (raw.args && typeof raw.args === 'object') {
-      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords });
+      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
@@ -271,15 +271,17 @@ function pruneUnits(stored, rec) {
 
 async function saveUnits(rec, id, units, settings) {
   if (!Array.isArray(units) || !units.length) return;
-  // Real hosts that are not allowed are shown under their alias, as in every recorded URL.
-  const hosts = Object.entries(rec.aliases || {}).map(([origin, alias]) => {
+  // URLs in the text follow the URL policy; real hosts written without a URL are aliased too.
+  const hosts = { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases };
+  // Read at each use: aliases made for URLs in earlier text apply to later text too.
+  const known = () => Object.entries(rec.aliases || {}).map(([origin, alias]) => {
     try { return [new URL(origin).hostname, alias]; } catch { return null; }
   }).filter(Boolean).sort((a, b) => b[0].length - a[0].length);
-  const hide = (text) => hosts.reduce((t, [host, alias]) => t.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), alias), text);
+  const hide = (text) => known().reduce((t, [host, alias]) => t.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), alias), text);
   const clean = units.slice(0, 200).map((u) => ({
     kind: String(u.kind).slice(0, 16),
-    name: hide(scrubText(u.name, { keywords: settings.keywords, maxLength: 60 }).text),
-    text: hide(scrubText(u.text, { keywords: settings.keywords }).text),
+    name: hide(scrubText(u.name, { keywords: settings.keywords, maxLength: 60, hosts }).text),
+    text: hide(scrubText(u.text, { keywords: settings.keywords, hosts }).text),
     order: Number(u.order) || 0,
     ...(Number.isFinite(u.count) ? { count: u.count } : {})
   }));
@@ -300,7 +302,7 @@ function attachChange(rec, detail, settings) {
   const step = rec.steps.find((s) => s.seq && s.seq === String(detail?.seq));
   if (!step) return false;
   const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
-    .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160 }).text);
+    .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160, hosts: { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases } }).text);
   step.change = { appeared: lines(detail.change?.appeared), removed: lines(detail.change?.removed) };
   // Shown and gone again before the watch ended (a toast).
   const transient = lines(detail.change?.transient);
