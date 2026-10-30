@@ -116,7 +116,7 @@
     if (!prose && (f.tables || 0) > 0) add('list', 1, `表 ${f.tables} 個`);
     // On a list page the long text is the cards themselves, not a body to read.
     const listLike = !prose && f.repeated && f.repeated.count >= 5;
-    if (!prose && (f.article || (!listLike && (f.textLength || 0) >= 1500))) {
+    if (!prose && !listLike && (f.article || (f.textLength || 0) >= 1500)) {
       add('detail', 2, f.article ? '記事本文' : `本文 約${Math.round((f.textLength || 0) / 100) * 100} 文字`);
     }
 

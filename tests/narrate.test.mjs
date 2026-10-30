@@ -319,3 +319,21 @@ test('a WebMCP tool call, recorded after it ran, is given no meaning or result a
   assert.ok(!result.operations.some((o) => o.id === 's4t'));
   assert.equal(result.operations.find((o) => o.id === 's4')?.ai.result, undefined);
 });
+
+test('links without a scheme, link syntax and script schemes are rejected', () => {
+  for (const summary of ['[確認](//evil.example/path)', '//evil.example/path を開いた', '[確認](javascript:alert(document.domain))',
+    'javascript:void(0) を実行', '<a href="x">確認</a>', '![x](data:image/png;base64,AA)', '<https://example.com/>']) {
+    assert.ok(N.problemsOf({ summary }, '操作 https://example.com/', null).length, summary);
+  }
+  assert.deepEqual(N.problemsOf({ summary: '「a/b//c」を入力した' }, '入力 a/b//c', null), []);
+});
+
+test('numbers written in kanji are compared by value', () => {
+  assert.match(N.problemsOf({ summary: '二十件見つかった' }, '10件見つかった', null)[0], /読んだ文章にない数字（20）/);
+  assert.match(N.problemsOf({ summary: '三人に送った' }, '送信', null)[0], /数字（3）/);
+  for (const [summary, source] of [['十件見つかった', '10件'], ['五千円', '¥5,000'], ['1万円', '10000円'], ['二〇二六年', '2026年']]) {
+    assert.deepEqual(N.problemsOf({ summary }, source, null), [], summary);
+  }
+  // Words with number kanji are not numbers.
+  assert.deepEqual(N.problemsOf({ summary: '一覧を開き、十分に待った。万一に備えて千葉の百貨店を選んだ' }, '一覧 千葉 百貨店', null), []);
+});

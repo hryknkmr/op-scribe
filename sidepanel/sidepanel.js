@@ -349,6 +349,8 @@ async function generateAi() {
       ui.genStatus.textContent = '言語化の途中で記録が変わったため、結果を使いませんでした。もう一度実行してください';
       return;
     }
+    // A newer run (stop's automatic one, or another click) is kept instead; it shows itself when done.
+    if (result?.error === 'SUPERSEDED') return;
     await showNarration(await loadRecording(), true);
   } finally {
     ui.genAi.disabled = false;

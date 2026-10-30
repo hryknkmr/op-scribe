@@ -85,12 +85,44 @@ ${COMMON_RULES}`,
     }
   };
 
-  const URLS = /https?:\/\/[^\s)」』>、。"]+/gi;
+  // With or without a scheme: //host/path is as much a link as https://host/path.
+  const URLS = /(?:\b[a-z][a-z0-9+.-]*:|(?<![\w/:]))\/\/[^\s)」』>、。"]+/gi;
+  /** Link and markup syntax: the verbalization is plain text, so any of it is the model's own. */
+  const MARKUP = /!?\[[^\]]*\]\([^)]*\)|<\/?[a-z][^>]*>|<[a-z][a-z0-9+.-]*:[^>]*>|\b(?:javascript|data|vbscript|file|blob):(?!\s)/i;
   const MARKS = /‹[^›]*›|\[\[[^\]]+\]\]/g;
   /** Phrases of the instructions themselves: an answer containing one copied the prompt instead of reading the screen. */
   /** Keys the model likes to invent for a click ("pressed Enter to confirm"). */
   const KEYS = ['Enter', 'エンター', 'Tab キー', 'Esc', 'スペースキー', 'Ctrl', 'Cmd', 'Command', '⌘', 'Alt', 'Shift', 'Delete', 'Backspace', 'Arrow', '矢印キー', 'Home', 'End', 'PageUp', 'PageDown'];
   const ECHOES = ['利用者ができること・', 'この画面の内容に即して', '主な部品と内容の要点', '操作の理解に役立つ'];
+
+  const KANJI_DIGITS = { 〇: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const KANJI_UNITS = { 十: 10, 百: 100, 千: 1000 };
+  const KANJI_BIG = { 万: 1e4, 億: 1e8 };
+  const K = '〇一二三四五六七八九十百千万億';
+  // Kanji read as a number: any run before a counter (二件, 十人), or a compound with 十/百/千 (二十, 三百).
+  // A lone 一 or 万 elsewhere is a word (一覧, 万一); 十分 is "enough", so 分 is not a counter.
+  const COUNTED = new RegExp(`[${K}]+(?=件|個|人|名|円|回|枚|本|日|週|ヶ月|か月|カ月|年|歳|点|位|ページ|行|文字|秒|時間|つ|割|倍|%)`, 'g');
+  const COMPOUND = new RegExp(`[${K}]+[十百千][${K}]*|[十百千][${K}]+`, 'g');
+
+  function kanjiValue(text) {
+    let total = 0, section = 0, digit = null;
+    for (const ch of text) {
+      if (ch in KANJI_DIGITS) digit = (digit ?? 0) * 10 + KANJI_DIGITS[ch];
+      else if (ch in KANJI_UNITS) { section += (digit ?? 1) * KANJI_UNITS[ch]; digit = null; }
+      else { total += (section + (digit ?? 0) || 1) * KANJI_BIG[ch]; section = 0; digit = null; }
+    }
+    return total + section + (digit ?? 0);
+  }
+
+  /** The numbers in a text by value: 5,000 / 5000 / 5千 / 五千 are the same number. */
+  function numbersOf(text) {
+    const plain = text.normalize('NFKC')
+      .replace(/(\d)[,，](?=\d{3})/g, '$1')
+      .replace(/(\d+)([十百千万億])/g, (_, n, unit) => String(Number(n) * (KANJI_UNITS[unit] || KANJI_BIG[unit])))
+      .replace(COUNTED, (m) => String(kanjiValue(m)))
+      .replace(COMPOUND, (m) => String(kanjiValue(m)));
+    return new Set((plain.match(/\d+/g) || []).map((n) => n.replace(/^0+(?=\d)/, '')));
+  }
 
   /** availability() can hang while Chrome resolves the model component; never wait on it forever. */
   async function availability(LM) {
@@ -114,17 +146,16 @@ ${COMMON_RULES}`,
     const read = urlsOf(source);
     const newUrl = [...urlsOf(value)].find((u) => !read.has(u));
     if (newUrl) problems.push(`読んだ文章にない URL（${newUrl}）`);
+    const markup = value.match(MARKUP);
+    if (markup) problems.push(`リンクやタグの書式（${markup[0].slice(0, 40)}）`);
     const newMark = (value.match(MARKS) || []).find((m) => !source.includes(m));
     if (newMark) problems.push(`読んだ文章にない伏せ字（${newMark}）`);
     const findings = scan ? scan({ value }) : [];
     if (findings.length) problems.push(`伏せるべき値（${findings[0].kinds.join('/')}）`);
     const echo = ECHOES.find((phrase) => value.includes(phrase) && !source.includes(phrase));
     if (echo) problems.push(`指示文の書き写し（${echo}）`);
-    // 5,000 and 5000 are the same number: compare values, not how they were written.
-    const digits = (text) => new Set((text.normalize('NFKC').replace(/(\d)[,，](?=\d{3})/g, '$1').match(/\d+/g) || [])
-      .map((n) => n.replace(/^0+(?=\d)/, '')));
-    const known = digits(source);
-    const newNumber = [...digits(value)].find((n) => !known.has(n));
+    const known = numbersOf(source);
+    const newNumber = [...numbersOf(value)].find((n) => !known.has(n));
     if (newNumber) problems.push(`読んだ文章にない数字（${newNumber}）`);
     // Latin key names as words: "End" is not in "Endpoint", "Arrow" is in "ArrowDown".
     const hasKey = (text, key) => (/^[A-Za-z]+$/.test(key) ? new RegExp(`(?<![A-Za-z])${key}(?![a-z])`).test(text) : text.includes(key));

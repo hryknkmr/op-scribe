@@ -407,8 +407,13 @@ async function verbalize() {
   const rec = await getRecording();
   if (!rec?.steps?.length) return { ok: false, error: 'NO_RECORDING' };
   const settings = await getSettings();
-  const source = { recordingId: rec.id, sourceRevision: rec.revision };
-  await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator: 'pending', markdown: '' } });
+  // The run that started last is the one kept (stop's automatic run and the button can overlap).
+  const source = { recordingId: rec.id, sourceRevision: rec.revision, run: crypto.randomUUID() };
+  // Through the queue as well, so it never lands between another run's check and its write.
+  await mutate(async () => {
+    await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator: 'pending', markdown: '' } });
+    return {};
+  });
   await broadcast({ type: 'NARRATION_STATUS', text: 'Built-in AI で言語化しています…' });
   const units = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
   const result = await withKeepAlive(() => narrate(rec, {
@@ -420,13 +425,15 @@ async function verbalize() {
   // Through the queue, so no change to the recording lands between the check and the write.
   const kept = await mutate(async (latest) => {
     // The recording changed while the model was reading: a deleted step may be quoted, an added one missing.
-    if (latest?.id !== source.recordingId || latest.revision !== source.sourceRevision) return { reply: false };
+    if (latest?.id !== source.recordingId || latest.revision !== source.sourceRevision) return { reply: 'RECORDING_CHANGED' };
+    const current = (await chrome.storage.session.get(NARRATION_KEY))[NARRATION_KEY];
+    if (current?.run !== source.run) return { reply: 'SUPERSEDED' };
     const { generator, markdown, title, summary, reason } = result;
     await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator, markdown, title, summary, reason, at: Date.now() } });
     await broadcast({ type: 'REC_CHANGED' });
-    return { reply: true };
+    return { reply: 'KEPT' };
   });
-  if (!kept) return { ok: false, error: 'RECORDING_CHANGED' };
+  if (kept !== 'KEPT') return { ok: false, error: kept };
   return { ok: true, generator: result.generator, reason: result.reason };
 }
 

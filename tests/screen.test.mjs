@@ -189,3 +189,8 @@ test('a search box on the page itself still makes it a search screen', () => {
   const result = Screen.classifyScreen({ url: 'https://example.com/', forms: [{ kind: 'search', fields: [{ type: 'search', label: 'q' }], submit: '検索' }] });
   assert.equal(kinds(result)[0], 'search');
 });
+
+test('a list of cards marked up as articles is a list, not a detail page', () => {
+  const result = Screen.classifyScreen({ url: 'https://example.com/', article: true, repeated: { count: 24 }, textLength: 6000 });
+  assert.deepEqual(kinds(result), ['list']);
+});
