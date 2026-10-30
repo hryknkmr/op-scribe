@@ -95,14 +95,13 @@ ${COMMON_RULES}`,
   const KEYS = ['Enter', 'エンター', 'Tab キー', 'Esc', 'スペースキー', 'Ctrl', 'Cmd', 'Command', '⌘', 'Alt', 'Shift', 'Delete', 'Backspace', 'Arrow', '矢印キー', 'Home', 'End', 'PageUp', 'PageDown'];
   const ECHOES = ['利用者ができること・', 'この画面の内容に即して', '主な部品と内容の要点', '操作の理解に役立つ'];
 
-  const KANJI_DIGITS = { 〇: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const KANJI_DIGITS = { 〇: 0, 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
   const KANJI_UNITS = { 十: 10, 百: 100, 千: 1000 };
-  const KANJI_BIG = { 万: 1e4, 億: 1e8 };
-  const K = '〇一二三四五六七八九十百千万億';
-  // Kanji read as a number: any run before a counter (二件, 十人), or a compound with 十/百/千 (二十, 三百).
-  // A lone 一 or 万 elsewhere is a word (一覧, 万一); 十分 is "enough", so 分 is not a counter.
-  const COUNTED = new RegExp(`[${K}]+(?=件|個|人|名|円|回|枚|本|日|週|ヶ月|か月|カ月|年|歳|点|位|ページ|行|文字|秒|時間|つ|割|倍|%)`, 'g');
-  const COMPOUND = new RegExp(`[${K}]+[十百千][${K}]*|[十百千][${K}]+`, 'g');
+  const KANJI_BIG = { 万: 1e4, 億: 1e8, 兆: 1e12 };
+  const KANJI_RUN = /[〇零一二三四五六七八九十百千万億兆]+/g;
+  // Every run of number kanji is read as a number (第七章, 七番, 二十件), except these words, which are
+  // not counts. A word missing here only rejects a good answer; a number missing would let one through.
+  const KANJI_WORDS = /一覧|一時|一部|一般|一緒|一度|一方|一括|一致|一意|一定|一旦|一連|一言|一応|一見|一斉|一切|一層|一体|一気|一挙|一瞬|一通り|一向|一新|一環|一面|一律|一同|一人ひとり|統一|唯一|同一|均一|画一|単一|万一|万全|万能|十分|十字|千葉|百貨|四角|三角|八百屋|七夕|五月雨|二重|一つひとつ/g;
 
   function kanjiValue(text) {
     let total = 0, section = 0, digit = null;
@@ -117,10 +116,10 @@ ${COMMON_RULES}`,
   /** The numbers in a text by value: 5,000 / 5000 / 5千 / 五千 are the same number. */
   function numbersOf(text) {
     const plain = text.normalize('NFKC')
+      .replace(KANJI_WORDS, ' ')
       .replace(/(\d)[,，](?=\d{3})/g, '$1')
-      .replace(/(\d+)([十百千万億])/g, (_, n, unit) => String(Number(n) * (KANJI_UNITS[unit] || KANJI_BIG[unit])))
-      .replace(COUNTED, (m) => String(kanjiValue(m)))
-      .replace(COMPOUND, (m) => String(kanjiValue(m)));
+      .replace(/(\d+)([十百千万億兆])/g, (_, n, unit) => String(Number(n) * (KANJI_UNITS[unit] || KANJI_BIG[unit])))
+      .replace(KANJI_RUN, (m) => ` ${kanjiValue(m)} `);
     return new Set((plain.match(/\d+/g) || []).map((n) => n.replace(/^0+(?=\d)/, '')));
   }
 

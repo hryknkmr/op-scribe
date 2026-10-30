@@ -403,15 +403,19 @@ async function withKeepAlive(work) {
   }
 }
 
+// Stop's automatic run and the button can overlap: the run that started last is the one kept.
+// Counted before the first await, so the order is the order of the calls.
+let latestRun = 0;
+
 async function verbalize() {
+  const run = ++latestRun;
   const rec = await getRecording();
   if (!rec?.steps?.length) return { ok: false, error: 'NO_RECORDING' };
   const settings = await getSettings();
-  // The run that started last is the one kept (stop's automatic run and the button can overlap).
-  const source = { recordingId: rec.id, sourceRevision: rec.revision, run: crypto.randomUUID() };
-  // Through the queue as well, so it never lands between another run's check and its write.
+  const source = { recordingId: rec.id, sourceRevision: rec.revision };
+  // Through the queue as well, so it never lands after a newer run's result.
   await mutate(async () => {
-    await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator: 'pending', markdown: '' } });
+    if (run === latestRun) await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator: 'pending', markdown: '' } });
     return {};
   });
   await broadcast({ type: 'NARRATION_STATUS', text: 'Built-in AI で言語化しています…' });
@@ -426,8 +430,7 @@ async function verbalize() {
   const kept = await mutate(async (latest) => {
     // The recording changed while the model was reading: a deleted step may be quoted, an added one missing.
     if (latest?.id !== source.recordingId || latest.revision !== source.sourceRevision) return { reply: 'RECORDING_CHANGED' };
-    const current = (await chrome.storage.session.get(NARRATION_KEY))[NARRATION_KEY];
-    if (current?.run !== source.run) return { reply: 'SUPERSEDED' };
+    if (run !== latestRun) return { reply: 'SUPERSEDED' };
     const { generator, markdown, title, summary, reason } = result;
     await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator, markdown, title, summary, reason, at: Date.now() } });
     await broadcast({ type: 'REC_CHANGED' });

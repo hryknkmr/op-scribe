@@ -58,6 +58,8 @@ let recording = null;
 let generator = 'none';
 // The user changed the generated text by hand: it is theirs and is never rebuilt over.
 let edited = false;
+// Edits so far, to tell whether the user typed while the model was writing.
+let edits = 0;
 // The verbalization's summary, sent with the Markdown it belongs to while that is unedited.
 let summary = '';
 // The recording (id and revision) the text in the editors was made from, or last confirmed against.
@@ -342,6 +344,7 @@ async function generateAi() {
     return;
   }
   ui.genAi.disabled = true;
+  const editsBefore = edits;
   try {
     if (!(await ensureModel())) return;
     const result = await send('NARRATE');
@@ -351,6 +354,11 @@ async function generateAi() {
     }
     // A newer run (stop's automatic one, or another click) is kept instead; it shows itself when done.
     if (result?.error === 'SUPERSEDED') return;
+    // Text typed while the model was writing is the user's: it is not replaced.
+    if (edits !== editsBefore) {
+      ui.genStatus.textContent = '言語化の間に手順の文が編集されたため、欄は書き換えませんでした。置き換えるには、もう一度押してください';
+      return;
+    }
     await showNarration(await loadRecording(), true);
   } finally {
     ui.genAi.disabled = false;
@@ -373,7 +381,8 @@ async function showNarration(rec, force = false) {
     ui.genStatus.textContent = 'Built-in AI で言語化しています…';
     return;
   }
-  if (!force && ui.repro.value.trim() && (edited || generator !== 'none')) return;
+  // Hand-edited text (in either field) is never replaced unasked; nor is text already generated.
+  if (!force && (edited || (ui.repro.value.trim() && generator !== 'none'))) return;
   await setRepro(rec, narration.markdown, narration.generator, narration.summary);
   ui.genStatus.textContent = narration.reason
     ? `${GENERATOR_LABELS[narration.generator]}（${narration.reason}）`
@@ -384,6 +393,7 @@ ui.genAi.addEventListener('click', generateAi);
 ui.genTemplate.addEventListener('click', () => generateTemplate());
 const onEdit = () => {
   edited = true;
+  edits += 1;
   return saveDraft();
 };
 ui.repro.addEventListener('input', onEdit);

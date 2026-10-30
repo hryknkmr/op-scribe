@@ -184,9 +184,45 @@
     const style = getComputedStyle(el);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     const rect = el.getBoundingClientRect();
+    // Off the page on any side: nobody can scroll to it.
+    const page = document.scrollingElement || document.documentElement;
     if (rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0) return false;
+    if (rect.left + scrollX >= page.scrollWidth || rect.top + scrollY >= page.scrollHeight) return false;
+    // A fixed element does not scroll with the page: off the viewport, it is never shown.
+    const offViewport = rect.left >= innerWidth || rect.top >= innerHeight || rect.right <= 0 || rect.bottom <= 0;
+    if (offViewport && isFixed(el)) return false;
     return !sized || (rect.width > 1 && rect.height > 1);
   };
+  /** Inside a fixed element: the offsetParent chain of one ends at it, not at the body. */
+  function isFixed(el) {
+    let last = el;
+    while (last.offsetParent) last = last.offsetParent;
+    return last !== document.body && last !== document.documentElement && getComputedStyle(last).position === 'fixed';
+  }
+
+  /**
+   * innerText reads every rendered descendant, also one placed off the page, made transparent or shrunk
+   * to a point for screen readers: what those say is taken out, so only text that can be seen is read.
+   */
+  function shownText(el, hidden = new Map()) {  // hidden: element -> not seen, shared within one reading
+    const text = el.innerText || '';
+    if (!text.trim()) return '';
+    const unseen = new Set();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(), n = 0; node && n < 20000; node = walker.nextNode(), n += 1) {
+      const parent = node.parentElement;
+      const words = node.textContent.replace(/\s+/g, ' ').trim();
+      if (!parent || words.length < 2) continue;
+      if (!hidden.has(parent)) hidden.set(parent, parent.getClientRects().length > 0 && !visible(parent));
+      if (hidden.get(parent)) unseen.add(words);
+    }
+    if (!unseen.size) return text;
+    return text.split('\n').map((line) => {
+      let out = line.replace(/\s+/g, ' ');
+      for (const words of unseen) out = out.split(words).join(' ');
+      return out;
+    }).join('\n');
+  }
   const unique = (list) => [...new Set(list.filter(Boolean))];
   const CHROME_REGION = 'nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]';
 
@@ -230,11 +266,17 @@
     return [...parent.children].filter((c) => c.tagName === button.tagName && c.className === button.className).length >= 3;
   }
 
+  /** Articles in a row are cards, not one article to read. */
+  const CARDS_AT = 3;
+  const articlesIn = (root) => [...root.querySelectorAll('article, [role="article"]')].filter((a) => visible(a));
+
   /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
   function proseLength(root) {
+    const cards = articlesIn(root).length >= CARDS_AT;
     let total = 0;
     for (const p of root.querySelectorAll('p')) {
       if (p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) continue;
+      if (cards && p.closest('article, [role="article"]')) continue;
       total += textOf(p).length;
       if (total > 100000) break;
     }
@@ -299,6 +341,7 @@
       .some((el) => visible(el) && el.getBoundingClientRect().height > 120);
     const h1 = [...document.querySelectorAll('h1')].find(visible);
     const main = document.querySelector('main, [role="main"]') || document.body;
+    const articles = articlesIn(main).length;
 
     return {
       url: location.href,
@@ -311,7 +354,7 @@
       headings,
       dialogs,
       editor,
-      article: Boolean(document.querySelector('article') && (main.innerText || '').length > 800),
+      article: articles > 0 && articles < CARDS_AT && (main.innerText || '').length > 800,
       textLength: (main.innerText || '').length,
       prose: proseLength(main),
       tables: [...document.querySelectorAll('table')].filter(visible).length,
@@ -357,7 +400,8 @@
     const seen = new Set();
     let order = 0;
     let budget = MAX_UNIT_CHARS;
-    const linesOf = (el) => splitGluedLinks(el, (el.innerText || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean));
+    const hidden = new Map();
+    const linesOf = (el) => splitGluedLinks(el, shownText(el, hidden).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean));
     const push = (kind, name, el, extra = {}) => {
       if (budget <= 0) return;
       const lines = (Array.isArray(el) ? el : linesOf(el)).filter((line) => !seen.has(line));
@@ -463,7 +507,7 @@
     const lines = (node, parent = null) => {
       const el = node.nodeType === 1 ? node : node.parentElement || parent;
       if (!el || el.closest('[contenteditable="true"]')) return [];
-      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : el.isConnected ? el.innerText : detachedText(el);
+      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : el.isConnected ? shownText(el) : detachedText(el);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
     // Only what was on screen: text added or changed inside something hidden never counts.

@@ -331,7 +331,10 @@ test('links without a scheme, link syntax and script schemes are rejected', () =
 test('numbers written in kanji are compared by value', () => {
   assert.match(N.problemsOf({ summary: '二十件見つかった' }, '10件見つかった', null)[0], /読んだ文章にない数字（20）/);
   assert.match(N.problemsOf({ summary: '三人に送った' }, '送信', null)[0], /数字（3）/);
-  for (const [summary, source] of [['十件見つかった', '10件'], ['五千円', '¥5,000'], ['1万円', '10000円'], ['二〇二六年', '2026年']]) {
+  for (const summary of ['第七章を開いた', '七番を選んだ', '零件だった', '一兆件ある', '一行目を消した']) {
+    assert.match(N.problemsOf({ summary }, '操作した', null)[0] || '', /読んだ文章にない数字/, summary);
+  }
+  for (const [summary, source] of [['十件見つかった', '10件'], ['五千円', '¥5,000'], ['1万円', '10000円'], ['二〇二六年', '2026年'], ['1兆円', '1000000000000円']]) {
     assert.deepEqual(N.problemsOf({ summary }, source, null), [], summary);
   }
   // Words with number kanji are not numbers.
