@@ -212,6 +212,8 @@
     for (let el = from; el && el !== root && el !== document.body; el = el.parentElement) {
       const st = style(el);
       if (hidesInside(st)) return false;
+      // Above a fixed element only effects that hide everything inside still apply, not scrolling or clipping.
+      if (fixed) continue;
       let inner = null;
       for (const [axis, lo, hi, offset, size] of AXES) {
         const overflow = st[`overflow${axis}`];
@@ -229,7 +231,7 @@
           box = { ...box, [lo]: inner[lo], [hi]: inner[hi] };
         }
       }
-      if (st.position === 'fixed') { fixed = true; break; }
+      if (st.position === 'fixed') fixed = true;
     }
     const page = document.scrollingElement || root;
     const pageStyle = style(root);
@@ -642,7 +644,9 @@
    */
   const CHANGE_MS = 5000;
   const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
-  const NOTICE = '[role="status"], [role="alert"], [aria-live], dialog, [role="dialog"], [class*="toast" i], [class*="snackbar" i], [class*="notif" i], [class*="flash" i]';
+  // Notification areas as the page declares them for assistive technology. Guessing from class names
+  // (toast, notif...) also took lists of notifications, and a dialog may hold a whole list or form.
+  const NOTICE = '[role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]';
   let finishChange = null;
   function watchChange(seq) {
     finishChange?.();
@@ -691,9 +695,10 @@
     };
     // What the notification areas already showed before the operation: shown again by a class or style
     // change (an animation), it is not something that appeared.
+    // Applied once when the watch ends, whichever way the text came back (attribute, text, nodes).
     const before = new Set();
-    for (const el of [...document.querySelectorAll(NOTICE)].slice(0, 50)) {
-      if ((el.textContent || '').length <= 300 && visible(el)) lines(el).forEach((l) => before.add(l.replace(/\s+/g, '')));
+    for (const el of document.querySelectorAll(NOTICE)) {
+      if (visible(el)) lines(el).forEach((l) => before.add(l.replace(/\s+/g, '')));
     }
     const take = (records) => {
       // One reader per batch: a style read now may change before the next batch (a toast fading in).
@@ -702,7 +707,7 @@
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || (el.textContent || '').length > 300) continue;
-          if (visible(el)) lines(el, null, read).filter((l) => !before.has(l.replace(/\s+/g, ''))).forEach((l) => note('add', l, true));
+          if (visible(el)) lines(el, null, read).forEach((l) => note('add', l, true));
           // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
           else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
@@ -714,14 +719,14 @@
         // how it was styled (hidden by a class, transparent) is lost.
         if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
         for (const n of r.addedNodes) {
-          if (!shown(n)) continue;
-          // A notice may come inside a wrapper (a portal or container added in one piece).
+          // A notice may come inside a wrapper (a portal or container added in one piece), and the
+          // wrapper itself may have no box (display: contents, only positioned children).
           if (n.nodeType === 1 && !inNotice(n)) {
             for (const inner of [...n.querySelectorAll(NOTICE)].slice(0, 10)) {
               if (visible(inner)) lines(inner, null, read).forEach((l) => note('add', l, true));
             }
           }
-          lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
+          if (shown(n)) lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
         }
         if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l, inNotice(r.target)));
       }
@@ -738,9 +743,10 @@
       const scrub = (e) => clip(e.text, 160);
       // Only what the page shows as a notice (status, alert, toast) leaves the page as text: other text that
       // appeared (a row, a card, a body) may be anyone's, and whether it could be seen is only a best effort.
-      const of = (first, last) => [...seen.values()].filter((e) => e.notice && e.first === first && e.last === last).slice(0, 8).map(scrub);
+      const isNew = (e) => e.notice && !before.has(e.text.replace(/\s+/g, ''));
+      const of = (first, last) => [...seen.values()].filter((e) => isNew(e) && e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
-      const notices = [...seen.values()].filter((e) => e.notice && e.text.length <= 160).slice(0, 4).map(scrub);
+      const notices = [...seen.values()].filter((e) => isNew(e) && e.text.length <= 160).slice(0, 4).map(scrub);
       if (notices.length) change.notices = notices;
       if (!config || !(change.appeared.length || change.transient.length)) return null;
       if (deliver) send('CHANGE', { seq, change });
