@@ -421,6 +421,8 @@
     let lastKeyword = '';
     let lastAction = null;
     let lastScreenUrl = startScreen?.url || null;
+    // The same URL after an operation is the operation's result (a row deleted), not a repeat.
+    let actedSinceScreen = false;
     const push = (keyword, text, rows) => {
       const shown = keyword === lastKeyword ? 'And' : keyword;
       lastKeyword = keyword;
@@ -439,8 +441,9 @@
     for (let i = index; i < steps.length; i += 1) {
       const step = steps[i];
       if (step.type === 'screen') {
-        if (lastScreenUrl === step.url) continue;
+        if (lastScreenUrl === step.url && !actedSinceScreen) continue;
         lastScreenUrl = step.url;
+        actedSinceScreen = false;
         push('Then', `「${screenName(step.screen, step.url)}」画面が表示される`, screenRows(step));
       } else if (step.type === 'note') {
         push('Then', humanize(step.note), step.source === 'agent' ? [['source', 'agent']] : null);
@@ -450,11 +453,13 @@
           if (!screenAhead(i, step.url)) push('Then', `"${step.url}" に遷移する`, [['url', step.url]]);
         } else {
           push('When', `"${step.url}" を開く`, [['action', 'navigate'], ['url', step.url]]);
+          actedSinceScreen = true;
         }
         lastAction = null;
       } else {
         push('When', humanize(describeStep(step)), attributesOf(step));
         lastAction = step;
+        actedSinceScreen = true;
       }
       wrote = true;
     }

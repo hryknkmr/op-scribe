@@ -154,6 +154,19 @@ test('the same screen after operations keeps its own section; a plain refresh of
   ] }), /\| transient +\| タスクを削除しました \|/);
 });
 
+test('Gherkin shows the same screen again as the result of an operation, but not a plain refresh', () => {
+  const list = () => screen('https://example.com/tasks', 'タスク一覧', { summary: '一覧の閲覧の画面' });
+  const feature = D.toGherkin({ steps: [
+    { type: 'navigate', t: 0, url: 'https://example.com/tasks' },
+    list(),
+    list(),
+    { type: 'click', t: 1000, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' } },
+    list()
+  ] });
+  assert.equal(feature.match(/「タスク一覧」画面/g).length, 2);  // the Background and the result of the click
+  assert.match(feature, /When 「削除する」ボタンをクリックする[\s\S]*\n {4}Then 「タスク一覧」画面が表示される/);
+});
+
 test('an encyclopedia article is a detail page despite its site search, settings radios and in-text links', () => {
   const result = Screen.classifyScreen({
     url: 'https://example.com/wiki/Tower',

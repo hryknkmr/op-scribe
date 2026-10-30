@@ -55,6 +55,8 @@ let activeTab = null;
 let recording = null;
 /** Who produced the Markdown currently in the textarea (it may have been edited since). */
 let generator = 'none';
+// The user changed the generated text by hand: it is theirs and is never rebuilt over.
+let edited = false;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
 
@@ -170,7 +172,9 @@ function render() {
     remove.className = 'icon';
     remove.title = 'この操作を削除';
     remove.textContent = '×';
-    remove.addEventListener('click', () => send('DELETE_STEP', { index }));
+    remove.addEventListener('click', async () => {
+      if ((await send('DELETE_STEP', { index }))?.ok) await afterDelete();
+    });
     li.append(text, remove);
     ui.steps.append(li);
   });
@@ -205,6 +209,7 @@ ui.start.addEventListener('click', () => {
     ui.repro.value = '';
     ui.gherkin.value = '';
     generator = 'none';
+    edited = false;
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
@@ -232,6 +237,7 @@ ui.clear.addEventListener('click', async () => {
   ui.repro.value = '';
   ui.gherkin.value = '';
   generator = 'none';
+  edited = false;
   await chrome.storage.session.remove(DRAFT_KEY);
   await refresh();
 });
@@ -247,7 +253,7 @@ ui.noteForm.addEventListener('submit', async (event) => {
 // ------------------------------------------------------------ reproduction
 
 const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator }
+  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited }
 });
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording. */
@@ -255,7 +261,26 @@ async function setRepro(rec, markdown, by) {
   ui.repro.value = markdown;
   ui.gherkin.value = D.toGherkin(rec);
   generator = by;
+  edited = false;
   await saveDraft();
+}
+
+/** The text in the editors may quote a deleted step: rebuild what was generated, flag what the user wrote. */
+async function afterDelete() {
+  if (!ui.repro.value.trim() && !ui.gherkin.value.trim()) return;
+  if (edited) {
+    ui.genStatus.textContent = '操作を削除しました。手順の文に削除した操作が残っていないか確認してください';
+    return;
+  }
+  const rec = await loadRecording();
+  if (!rec?.steps?.length) {
+    ui.repro.value = '';
+    ui.gherkin.value = '';
+    generator = 'none';
+    await saveDraft();
+    return;
+  }
+  await generateTemplate('操作を削除したため');
 }
 
 async function generateTemplate(reason = '') {
@@ -280,7 +305,11 @@ async function generateAi() {
   }
   ui.genAi.disabled = true;
   try {
-    await send('NARRATE');
+    const result = await send('NARRATE');
+    if (result?.error === 'RECORDING_CHANGED') {
+      ui.genStatus.textContent = '言語化の途中で操作が削除されたため、結果を使いませんでした。もう一度実行してください';
+      return;
+    }
     await showNarration(await loadRecording(), true);
   } finally {
     ui.genAi.disabled = false;
@@ -306,8 +335,12 @@ async function showNarration(rec, force = false) {
 
 ui.genAi.addEventListener('click', generateAi);
 ui.genTemplate.addEventListener('click', () => generateTemplate());
-ui.repro.addEventListener('input', saveDraft);
-ui.gherkin.addEventListener('input', saveDraft);
+const onEdit = () => {
+  edited = true;
+  return saveDraft();
+};
+ui.repro.addEventListener('input', onEdit);
+ui.gherkin.addEventListener('input', onEdit);
 
 // ------------------------------------------------------------------ output
 
@@ -504,6 +537,7 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
       ui.repro.value = draft.markdown || '';
       ui.gherkin.value = draft.gherkin || '';
       generator = draft.generator;
+      edited = Boolean(draft.edited);
     }
     await refresh();
   } catch (error) {

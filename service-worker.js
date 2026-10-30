@@ -253,7 +253,16 @@ function appendScreen(rec, step) {
   return step.id;
 }
 
-async function saveUnits(id, units, settings) {
+// Units are up to 40,000 characters a screen; storage.session holds 10 MB in all.
+const MAX_UNIT_SCREENS = 40;
+
+/** Keeps the units of the steps still in the recording, the latest MAX_UNIT_SCREENS of them. */
+function pruneUnits(stored, rec) {
+  const ids = rec.steps.filter((s) => stored[s.id]).map((s) => s.id).slice(-MAX_UNIT_SCREENS);
+  return Object.fromEntries(ids.map((id) => [id, stored[id]]));
+}
+
+async function saveUnits(rec, id, units, settings) {
   if (!Array.isArray(units) || !units.length) return;
   const clean = units.slice(0, 200).map((u) => ({
     kind: String(u.kind).slice(0, 16),
@@ -264,7 +273,12 @@ async function saveUnits(id, units, settings) {
   }));
   const stored = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
   stored[id] = clean;
-  await chrome.storage.session.set({ [UNITS_KEY]: stored });
+  // Only the built-in AI reads units: failing to keep them must not lose the step.
+  try {
+    await chrome.storage.session.set({ [UNITS_KEY]: pruneUnits(stored, rec) });
+  } catch (error) {
+    console.warn('[op-scribe] screen text not kept', error);
+  }
 }
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
@@ -334,7 +348,7 @@ const stop = async () => {
       if (last?.pending) attachChange(rec, last.pending, await getSettings());
       if (last?.screen) {
         const settings = await getSettings();
-        await saveUnits(appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, settings)), last.units, settings);
+        await saveUnits(rec, appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, settings)), last.units, settings);
       }
     } catch { /* tab gone or not injected */ }
     await stopTab(rec);
@@ -385,8 +399,11 @@ async function verbalize() {
     unitsOf: (step) => units[step.id] || null,
     onStatus: (text) => broadcast({ type: 'NARRATION_STATUS', text })
   }));
-  await mutate(async (latest) => {
+  const kept = await mutate(async (latest) => {
     if (!latest || latest.id !== rec.id) return null;
+    // A step deleted while the model was reading: the result may quote what was deleted.
+    const ids = new Set(latest.steps.map((s) => s.id));
+    if (rec.steps.some((s) => !ids.has(s.id))) return null;
     const { screens = [], operations = [], ...narration } = result;
     // Keep the understanding on the steps themselves so Gherkin, the side panel and the payload carry it.
     for (const s of screens) {
@@ -398,8 +415,9 @@ async function verbalize() {
       if (step) step.ai = o.ai;
     }
     latest.narration = { ...narration, at: Date.now(), stepCount: rec.steps.length };
-    return { save: latest };
+    return { save: latest, reply: true };
   });
+  if (!kept) return { ok: false, error: 'RECORDING_CHANGED' };
   return { ok: true, generator: result.generator, reason: result.reason };
 }
 
@@ -466,6 +484,14 @@ async function handle(message, sender) {
       case 'DELETE_STEP': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false } };
         rec.steps.splice(Number(detail.index), 1);
+        // The model's text may quote the deleted step anywhere: drop all of it, it is made again on request.
+        rec.narration = null;
+        for (const step of rec.steps) {
+          delete step.ai;
+          if (step.screen) delete step.screen.ai;
+        }
+        const units = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY];
+        if (units) await chrome.storage.session.set({ [UNITS_KEY]: pruneUnits(units, rec) });
         return { save: rec, reply: { ok: true } };
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
@@ -490,7 +516,7 @@ async function handle(message, sender) {
       const settings = await getSettings();
       if (type === 'STEP') {
         const step = cleanStep(detail, rec, settings);
-        if (step.type === 'screen') await saveUnits(appendScreen(rec, step), detail.units, settings);
+        if (step.type === 'screen') await saveUnits(rec, appendScreen(rec, step), detail.units, settings);
         else appendStep(rec, step);
         return { save: rec, reply: { ok: true } };
       }
