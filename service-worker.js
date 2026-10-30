@@ -201,6 +201,7 @@ function cleanScreen(raw, text) {
     h1: text(raw.h1, 60),
     forms: (Array.isArray(raw.forms) ? raw.forms : []).slice(0, 6).map((form) => ({
       kind: form.kind === 'search' ? 'search' : 'form',
+      global: Boolean(form.global),
       name: text(form.name, 30),
       submit: text(form.submit, 30),
       fields: (Array.isArray(form.fields) ? form.fields : []).slice(0, 12)
@@ -213,6 +214,7 @@ function cleanScreen(raw, text) {
     editor: Boolean(raw.editor),
     article: Boolean(raw.article),
     textLength: Number(raw.textLength) || 0,
+    prose: Number(raw.prose) || 0,
     tables: Number(raw.tables) || 0,
     repeated: raw.repeated?.count ? { count: Number(raw.repeated.count) } : null
   };
@@ -267,13 +269,26 @@ async function saveUnits(id, units, settings) {
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
 
+/** What appeared or disappeared right after an operation belongs to that operation. */
+function attachChange(rec, detail, settings) {
+  const step = rec.steps.find((s) => s.seq && s.seq === String(detail?.seq));
+  if (!step) return false;
+  const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
+    .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160 }).text);
+  step.change = { appeared: lines(detail.change?.appeared), removed: lines(detail.change?.removed) };
+  // Shown and gone again before the watch ended (a toast).
+  const transient = lines(detail.change?.transient);
+  if (transient.length) step.change.transient = transient;
+  return true;
+}
+
 // ------------------------------------------------------------------ actions
 
 async function start({ tabId, url }) {
   const settings = await getSettings();
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
-    return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
+    return { ok: false, error: 'PERMISSION_DENIED' };  // a reply, not a mutate() result
   }
   return mutate(async (previous) => {
     if (previous?.state === 'recording') await stopTab(previous);
@@ -316,6 +331,7 @@ const stop = async () => {
     // The last screen may not have been described yet (fast automated runs): ask for it now.
     try {
       const last = await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' });
+      if (last?.pending) attachChange(rec, last.pending, await getSettings());
       if (last?.screen) {
         const settings = await getSettings();
         await saveUnits(appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, settings)), last.units, settings);
@@ -479,12 +495,7 @@ async function handle(message, sender) {
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'CHANGE') {
-        // What appeared or disappeared right after an operation belongs to that operation.
-        const step = rec.steps.find((s) => s.seq && s.seq === String(detail.seq));
-        if (!step) return { reply: { ok: false } };
-        const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
-          .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160 }).text);
-        step.change = { appeared: lines(detail.change?.appeared), removed: lines(detail.change?.removed) };
+        if (!attachChange(rec, detail, settings)) return { reply: { ok: false } };
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {

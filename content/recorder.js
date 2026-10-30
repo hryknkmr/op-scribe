@@ -110,6 +110,14 @@
 
   const textOf = (el) => (el.innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim();
 
+  /** A label's own words: a label wrapping its control would otherwise also yield the control's options or text. */
+  function labelText(label) {
+    if (!label.querySelector('select, input, textarea, button, [contenteditable="true"]')) return textOf(label);
+    const copy = label.cloneNode(true);
+    copy.querySelectorAll('select, input, textarea, button, [contenteditable="true"]').forEach((c) => c.remove());
+    return (copy.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
   /**
    * Approximates the accessible name. Never reads the content of a field the
    * user types into - that is a value, not a name.
@@ -124,7 +132,7 @@
       if (text) return text;
     }
     if (el.labels?.length) {
-      const text = [...el.labels].map(textOf).join(' ');
+      const text = [...el.labels].map(labelText).join(' ');
       if (text) return text;
     }
     if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return el.value || el.type;
@@ -200,6 +208,17 @@
     return [...document.querySelectorAll('a[href]')].filter((a) => !a.closest(CHROME_REGION) && visible(a));
   }
 
+  /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
+  function proseLength(root) {
+    let total = 0;
+    for (const p of root.querySelectorAll('p')) {
+      if (p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) continue;
+      total += textOf(p).length;
+      if (total > 100000) break;
+    }
+    return total;
+  }
+
   function repeatedGroup() {
     const groups = new Map();
     for (const a of contentLinks()) {
@@ -229,6 +248,8 @@
         const submit = el.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
         return {
           kind: isSearchForm(el) ? 'search' : 'form',
+          // In the header or navigation: there on every page of the site, not what this page is for.
+          global: Boolean(el.closest(CHROME_REGION)),
           name: regionName(el),
           fields,
           submit: submit ? accessibleName(submit).slice(0, 30) : ''
@@ -270,6 +291,7 @@
       editor,
       article: Boolean(document.querySelector('article') && (main.innerText || '').length > 800),
       textLength: (main.innerText || '').length,
+      prose: proseLength(main),
       tables: [...document.querySelectorAll('table')].filter(visible).length,
       links: contentLinks().length,
       repeated: repeatedGroup()
@@ -282,6 +304,27 @@
   const MAX_LINE = 400;
 
   /**
+   * Links laid out side by side with no text between them come out of innerText as one word
+   * ("タスクレポート設定ヘルプ"). A line that is exactly a run of such links is given back
+   * as the separate items, so the reader does not take it for one long link name.
+   */
+  function splitGluedLinks(el, lines) {
+    const items = [...el.querySelectorAll('a, button')].slice(0, 400).map(textOf).filter(Boolean);
+    if (items.length < 2) return lines;
+    return lines.map((line) => {
+      if (line.length > 200 || line.includes(' ')) return line;
+      for (let i = 0; i < items.length - 1; i += 1) {
+        let joined = '';
+        for (let j = i; j < items.length && joined.length < line.length; j += 1) {
+          joined += items[j];
+          if (joined === line && j > i) return items.slice(i, j + 1).join(' / ');
+        }
+      }
+      return line;
+    });
+  }
+
+  /**
    * The screen as units (see shared/units.js): every visible line of text,
    * each claimed by the first - most specific - unit that contains it.
    * Only lines are read, never field values; credentials and partial ids are
@@ -292,7 +335,7 @@
     const seen = new Set();
     let order = 0;
     let budget = MAX_UNIT_CHARS;
-    const linesOf = (el) => (el.innerText || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const linesOf = (el) => splitGluedLinks(el, (el.innerText || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean));
     const push = (kind, name, el, extra = {}) => {
       if (budget <= 0) return;
       const lines = (Array.isArray(el) ? el : linesOf(el)).filter((line) => !seen.has(line));
@@ -306,7 +349,10 @@
     const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
 
     const h1 = all('h1')[0];
-    push('page', '', [`タイトル: ${document.title}`, h1 ? `主見出し: ${textOf(h1)}` : '', `パス: ${location.pathname}`].filter(Boolean));
+    // Decoded so the model can read it (/wiki/%E3%83%A1... -> /wiki/メインページ); scrubbed by push like any text.
+    let path = location.pathname;
+    try { path = decodeURIComponent(path); } catch { /* malformed: keep as is */ }
+    push('page', '', [`タイトル: ${document.title}`, h1 ? `主見出し: ${textOf(h1)}` : '', `パス: ${path}`].filter(Boolean));
     for (const el of all('[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]')) push('feedback', '', el);
     for (const el of all('dialog[open], [role="dialog"], [aria-modal="true"]')) push('dialog', regionName(el), el);
     for (const form of all('form, [role="search"]')) {
@@ -349,32 +395,70 @@
   /**
    * Text that appears or disappears right after an operation: the result of
    * operations that do not change the URL (validation errors, toasts, modals).
+   * - The watch lasts CHANGE_MS, long enough for a toast after a slow response
+   *   (a quiet page may still be waiting for one), and ends early when the next
+   *   operation starts, so a quick follow-up does not lend its result.
+   * - Text that appears and is gone again before the watch ends (a toast) is
+   *   kept as transient; text removed and put back (a re-rendered list) is not a change.
+   * - Notification areas shown or hidden by attributes (class, hidden, ...) count too.
    */
+  const CHANGE_MS = 5000;
+  const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
+  const NOTICE = '[role="status"], [role="alert"], [aria-live], dialog, [role="dialog"], [class*="toast" i], [class*="snackbar" i], [class*="notif" i], [class*="flash" i]';
+  let finishChange = null;
   function watchChange(seq) {
+    finishChange?.();
     if (!document.body) return;
-    const appeared = new Set();
-    const removed = new Set();
+    // whitespace-free text -> { text, first, last }. Removed nodes are detached, so their
+    // innerText loses the cell/line spacing: lines are compared without whitespace.
+    const seen = new Map();
+    const note = (kind, text) => {
+      const k = text.replace(/\s+/g, '');
+      const entry = seen.get(k);
+      if (!entry) seen.set(k, { text, first: kind, last: kind });
+      else {
+        entry.last = kind;
+        if (kind === 'add') entry.text = text;  // attached text keeps its spacing
+      }
+    };
     const lines = (node) => {
       const el = node.nodeType === 1 ? node : node.parentElement;
       if (!el || el.closest('[contenteditable="true"]')) return [];
       const raw = node.nodeType === 3 ? node.textContent : (el.innerText ?? el.textContent);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
-    const observer = new MutationObserver((records) => {
+    const take = (records) => {
       for (const r of records) {
-        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => appeared.add(l));
-        for (const n of r.removedNodes) lines(n).forEach((l) => removed.add(l));
-        if (r.type === 'characterData') lines(r.target).forEach((l) => appeared.add(l));
+        if (r.type === 'attributes') {
+          const el = r.target.closest?.(NOTICE);
+          if (!el || textOf(el).length > 300) continue;
+          lines(el).forEach((l) => note(visible(el) ? 'add' : 'remove', l));
+          continue;
+        }
+        // One record can both remove and add (replaceChildren): the removal came first.
+        for (const n of r.removedNodes) lines(n).forEach((l) => note('remove', l));
+        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => note('add', l));
+        if (r.type === 'characterData') lines(r.target).forEach((l) => note('add', l));
       }
-    });
-    observer.observe(document.body, { subtree: true, childList: true, characterData: true });
-    setTimeout(() => {
+    };
+    const observer = new MutationObserver(take);
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: SHOWN_BY });
+    // finish(false) hands the change over instead of sending it (recording is stopping).
+    const finish = (deliver = true) => {
+      if (finishChange !== finish) return null;
+      finishChange = null;
+      clearTimeout(timer);
+      take(observer.takeRecords());
       observer.disconnect();
-      const pick = (set) => [...set].filter((l) => !(appeared.has(l) && removed.has(l))).slice(0, 8)
-        .map((l) => S.scrubText(l.slice(0, 160), { keywords: config?.keywords }).text);
-      const change = { appeared: pick(appeared), removed: pick(removed) };
-      if (config && (change.appeared.length || change.removed.length)) send('CHANGE', { seq, change });
-    }, 1500);
+      const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8)
+        .map((e) => S.scrubText(e.text.slice(0, 160), { keywords: config?.keywords }).text);
+      const change = { appeared: of('add', 'add'), removed: of('remove', 'remove'), transient: of('add', 'remove') };
+      if (!config || !(change.appeared.length || change.removed.length || change.transient.length)) return null;
+      if (deliver) send('CHANGE', { seq, change });
+      return { seq, change };
+    };
+    const timer = setTimeout(finish, CHANGE_MS);
+    finishChange = finish;
   }
 
   /** Which part of the screen an element belongs to. */
@@ -582,12 +666,17 @@
   // sets navigator.webdriver). Untrusted ones were dispatched by a script; only
   // the ones that change state are kept, focus and key noise is not.
   const SCRIPT_RECORDABLE = new Set(['click', 'change', 'submit']);
+  // Automation tools pick options and files by setting them and dispatching an untrusted
+  // change (Playwright selectOption / setInputFiles, WebDriver Select): under automation,
+  // that is the tool's operation rather than the page's own script.
+  const automatedPick = (event) => navigator.webdriver && event.type === 'change'
+    && (event.target?.tagName === 'SELECT' || (event.target?.tagName === 'INPUT' && event.target.type === 'file'));
 
   for (const [type, handler] of Object.entries(handlers)) {
     window.addEventListener(type, (event) => {
       if (!config) return;
       if (!event.isTrusted && !SCRIPT_RECORDABLE.has(type)) return;
-      actor = !event.isTrusted ? 'script' : navigator.webdriver ? 'automation' : 'user';
+      actor = !event.isTrusted ? (automatedPick(event) ? 'automation' : 'script') : navigator.webdriver ? 'automation' : 'user';
       try { handler(event); } catch (error) { console.warn('[op-scribe] handler failed', type, error); }
     }, true);
   }
@@ -621,7 +710,9 @@
     if (message?.from !== 'op-scribe/worker') return;
     if (message.type === 'OPS_FLUSH') {
       // Recording is about to stop: hand over the screen as it is now.
-      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits() } : null);
+      // The last operation's change is handed over too: it would arrive after the recording stopped.
+      const pending = finishChange?.(false) || null;
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits(), pending } : null);
     }
     if (message.type === 'OPS_STOP') {
       config = null;

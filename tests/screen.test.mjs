@@ -131,3 +131,48 @@ test('strict mode describes navigation and headings by count only', () => {
   assert.deepEqual(Screen.describeComponents({ navCount: 8, headingCount: 3, buttons: ['検索'] }),
     ['ナビゲーション（リンク 8 件）', 'ボタン（検索）', '見出し 3 個']);
 });
+
+test('the same screen after operations keeps its own section; a plain refresh of it does not', () => {
+  const list = (ai) => ({ ...screen('https://example.com/tasks', 'タスク一覧', { summary: '一覧の閲覧の画面' }), ...(ai ? { screen: { title: 'タスク一覧', summary: '一覧の閲覧の画面', purposes: [], components: [], ai } } : {}) });
+  const repro = D.buildReproduction({
+    steps: [
+      { type: 'navigate', t: 0, url: 'https://example.com/tasks' },
+      list({ purpose: '7 件の一覧', summary: '' }),
+      list(null),  // captured again with nothing done: a refresh, the understanding is kept
+      { type: 'click', t: 1000, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' },
+        change: { appeared: ['6 件'], removed: [], transient: ['タスクを削除しました'] } },
+      list({ purpose: '6 件の一覧', summary: '' })
+    ]
+  });
+  assert.deepEqual(repro.screens.map((s) => s.ai?.purpose), ['7 件の一覧', '6 件の一覧']);
+  assert.deepEqual(repro.steps[1].transient, ['タスクを削除しました']);
+  const md = D.toMarkdown(repro);
+  assert.match(md, /- 操作後に現れた文字: 「6 件」\n {3}- 操作後に一時的に表示された文字: 「タスクを削除しました」/);
+  assert.match(md, /### 画面 2: 「タスク一覧」/);
+  assert.match(D.toGherkin({ steps: repro && [
+    { type: 'click', t: 0, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' }, change: { appeared: [], removed: [], transient: ['タスクを削除しました'] } }
+  ] }), /\| transient +\| タスクを削除しました \|/);
+});
+
+test('an encyclopedia article is a detail page despite its site search, settings radios and in-text links', () => {
+  const result = Screen.classifyScreen({
+    url: 'https://example.com/wiki/Tower',
+    title: 'Tower - Example',
+    forms: [
+      { kind: 'search', global: true, fields: [{ type: 'search', label: '検索' }], submit: '検索' },
+      { kind: 'form', fields: [{ type: 'radio', label: '小' }, { type: 'radio', label: '標準' }, { type: 'radio', label: '大' }], submit: '' }
+    ],
+    repeated: { count: 1519 },
+    tables: 40,
+    prose: 30000
+  });
+  assert.deepEqual(kinds(result), ['detail']);
+  const parts = Screen.describeComponents({ prose: 30000, repeated: { count: 1519 } });
+  assert.ok(parts.includes('本文（約 30000 文字）'));
+  assert.ok(!parts.some((p) => p.startsWith('一覧')));
+});
+
+test('a search box on the page itself still makes it a search screen', () => {
+  const result = Screen.classifyScreen({ url: 'https://example.com/', forms: [{ kind: 'search', fields: [{ type: 'search', label: 'q' }], submit: '検索' }] });
+  assert.equal(kinds(result)[0], 'search');
+});

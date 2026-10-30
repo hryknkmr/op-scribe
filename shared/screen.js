@@ -63,6 +63,8 @@
    * @param {object} f features from content/recorder.js (already masked)
    * @returns {{ purposes: {kind,label,score,reasons}[], summary: string }}
    */
+  const PROSE_CHARS = 2000;
+
   function classifyScreen(f = {}) {
     const scores = new Map();
     const add = (kind, weight, reason) => {
@@ -73,9 +75,12 @@
     };
 
     for (const form of f.forms || []) {
+      // A form in the header (site search, login) is on every page: it says nothing about this one.
+      if (form.global) continue;
       if (form.kind === 'search') add('search', 3, '検索フォーム');
       if ((form.fields || []).some((field) => field.type === 'password')) add('auth', 3, 'パスワード欄');
-      const fields = (form.fields || []).length;
+      // Radio buttons and checkboxes alone are settings (text size, theme), not information to enter.
+      const fields = (form.fields || []).filter((field) => !['radio', 'checkbox'].includes(field.type)).length;
       if (form.kind !== 'search' && fields >= 3) add('form', 2, `入力フォーム（${fields} 項目）`);
       const submitIntent = intentOf(form.submit);
       if (submitIntent && submitIntent !== 'dismiss') add(submitIntent, 2, `送信ボタン「${form.submit}」`);
@@ -104,11 +109,14 @@
       if (/一覧|ランキング|急上昇|新着|おすすめ|ranking|trend|archive/i.test(text || '')) add('list', 1, '画面タイトル');
     }
 
-    if (f.repeated && f.repeated.count >= 5) add('list', 3, `同じ形のリンクが ${f.repeated.count} 件`);
-    if ((f.tables || 0) > 0) add('list', 1, `表 ${f.tables} 個`);
+    // Paragraph text this long is a body to read; its many in-text links do not make a list.
+    const prose = (f.prose || 0) >= PROSE_CHARS;
+    if (prose) add('detail', 3, `本文 約${Math.round(f.prose / 100) * 100} 文字`);
+    if (!prose && f.repeated && f.repeated.count >= 5) add('list', 3, `同じ形のリンクが ${f.repeated.count} 件`);
+    if (!prose && (f.tables || 0) > 0) add('list', 1, `表 ${f.tables} 個`);
     // On a list page the long text is the cards themselves, not a body to read.
-    const listLike = f.repeated && f.repeated.count >= 5;
-    if (f.article || (!listLike && (f.textLength || 0) >= 1500)) {
+    const listLike = !prose && f.repeated && f.repeated.count >= 5;
+    if (!prose && (f.article || (!listLike && (f.textLength || 0) >= 1500))) {
       add('detail', 2, f.article ? '記事本文' : `本文 約${Math.round((f.textLength || 0) / 100) * 100} 文字`);
     }
 
@@ -135,9 +143,11 @@
     }
     if (f.editor) out.push('本文エディタ');
     for (const dialog of (f.dialogs || []).slice(0, 2)) out.push(`ダイアログ${dialog ? `「${dialog}」` : ''}`);
-    if (f.repeated && f.repeated.count >= 5) out.push(`一覧（同じ形のリンク ${f.repeated.count} 件）`);
+    const prose = (f.prose || 0) >= PROSE_CHARS;
+    if (prose) out.push(`本文（約 ${Math.round(f.prose / 100) * 100} 文字）`);
+    if (!prose && f.repeated && f.repeated.count >= 5) out.push(`一覧（同じ形のリンク ${f.repeated.count} 件）`);
     if ((f.tables || 0) > 0) out.push(`表 ${f.tables} 個`);
-    if (f.article || (!(f.repeated && f.repeated.count >= 5) && (f.textLength || 0) >= 1500)) {
+    if (!prose && (f.article || (!(f.repeated && f.repeated.count >= 5) && (f.textLength || 0) >= 1500))) {
       out.push(`本文（約 ${Math.round((f.textLength || 0) / 100) * 100} 文字）`);
     }
     if ((f.navLinks || []).length) out.push(`ナビゲーション（${f.navLinks.slice(0, 6).join('、')}）`);

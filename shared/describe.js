@@ -179,6 +179,7 @@
     let current = null;
     let opened = [];
     let lastAction = null;
+    let actedOnCurrent = false;
 
     const expect = (item, text) => {
       item.expected = item.expected || [];
@@ -188,12 +189,15 @@
     for (const step of steps) {
       if (step.type === 'screen') {
         const info = screenInfo(step);
-        if (current !== null && screens[current].url === info.url) {
-          screens[current] = info;
+        // The same screen captured again with nothing done in between is a refresh of it;
+        // after operations it is a new state of the screen (e.g. a row deleted) and keeps its own section.
+        if (current !== null && screens[current].url === info.url && !actedOnCurrent) {
+          screens[current] = { ...info, ai: info.ai || screens[current].ai };
           continue;
         }
         screens.push(info);
         current = screens.length - 1;
+        actedOnCurrent = false;
         for (const item of opened) item.screen = current;
         opened = [];
         if (lastAction?.awaiting && samePage(lastAction.awaiting, info.url)) {
@@ -230,10 +234,12 @@
       const by = step.actor === 'script' || step.actor === 'agent' ? `（${ACTOR_LABELS[step.actor]}による操作）` : '';
       const item = { action: `${humanize(describeStep(step))}${by}`, screen: current };
       if (step.change?.appeared?.length) item.appeared = step.change.appeared.slice(0, 3);
+      if (step.change?.transient?.length) item.transient = step.change.transient.slice(0, 3);
       if (step.ai?.meaning) item.meaning = step.ai.meaning;
       if (step.ai?.result) item.result = step.ai.result;
       out.push(item);
       lastAction = { type: step.type, t: step.t, item };
+      actedOnCurrent = true;
     }
 
     if (rec?.startUrl && (!steps.length || steps[0].type !== 'navigate')) {
@@ -265,8 +271,8 @@
         : titles.length ? `${titles[0]}での操作（${out.length} ステップ）` : `操作の再現手順（${out.length} ステップ）`,
       preconditions,
       screens,
-      steps: out.map(({ action, expected, screen, appeared, meaning, result }) => ({
-        action, expected: expected?.join(' / ') || undefined, screen, appeared, meaning, result
+      steps: out.map(({ action, expected, screen, appeared, transient, meaning, result }) => ({
+        action, expected: expected?.join(' / ') || undefined, screen, appeared, transient, meaning, result
       })),
       notes
     };
@@ -307,9 +313,14 @@
       lines.push(`${i + 1}. ${step.action}`);
       if (step.meaning) lines.push(`   - 意味（AI）: ${step.meaning}`);
       if (step.appeared?.length) lines.push(`   - 操作後に現れた文字: ${step.appeared.map((t) => `「${t}」`).join(' ')}`);
+      if (step.transient?.length) lines.push(`   - 操作後に一時的に表示された文字: ${step.transient.map((t) => `「${t}」`).join(' ')}`);
       if (step.expected) lines.push(`   - 期待結果: ${step.expected}`);
       if (step.result) lines.push(`   - 結果（AI）: ${step.result}`);
     });
+    // Screens reached by the last operations have no step of their own, but they are where it ended.
+    if (grouped) {
+      for (let i = (shown ?? -1) + 1; i < screens.length; i += 1) lines.push('', ...screenLines(screens[i], i));
+    }
     if (!grouped && screens.length) {
       lines.push('', '## 画面');
       screens.forEach((screen, i) => lines.push('', ...screenLines(screen, i)));
@@ -346,6 +357,7 @@
     add('ai-meaning', step.ai?.meaning);
     add('ai-result', step.ai?.result);
     for (const text of step.change?.appeared?.slice(0, 3) || []) add('appeared', text);
+    for (const text of step.change?.transient?.slice(0, 3) || []) add('transient', text);
     add('value', step.value);
     add('checked', step.checked);
     add('key', step.key);
