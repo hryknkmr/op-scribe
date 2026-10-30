@@ -109,6 +109,8 @@
   }
 
   const textOf = (el) => (el.innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // Masked first, then cut: a cut through an address or a token would hide it from the patterns.
+  const clip = (text, n) => S.scrubText(String(text || ''), { keywords: config?.keywords }).text.slice(0, n);
 
   /** A label's own words: a label wrapping its control would otherwise also yield the control's options or text. */
   function labelText(label) {
@@ -183,12 +185,12 @@
   /** Name of a region: aria-label, aria-labelledby, or its first heading. */
   function regionName(el) {
     const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) return aria.trim().slice(0, 30);
+    if (aria?.trim()) return clip(aria.trim(), 30);
     const by = el.getAttribute('aria-labelledby');
     const labelled = by && document.getElementById(by.split(/\s+/)[0]);
-    if (labelled) return textOf(labelled).slice(0, 30);
+    if (labelled) return clip(textOf(labelled), 30);
     const heading = el.querySelector('legend, h1, h2, h3, h4');
-    return heading ? textOf(heading).slice(0, 30) : '';
+    return heading ? clip(textOf(heading), 30) : '';
   }
 
   function isSearchForm(form) {
@@ -244,7 +246,7 @@
         const fields = [...el.querySelectorAll('input, select, textarea')]
           .filter((f) => f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button' && visible(f))
           .slice(0, 12)
-          .map((f) => ({ type: f.tagName === 'INPUT' ? (f.type || 'text') : f.tagName.toLowerCase(), label: accessibleName(f).slice(0, 30) }));
+          .map((f) => ({ type: f.tagName === 'INPUT' ? (f.type || 'text') : f.tagName.toLowerCase(), label: clip(accessibleName(f), 30) }));
         const submit = el.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
         return {
           kind: isSearchForm(el) ? 'search' : 'form',
@@ -252,24 +254,24 @@
           global: Boolean(el.closest(CHROME_REGION)),
           name: regionName(el),
           fields,
-          submit: submit ? accessibleName(submit).slice(0, 30) : ''
+          submit: submit ? clip(accessibleName(submit), 30) : ''
         };
       })
       .filter((form) => form.fields.length);
 
     const buttons = unique([...document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')]
       .filter((b) => visible(b) && !b.closest('[contenteditable="true"]'))
-      .map((b) => accessibleName(b).slice(0, 30)))
+      .map((b) => clip(accessibleName(b), 30)))
       .slice(0, 15);
     const navLinks = unique([...document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]')]
       .filter(visible)
-      .map((a) => accessibleName(a).slice(0, 20)))
+      .map((a) => clip(accessibleName(a), 20)))
       .slice(0, 10);
     // Section names only. Headings in an article, an editor, a card (inside or around a
     // link) or a list item are content - other people's titles - not part of the UI.
     const headings = unique([...document.querySelectorAll('h2, h3')]
       .filter((h) => visible(h) && !h.closest('article, [contenteditable="true"], a, li') && !h.querySelector('a'))
-      .map((h) => textOf(h).slice(0, 30)))
+      .map((h) => clip(textOf(h), 30)))
       .slice(0, 6);
     const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]')]
       .filter(visible).map(regionName).slice(0, 3);
@@ -280,8 +282,8 @@
 
     return {
       url: location.href,
-      title: document.title.slice(0, 120),
-      h1: h1 ? textOf(h1).slice(0, 80) : '',
+      title: clip(document.title, 120),
+      h1: h1 ? clip(textOf(h1), 80) : '',
       lang: document.documentElement.lang || '',
       forms,
       buttons,
@@ -341,10 +343,9 @@
       const lines = (Array.isArray(el) ? el : linesOf(el)).filter((line) => !seen.has(line));
       if (!lines.length) return;
       lines.forEach((line) => seen.add(line));
-      let text = lines.map((l) => l.slice(0, MAX_LINE)).join('\n');
-      text = S.scrubText(text, { keywords: config?.keywords }).text.slice(0, budget);
+      const text = lines.map((l) => clip(l, MAX_LINE)).join('\n').slice(0, budget);
       budget -= text.length;
-      units.push({ kind, name: S.scrubText(name || '', { keywords: config?.keywords }).text.slice(0, 60), text, order: order++, ...extra });
+      units.push({ kind, name: clip(name, 60), text, order: order++, ...extra });
     };
     const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
 
@@ -382,7 +383,7 @@
     }
     for (const heading of all('h2, h3, h4')) {
       const container = heading.closest('section, article, [role="region"]') || heading.parentElement;
-      if (container) push('section', textOf(heading).slice(0, 40), container);
+      if (container) push('section', clip(textOf(heading), 40), container);
     }
     for (const [selector, name] of [['header, [role="banner"]', 'ヘッダー'], ['nav, [role="navigation"]', 'ナビゲーション'],
       ['main, [role="main"]', 'メイン'], ['aside, [role="complementary"]', 'サイドバー'], ['footer, [role="contentinfo"]', 'フッター']]) {
@@ -426,11 +427,28 @@
       }
     };
     const inNotice = (node) => Boolean((node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE));
-    const lines = (node) => {
-      const el = node.nodeType === 1 ? node : node.parentElement;
+    const NOT_SHOWN = 'script, style, template, noscript, [hidden], [aria-hidden="true"]';
+    // A removed element is detached: its style is gone, so it counts only if nothing marks it hidden.
+    const markedHidden = (el) => Boolean(el.closest?.(NOT_SHOWN)) || el.style?.display === 'none' || el.style?.visibility === 'hidden';
+    /** The text of a detached element as it was shown: hidden parts and scripts left out. */
+    const detachedText = (el) => {
+      if (markedHidden(el)) return '';
+      const copy = el.cloneNode(true);
+      copy.querySelectorAll(NOT_SHOWN).forEach((c) => c.remove());
+      copy.querySelectorAll('[style]').forEach((c) => { if (c.style.display === 'none' || c.style.visibility === 'hidden') c.remove(); });
+      return copy.textContent;
+    };
+    // parent: where a removed text node was (it has no parentElement any more).
+    const lines = (node, parent = null) => {
+      const el = node.nodeType === 1 ? node : node.parentElement || parent;
       if (!el || el.closest('[contenteditable="true"]')) return [];
-      const raw = node.nodeType === 3 ? node.textContent : (el.innerText ?? el.textContent);
+      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : el.isConnected ? el.innerText : detachedText(el);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
+    };
+    // Only what was on screen: text added or changed inside something hidden never counts.
+    const shown = (node) => {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      return Boolean(el) && visible(el);
     };
     const take = (records) => {
       for (const r of records) {
@@ -441,9 +459,10 @@
           continue;
         }
         // One record can both remove and add (replaceChildren): the removal came first.
-        for (const n of r.removedNodes) lines(n).forEach((l) => note('remove', l));
-        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => note('add', l, inNotice(n)));
-        if (r.type === 'characterData') lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
+        // Removed from where it was shown: the parent it left is still in the page.
+        if (shown(r.target)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
+        for (const n of r.addedNodes) if (shown(n)) lines(n).forEach((l) => note('add', l, inNotice(n)));
+        if (r.type === 'characterData' && shown(r.target)) lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
       }
     };
     const observer = new MutationObserver(take);
@@ -455,7 +474,7 @@
       clearTimeout(timer);
       take(observer.takeRecords());
       observer.disconnect();
-      const scrub = (e) => S.scrubText(e.text.slice(0, 160), { keywords: config?.keywords }).text;
+      const scrub = (e) => clip(e.text, 160);
       const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), removed: of('remove', 'remove'), transient: of('add', 'remove') };
       const notices = [...seen.values()].filter((e) => e.notice && e.text.length <= 160).slice(0, 4).map(scrub);
