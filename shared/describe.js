@@ -156,11 +156,13 @@
     try {
       // Counted, not just looked up: ?tag=a -> ?tag=a&tag=a adds a parameter.
       const left = new Map();
-      for (const [key, value] of new URL(a).searchParams) left.set(`${key}=${value}`, (left.get(`${key}=${value}`) || 0) + 1);
-      for (const [key, value] of new URL(b).searchParams) {
-        const n = left.get(`${key}=${value}`) || 0;
+      // A pair as JSON: a=b=c is not the same pair as a%3Db=c.
+      const pair = (entry) => JSON.stringify(entry);
+      for (const entry of new URL(a).searchParams) left.set(pair(entry), (left.get(pair(entry)) || 0) + 1);
+      for (const entry of new URL(b).searchParams) {
+        const n = left.get(pair(entry)) || 0;
         if (!n) return false;
-        left.set(`${key}=${value}`, n - 1);
+        left.set(pair(entry), n - 1);
       }
       return true;
     } catch {

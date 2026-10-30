@@ -731,12 +731,17 @@
     /** In a notification area, only text not shown there before the operation: new nodes, and what was added to old ones. */
     const fresh = {
       skip: (n) => shownBefore.get(n) === n.data,
+      // What changed in a node shown before: its text without what it shares with the old text at either
+      // end (担当: A / 状態: 処理中 -> 担当: A / 状態: 完了 gives 完了).
       part: (n) => {
         const old = shownBefore.get(n);
         if (old === undefined) return n.data;
-        if (n.data.startsWith(old)) return n.data.slice(old.length);
-        if (n.data.endsWith(old)) return n.data.slice(0, n.data.length - old.length);
-        return n.data;
+        let start = 0;
+        while (start < old.length && start < n.data.length && old[start] === n.data[start]) start += 1;
+        let end = 0;
+        while (end < old.length - start && end < n.data.length - start
+          && old[old.length - 1 - end] === n.data[n.data.length - 1 - end]) end += 1;
+        return n.data.slice(start, n.data.length - end);
       }
     };
     const take = (records) => {
@@ -787,7 +792,9 @@
       const isNew = (e) => e.notice && !unknown;
       const of = (first, last) => [...seen.values()].filter((e) => isNew(e) && e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
-      const notices = [...seen.values()].filter((e) => isNew(e) && e.text.length <= 160).slice(0, 4).map(scrub);
+      // Appeared during the watch (first seen added), like appeared and transient: a notice node removed and
+      // put back (re-rendered) is not new.
+      const notices = [...seen.values()].filter((e) => isNew(e) && e.first === 'add' && e.text.length <= 160).slice(0, 4).map(scrub);
       if (notices.length) change.notices = notices;
       if (!config || !(change.appeared.length || change.transient.length)) return null;
       if (deliver) send('CHANGE', { seq, change });

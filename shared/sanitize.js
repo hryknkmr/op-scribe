@@ -121,8 +121,9 @@
    * Applies the policy to free text. Masking runs before truncation so a cut
    * can never expose half an address.
    */
-  // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme).
-  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/gi;
+  // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
+  // a host with or without dots, an IP address, [IPv6]). Over-matching only hides more.
+  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/gi;
 
   function scrubText(input, opts = {}) {
     const kinds = [];

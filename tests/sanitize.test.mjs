@@ -143,6 +143,9 @@ test('URLs written in text follow the URL policy when the recording hosts are gi
   // Scheme-relative URLs too, under the same alias; a path with // inside is not a URL.
   assert.equal(S.scrubText('通知: //docs.internal.test/orders/1234567 を開く', { hosts }).text, '通知: //site-1.invalid/orders/12***67 を開く');
   assert.equal(S.scrubText('a/b//c と 1//2', { hosts }).text, 'a/b//c と 1//2');
+  for (const url of ['//intranet/a', '//localhost:8080/a', '//10.0.0.5/a', '//[fd00::1]/a']) {
+    assert.match(S.scrubText(`開く ${url}`, { hosts }).text, /^開く \/\/site-\d+\.invalid(:\d+)?\/a$/, url);
+  }
   // Without the hosts (in the page), text is left to the worker, which knows them.
   assert.equal(S.scrubText('https://docs.internal.test/a').text, 'https://docs.internal.test/a');
 });
