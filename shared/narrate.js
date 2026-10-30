@@ -51,14 +51,9 @@
 - summary: 画面に何があるか（主な部品と内容の要点）を 2〜3 文で
 - facts: 操作の理解に役立つ具体的な事実（見出し、件数、通知やエラーの文、ボタン名、価格など）を短く最大 6 件
 ${COMMON_RULES}`,
-    transition: `あなたは、ブラウザ上の 1 つの操作が「何のために行われ、何が起きたか」を説明する担当者です。
+    transition: `あなたは、ブラウザ上の 1 つの操作が「何のために行われたか」を説明する担当者です。
 操作前の画面のメモ、行われた操作、操作直後に画面に現れた／消えた文字、操作後の画面のメモを渡します。
 - meaning: その操作が何のための操作か（画面の目的を踏まえて 1 文。操作の種類やキーは、渡した操作の文にあるものだけを書く）
-- result: 操作の結果として何が起きたか 1 文。次の順で根拠を探す:
-  1. 操作直後に現れた文字・一時的に表示された文字に通知・確認・エラーの文（「〜しました」「〜しますか」「〜してください」など）があれば、その文をそのまま含める
-  2. 操作後の画面が変わっていれば、どの画面が表示されたか
-  3. 入力や選択なら、どの欄に何が入ったか
-  どれからも言えなければ空文字
 ${COMMON_RULES}`,
     journey: `あなたは、ブラウザ操作の記録全体を要約する担当者です。
 画面ごとの理解と、操作ごとの意味・結果を起きた順に渡します。
@@ -80,8 +75,8 @@ ${COMMON_RULES}`,
     },
     transition: {
       type: 'object',
-      properties: { meaning: { type: 'string' }, result: { type: 'string' } },
-      required: ['meaning', 'result']
+      properties: { meaning: { type: 'string' } },
+      required: ['meaning']
     },
     journey: {
       type: 'object',
@@ -290,13 +285,17 @@ ${COMMON_RULES}`,
         pending = null;
         onStatus('操作の意味を考えています…');
         const operation = D.humanize(D.describeStep(step));
-        const ai = await readTransition(ask, { from, operation, change: step.change, to }, scan);
-        if (!ai) return;
-        // A notice the page showed is the result itself: state it from the record, not in the model's words.
+        const answer = await readTransition(ask, { from, operation, change: step.change, to }, scan);
+        // The result is a fact: only a notice the page showed, stated from the record. The model never
+        // writes it (it cannot be checked against the record); the screen reached is already the expected result.
         const shown = [...new Set([...noticesOf(step.change), ...arrived])].slice(0, 2);
-        if (shown.length) ai.result = `${shown.map((t) => `「${t}」`).join('、')}と表示された`;
+        const ai = {
+          ...(answer?.meaning ? { meaning: answer.meaning } : {}),
+          ...(shown.length ? { result: `${shown.map((t) => `「${t}」`).join('、')}と表示された` } : {})
+        };
+        if (!ai.meaning && !ai.result) return;
         step.ai = ai;
-        journey.push(`操作: ${operation} → 意味: ${ai.meaning}${ai.result ? ` / 結果: ${ai.result}` : ''}`);
+        journey.push(`操作: ${operation}${ai.meaning ? ` → 意味: ${ai.meaning}` : ''}${ai.result ? ` / 結果: ${ai.result}` : ''}`);
       };
 
       for (const step of steps) {
@@ -311,7 +310,7 @@ ${COMMON_RULES}`,
           }
           if (memo) {
             step.screen.ai = memo;
-            journey.push(`画面「${step.screen.title || ''}」: ${memo.purpose}`);
+            journey.push(`画面「${step.screen.title || ''}」: ${memo.purpose} ${memo.summary || ''}`.trim());
           }
           // A notice that was already on the previous screen (a toast that stays) is not this operation's result.
           await settle(memo, notices.filter((t) => !screenNotices.includes(t)));

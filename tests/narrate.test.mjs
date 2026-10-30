@@ -222,7 +222,15 @@ test('a key the operation did not use is not accepted in its meaning', async () 
 test('a notice that was already on the previous screen is not given to the next operation as its result', async () => {
   const both = { ...units, s2: [...units.s2, { kind: 'feedback', text: '保存しました', order: 3 }], s6: [...units.s6, { kind: 'feedback', text: '保存しました', order: 2 }] };
   const result = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => both[s.id] });
-  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '20 件の検索結果が表示された');
+  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, undefined);
+});
+
+test('the model never writes the result: without a notice an operation has none, whatever the model says', async () => {
+  const LM = fakeModel({ ...goodAnswers, transition: () => ({ meaning: '注文を確定する', result: '支払いに成功した' }) });
+  const result = await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  assert.ok(result.operations.length);
+  for (const o of result.operations) assert.deepEqual(o.ai, { meaning: '注文を確定する' });
+  assert.ok(!result.markdown.includes('支払いに成功した'));
 });
 
 test('a number written without its thousands separator is the same number', () => {

@@ -315,7 +315,7 @@
       if (step.appeared?.length) lines.push(`   - 操作後に現れた文字: ${step.appeared.map((t) => `「${t}」`).join(' ')}`);
       if (step.transient?.length) lines.push(`   - 操作後に一時的に表示された文字: ${step.transient.map((t) => `「${t}」`).join(' ')}`);
       if (step.expected) lines.push(`   - 期待結果: ${step.expected}`);
-      if (step.result) lines.push(`   - 結果（AI）: ${step.result}`);
+      if (step.result) lines.push(`   - 結果（通知）: ${step.result}`);
     });
     // Screens reached by the last operations have no step of their own, but they are where it ended.
     if (grouped) {
