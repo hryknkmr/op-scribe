@@ -237,7 +237,6 @@ ${COMMON_RULES}`,
     if (!change) return '';
     return [
       change.appeared?.length ? `現れた文字: ${change.appeared.join(' / ')}` : '',
-      change.removed?.length ? `消えた文字: ${change.removed.join(' / ')}` : '',
       change.transient?.length ? `一時的に表示されて消えた文字（通知など）: ${change.transient.join(' / ')}` : ''
     ].filter(Boolean).join('\n');
   }
@@ -268,7 +267,9 @@ ${COMMON_RULES}`,
     return !out || ask.check('journey', out, lines.join('\n'), scan).length ? null : out;
   }
 
-  const ACTIONS = new Set(['click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool']);
+  // Not 'tool': a WebMCP tool call is recorded after it ran, after the screen it led to, so what it caused
+  // cannot be told from the record.
+  const ACTIONS = new Set(['click', 'input', 'select', 'check', 'upload', 'key', 'submit']);
 
   /**
    * Adds the model's understanding to a recording. Never throws: without the
@@ -335,6 +336,9 @@ ${COMMON_RULES}`,
           screenNotices = notices;
         } else if (step.type === 'navigate' && pending && !D.causedBy(pending.step, step)) {
           // Opened by itself (address bar, much later): the screen it shows is not the operation's result.
+          await settle(null);
+        } else if (step.type === 'tool') {
+          // A tool call ends the operation before it; what the tool itself caused is not told (see ACTIONS).
           await settle(null);
         } else if (ACTIONS.has(step.type)) {
           await settle(null);

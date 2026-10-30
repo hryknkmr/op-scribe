@@ -19,7 +19,7 @@ const rec = {
     { id: 's1', type: 'navigate', t: 0, url: 'https://example.com/' },
     screen('s2', 'https://example.com/', 'Example'),
     { id: 's3', type: 'input', t: 1000, seq: 'a-1', actor: 'automation', url: 'https://example.com/', target: { role: 'searchbox', name: 'キーワード', component: { kind: 'search' } }, value: 'shoes' },
-    { id: 's4', type: 'key', t: 1100, seq: 'a-2', actor: 'automation', url: 'https://example.com/', key: 'Enter', change: { appeared: ['20 件見つかりました'], removed: [] } },
+    { id: 's4', type: 'key', t: 1100, seq: 'a-2', actor: 'automation', url: 'https://example.com/', key: 'Enter', change: { appeared: ['20 件見つかりました'] } },
     { id: 's5', type: 'navigate', t: 1300, url: 'https://example.com/search?q=shoes' },
     screen('s6', 'https://example.com/search?q=shoes', '検索結果')
   ]
@@ -168,7 +168,7 @@ test('the actor of each operation and what it changed are kept in the payload, t
   assert.match(D.toGherkin(rec), /\| appeared +\| 20 件見つかりました \|/);
   const payload = D.buildPayload({ ...rec, startedAt: 0 }, { generator: 'built-in-ai', markdown: '# x\n', summary: 's' }, {});
   assert.equal(payload.recording.steps[2].actor, 'automation');
-  assert.deepEqual(payload.recording.steps[3].change, { appeared: ['20 件見つかりました'], removed: [] });
+  assert.deepEqual(payload.recording.steps[3].change, { appeared: ['20 件見つかりました'] });
   assert.deepEqual([payload.reproduction.generator, payload.reproduction.summary], ['built-in-ai', 's']);
 });
 
@@ -189,7 +189,7 @@ test('script-driven operations are marked in the sentence', () => {
 });
 
 test('a notice the page showed becomes the result as recorded, whatever the model wrote', async () => {
-  const withNotice = { ...rec, steps: rec.steps.map((s) => (s.id === 's4' ? { ...s, change: { appeared: ['20 件'], removed: [], transient: ['検索しました'] } } : s)) };
+  const withNotice = { ...rec, steps: rec.steps.map((s) => (s.id === 's4' ? { ...s, change: { appeared: ['20 件'], transient: ['検索しました'] } } : s)) };
   const result = await N.narrate(withNotice, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => units[s.id] });
   assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '「検索しました」と表示された');
 });
@@ -277,9 +277,9 @@ test('only what a notification area or a passing toast showed is the result, in 
   const withChange = (change) => ({ ...rec, steps: rec.steps.map((s) => (s.id === 's4' ? { ...s, change } : s)) });
   const resultOf = async (change) => (await N.narrate(withChange(change), { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => units[s.id] }))
     .operations.find((o) => o.id === 's4')?.ai.result;
-  assert.equal(await resultOf({ appeared: ['この記事では、私が旅に出た話をしました。'], removed: [] }), undefined);
-  assert.equal(await resultOf({ appeared: ['Saved'], removed: [], notices: ['Saved'] }), '「Saved」と表示された');
-  assert.equal(await resultOf({ appeared: [], removed: [], transient: ['Changes saved.'] }), '「Changes saved.」と表示された');
+  assert.equal(await resultOf({ appeared: ['この記事では、私が旅に出た話をしました。'] }), undefined);
+  assert.equal(await resultOf({ appeared: ['Saved'], notices: ['Saved'] }), '「Saved」と表示された');
+  assert.equal(await resultOf({ appeared: [], transient: ['Changes saved.'] }), '「Changes saved.」と表示された');
 });
 
 test('a URL in an answer is accepted only as a whole URL that was read', () => {
@@ -309,4 +309,13 @@ test('without a downloaded model the recording is described by the template, poi
   assert.equal(result.generator, 'template');
   assert.match(result.reason, /押すとダウンロード/);
   assert.equal(created, 0);
+});
+
+test('a WebMCP tool call, recorded after it ran, is given no meaning or result and ends the operation before it', async () => {
+  const withTool = { ...rec, steps: [...rec.steps.slice(0, 4),
+    { id: 's4t', type: 'tool', t: 1200, url: 'https://example.com/', tool: 'search', args: { q: 'shoes' }, ok: true }, ...rec.steps.slice(4)] };
+  const withStatus = { ...units, s6: [...units.s6, { kind: 'feedback', text: '検索しました', order: 3 }] };
+  const result = await N.narrate(withTool, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
+  assert.ok(!result.operations.some((o) => o.id === 's4t'));
+  assert.equal(result.operations.find((o) => o.id === 's4')?.ai.result, undefined);
 });

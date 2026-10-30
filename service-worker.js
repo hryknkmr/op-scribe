@@ -303,7 +303,7 @@ function attachChange(rec, detail, settings) {
   if (!step) return false;
   const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
     .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160, hosts: { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases } }).text);
-  step.change = { appeared: lines(detail.change?.appeared), removed: lines(detail.change?.removed) };
+  step.change = { appeared: lines(detail.change?.appeared) };
   // Shown and gone again before the watch ended (a toast).
   const transient = lines(detail.change?.transient);
   if (transient.length) step.change.transient = transient;

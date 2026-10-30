@@ -140,7 +140,7 @@ test('the same screen after operations keeps its own section; a plain refresh of
       list({ purpose: '7 件の一覧', summary: '' }),
       list(null),  // captured again with nothing done: a refresh, the understanding is kept
       { type: 'click', t: 1000, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' },
-        change: { appeared: ['6 件'], removed: [], transient: ['タスクを削除しました'] } },
+        change: { appeared: ['6 件'], transient: ['タスクを削除しました'] } },
       list({ purpose: '6 件の一覧', summary: '' })
     ]
   });
@@ -150,7 +150,7 @@ test('the same screen after operations keeps its own section; a plain refresh of
   assert.match(md, /- 操作後に現れた文字: 「6 件」\n {3}- 操作後に一時的に表示された文字: 「タスクを削除しました」/);
   assert.match(md, /### 画面 2: 「タスク一覧」/);
   assert.match(D.toGherkin({ steps: repro && [
-    { type: 'click', t: 0, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' }, change: { appeared: [], removed: [], transient: ['タスクを削除しました'] } }
+    { type: 'click', t: 0, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' }, change: { appeared: [], transient: ['タスクを削除しました'] } }
   ] }), /\| transient +\| タスクを削除しました \|/);
 });
 

@@ -218,6 +218,18 @@
     return [...document.querySelectorAll('a[href]')].filter((a) => !a.closest(CHROME_REGION) && visible(a));
   }
 
+  /**
+   * A button named by content rather than by the UI: inside a list item, card or article, one of a
+   * row of look-alike buttons (cards as buttons), or with a name longer than a label (a whole card).
+   */
+  function isContentButton(button) {
+    if (button.closest('li, article, [role="listitem"], [role="article"], [role="row"]')) return true;
+    if ((accessibleName(button) || '').length > 40) return true;
+    const parent = button.parentElement;
+    if (!parent || !button.className) return false;
+    return [...parent.children].filter((c) => c.tagName === button.tagName && c.className === button.className).length >= 3;
+  }
+
   /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
   function proseLength(root) {
     let total = 0;
@@ -268,7 +280,7 @@
       .filter((form) => form.fields.length);
 
     const buttons = unique([...document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')]
-      .filter((b) => visible(b) && !b.closest('[contenteditable="true"]'))
+      .filter((b) => visible(b) && !b.closest('[contenteditable="true"]') && !isContentButton(b))
       .map((b) => clip(accessibleName(b), 30)))
       .slice(0, 15);
     const navLinks = unique([...document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]')]
@@ -423,9 +435,6 @@
     // whitespace-free text -> { text, first, last }. Removed nodes are detached, so their
     // innerText loses the cell/line spacing: lines are compared without whitespace.
     const seen = new Map();
-    // The text as it was rendered before the operation. A removed element is detached, so how it was
-    // styled is lost: its text counts only if it was rendered (not hidden by a class, for instance).
-    const rendered = (document.body.innerText || '').replace(/\s+/g, '');
     // notice: shown in a notification area (status, alert, toast), so it is the page telling the result.
     const note = (kind, text, notice = false) => {
       const k = text.replace(/\s+/g, '');
@@ -437,6 +446,7 @@
         if (notice && kind === 'add') entry.notice = true;
       }
     };
+    const seenShown = (l) => seen.get(l.replace(/\s+/g, ''))?.first === 'add';
     const inNotice = (node) => Boolean((node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE));
     const NOT_SHOWN = 'script, style, template, noscript, [hidden], [aria-hidden="true"]';
     // A removed element is detached: its style is gone, so it counts only if nothing marks it hidden.
@@ -466,17 +476,18 @@
       for (const r of records) {
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
-          if (!el || textOf(el).length > 300) continue;
-          lines(el).forEach((l) => note(visible(el) ? 'add' : 'remove', l, true));
+          if (!el || (el.textContent || '').length > 300) continue;
+          if (visible(el)) lines(el).forEach((l) => note('add', l, true));
+          // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
+          else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
         }
         // One record can both remove and add (replaceChildren): the removal came first.
         // Removed from where it was shown: the parent it left is still in the page.
-        if (shown(r.target, false)) {
-          // Rendered before the operation, or shown during the watch (a toast going away).
-          const wasShown = (l) => { const k = l.replace(/\s+/g, ''); return seen.has(k) || rendered.includes(k); };
-          for (const n of r.removedNodes) lines(n, r.target).filter(wasShown).forEach((l) => note('remove', l));
-        }
+        // Removals are noted only to tell a toast going away (transient) and a re-rendered list (removed and
+        // put back: no change). What was removed is never handed over: a removed element is detached and
+        // how it was styled (hidden by a class, transparent) is lost.
+        if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
         for (const n of r.addedNodes) if (shown(n)) lines(n).forEach((l) => note('add', l, inNotice(n)));
         if (r.type === 'characterData' && shown(r.target)) lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
       }
@@ -492,10 +503,10 @@
       observer.disconnect();
       const scrub = (e) => clip(e.text, 160);
       const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8).map(scrub);
-      const change = { appeared: of('add', 'add'), removed: of('remove', 'remove'), transient: of('add', 'remove') };
+      const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
       const notices = [...seen.values()].filter((e) => e.notice && e.text.length <= 160).slice(0, 4).map(scrub);
       if (notices.length) change.notices = notices;
-      if (!config || !(change.appeared.length || change.removed.length || change.transient.length)) return null;
+      if (!config || !(change.appeared.length || change.transient.length)) return null;
       if (deliver) send('CHANGE', { seq, change });
       return { seq, change };
     };
