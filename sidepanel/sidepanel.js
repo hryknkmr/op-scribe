@@ -66,6 +66,8 @@ let summary = '';
 let source = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
+// The recording (id and revision) the preview was built from: a later change means the preview is stale.
+let previewedFrom = null;
 
 const KIND_LABELS = {
   text: '自由入力', secret: '秘匿値', email: 'メール', phone: '電話', card: 'カード', personal: '個人情報',
@@ -442,6 +444,7 @@ ui.preview.addEventListener('click', async () => {
     return;
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
+  previewedFrom = { id: prepared.rec.id, revision: prepared.rec.revision };
   ui.payload.textContent = previewed;
   ui.findings.replaceChildren();
   for (const line of describeFindings(prepared.findings)) {
@@ -478,6 +481,11 @@ ui.send.addEventListener('click', () => {
       }
       // Re-check the exact bytes about to leave, not a rebuilt object.
       const rec = await loadRecording();
+      // Recorded on after the preview (the page is still being operated): what was shown is not what would go.
+      if (!rec || rec.id !== previewedFrom?.id || rec.revision !== previewedFrom?.revision) {
+        ui.sendStatus.textContent = 'プレビューの後で記録が変わりました。閉じて、もう一度プレビューしてから送信してください';
+        return;
+      }
       const findings = scanWith(rec)(JSON.parse(body));
       if (findings.length) {
         ui.sendStatus.textContent = blockedMessage(findings);

@@ -147,12 +147,26 @@
    * tracking parameter, canonicalizing), returns the steps whose URL should be
    * updated instead of recording a new step; otherwise null.
    */
+  /**
+   * b is a cleaned-up form of a (a page dropping tracking parameters from its own URL): the same page,
+   * with only query parameters taken away, none added or changed. /search?q=red -> ?q=blue is a new page.
+   */
+  const rewrittenAs = (a, b) => {
+    if (!samePage(a, b)) return false;
+    try {
+      const before = new URL(a).searchParams;
+      return [...new URL(b).searchParams].every(([key, value]) => before.getAll(key).includes(value));
+    } catch {
+      return false;
+    }
+  };
+
   function isPageRewrite(steps, next) {
     for (let i = steps.length - 1; i >= 0; i -= 1) {
       const step = steps[i];
       if (step.type === 'screen') continue;
       if (step.type !== 'navigate') return null;
-      if (next.t - step.t > REWRITE_MS || !samePage(step.url, next.url)) return null;
+      if (next.t - step.t > REWRITE_MS || !rewrittenAs(step.url, next.url)) return null;
       return steps.slice(i);
     }
     return null;

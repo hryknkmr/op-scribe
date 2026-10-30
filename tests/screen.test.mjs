@@ -119,6 +119,12 @@ test('isPageRewrite folds a same-page URL change that no operation caused', () =
   assert.equal(folded?.length, 2);
   assert.equal(D.isPageRewrite(steps, { type: 'navigate', t: 1800, url: 'https://example.com/n/other' }), null);
   assert.equal(D.isPageRewrite([...steps, { type: 'click', t: 1000 }], { type: 'navigate', t: 1800, url: 'https://example.com/n/abc' }), null);
+  // A different query is a different page (a new search), not a cleaned-up URL.
+  const search = [{ type: 'navigate', t: 500, url: 'https://example.com/search?q=red' }];
+  assert.equal(D.isPageRewrite(search, { type: 'navigate', t: 1800, url: 'https://example.com/search?q=blue' }), null);
+  assert.equal(D.isPageRewrite(search, { type: 'navigate', t: 1800, url: 'https://example.com/search?q=red&page=2' }), null);
+  assert.equal(D.isPageRewrite([{ type: 'navigate', t: 500, url: 'https://example.com/search?q=red&utm_source=x' }],
+    { type: 'navigate', t: 1800, url: 'https://example.com/search?q=red' })?.length, 1);
 });
 
 test('a list page with lots of card text is not mistaken for a detail page', () => {

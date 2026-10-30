@@ -643,7 +643,8 @@
    * - Only text in notification areas is handed over (see finish).
    */
   const CHANGE_MS = 5000;
-  const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
+  // role and aria-live too: an element that becomes a notification area shows its text as a notice.
+  const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open', 'role', 'aria-live'];
   // Notification areas as the page declares them for assistive technology. Guessing from class names
   // (toast, notif...) also took lists of notifications, and a dialog may hold a whole list or form.
   const NOTICE = '[role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]';
@@ -696,10 +697,15 @@
     // What the notification areas already showed before the operation: shown again by a class or style
     // change (an animation), it is not something that appeared.
     // Applied once when the watch ends, whichever way the text came back (attribute, text, nodes).
+    // One reader with one time limit for all of them; past it, every notice area counts as already shown
+    // (fail-closed: nothing is taken as new that could not be compared).
     const before = new Set();
+    const baseline = textReader({ ms: 30 });
     for (const el of document.querySelectorAll(NOTICE)) {
-      if (visible(el)) lines(el).forEach((l) => before.add(l.replace(/\s+/g, '')));
+      if (baseline.late()) break;
+      if (visible(el)) lines(el, null, baseline).forEach((l) => before.add(l.replace(/\s+/g, '')));
     }
+    const unknown = baseline.cut;
     const take = (records) => {
       // One reader per batch: a style read now may change before the next batch (a toast fading in).
       const read = textReader({ ms: 30 });
@@ -743,7 +749,7 @@
       const scrub = (e) => clip(e.text, 160);
       // Only what the page shows as a notice (status, alert, toast) leaves the page as text: other text that
       // appeared (a row, a card, a body) may be anyone's, and whether it could be seen is only a best effort.
-      const isNew = (e) => e.notice && !before.has(e.text.replace(/\s+/g, ''));
+      const isNew = (e) => e.notice && !unknown && !before.has(e.text.replace(/\s+/g, ''));
       const of = (first, last) => [...seen.values()].filter((e) => isNew(e) && e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
       const notices = [...seen.values()].filter((e) => isNew(e) && e.text.length <= 160).slice(0, 4).map(scrub);
