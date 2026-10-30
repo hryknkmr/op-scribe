@@ -281,3 +281,14 @@ test('only what a notification area or a passing toast showed is the result, in 
   assert.equal(await resultOf({ appeared: ['Saved'], removed: [], notices: ['Saved'] }), '「Saved」と表示された');
   assert.equal(await resultOf({ appeared: [], removed: [], transient: ['Changes saved.'] }), '「Changes saved.」と表示された');
 });
+
+test('a URL in an answer is accepted only as a whole URL that was read', () => {
+  assert.match(N.problemsOf({ meaning: 'https://example.com/a を開く' }, 'URL: https://example.com/abc', null)[0], /URL/);
+  assert.deepEqual(N.problemsOf({ meaning: 'https://example.com/abc を開いた。' }, 'URL: https://example.com/abc', null), []);
+});
+
+test('what a status area on the reached screen says is the result, whatever its wording', async () => {
+  const withStatus = { ...units, s6: [...units.s6, { kind: 'feedback', text: '3 results', order: 3 }] };
+  const result = await N.narrate(rec, { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => withStatus[s.id] });
+  assert.equal(result.operations.find((o) => o.id === 's4').ai.result, '「3 results」と表示された');
+});

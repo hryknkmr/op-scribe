@@ -143,3 +143,17 @@ test('URLs written in text follow the URL policy when the recording hosts are gi
   // Without the hosts (in the page), text is left to the worker, which knows them.
   assert.equal(S.scrubText('https://docs.internal.test/a').text, 'https://docs.internal.test/a');
 });
+
+test('a URL nested in a URL follows the same host policy and its aliases reach the final scan', () => {
+  const ctx = { hostAllowlist: ['example.com'], aliases: {}, keywords: [] };
+  const query = S.scrubUrl('https://example.com/go?next=https%3A%2F%2Fprivate.internal.test%2Forders%2F1234567', ctx).url;
+  assert.ok(!query.includes('private.internal.test'), query);
+  assert.match(decodeURIComponent(query), /next=https:\/\/site-1\.invalid\/orders\/12\*\*\*67/);
+  const path = S.scrubUrl('https://example.com/go/https%3A%2F%2Fprivate.internal.test%2Fa', ctx).url;
+  assert.ok(!decodeURIComponent(path).includes('private.internal.test'), path);
+  const hash = S.scrubUrl('https://example.com/#/redirect/https://private.internal.test/b', ctx).url;
+  assert.equal(hash, 'https://example.com/#/redirect/https://site-1.invalid/b');
+  assert.deepEqual(ctx.aliases, { 'https://private.internal.test': 'site-1.invalid' });
+  // The real host is known now, so the final scan stops it wherever else it appears.
+  assert.equal(S.finalScan({ note: 'private.internal.test' }, { keywords: ['private.internal.test'] }).length, 1);
+});

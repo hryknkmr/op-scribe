@@ -258,6 +258,12 @@
   const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36})$/i;
   const SECRET_PARAM = /token|code|key|secret|sig|session|auth|pass|nonce|ticket|state|otp/i;
 
+  // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
+  const hostsOf = (ctx) => {
+    if (!ctx.aliases) ctx.aliases = {};
+    return { hostAllowlist: ctx.hostAllowlist, aliases: ctx.aliases };
+  };
+
   /** One path or fragment segment under the policy. */
   function scrubSegment(segment, ctx, kinds) {
     let decoded = segment;
@@ -270,7 +276,7 @@
       kinds.push('id');
       return partialId(decoded);
     }
-    const r = scrubText(decoded, { keywords: ctx.keywords });
+    const r = scrubText(decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
     if (!r.kinds.length) return segment;
     kinds.push(...r.kinds);
     return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
@@ -282,7 +288,7 @@
    */
   function scrubUrl(raw, ctx = {}) {
     const kinds = [];
-    const aliases = ctx.aliases || {};
+    const { aliases } = hostsOf(ctx);
     let url;
     try {
       url = new URL(String(raw));
@@ -313,7 +319,7 @@
         value = mark('secret');
         kinds.push('secret');
       } else if (v) {
-        const r = scrubText(v, { keywords: ctx.keywords });
+        const r = scrubText(v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
         kinds.push(...r.kinds);
         value = encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
       }
@@ -322,7 +328,14 @@
 
     // Fragments are kept like paths: SPA routes (#/settings) stay readable, ids and listed words are masked.
     let hash = '';
-    if (url.hash.length > 1) {
+    if (url.hash.includes('://')) {
+      // A URL inside the fragment (#/redirect/https://...): read as text, so its host follows the policy.
+      let decoded = url.hash.slice(1);
+      try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
+      const r = scrubText(decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+      kinds.push(...r.kinds);
+      hash = `#${r.text}`;
+    } else if (url.hash.length > 1) {
       hash = `#${url.hash.slice(1).split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/')}`;
     }
 

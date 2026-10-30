@@ -109,8 +109,10 @@ ${COMMON_RULES}`,
   function problemsOf(output, source, scan) {
     const problems = [];
     const value = typeof output === 'string' ? output : JSON.stringify(output);
-    const lower = source.toLowerCase();
-    const newUrl = (value.match(URLS) || []).find((u) => !lower.includes(u.toLowerCase()));
+    // Whole URLs only: a cut one (https://example.com/a of https://example.com/abc) was never read.
+    const urlsOf = (text) => new Set((text.match(URLS) || []).map((u) => u.replace(/[.,;:!?]+$/, '').toLowerCase()));
+    const read = urlsOf(source);
+    const newUrl = [...urlsOf(value)].find((u) => !read.has(u));
     if (newUrl) problems.push(`読んだ文章にない URL（${newUrl}）`);
     const newMark = (value.match(MARKS) || []).find((m) => !source.includes(m));
     if (newMark) problems.push(`読んだ文章にない伏せ字（${newMark}）`);
@@ -226,10 +228,10 @@ ${COMMON_RULES}`,
   const noticesOf = (change) => [...new Set([...(change?.notices || []),
     ...(change?.transient || []).filter((t) => NOTICE.test(t))])].filter((t) => t.length <= 80).slice(0, 2);
 
-  /** Notices in the screen's status and alert areas. */
+  /** What the screen's status and alert areas say: a notice by where it is, whatever its wording. */
   const feedbackOf = (units) => (units || []).filter((u) => u.kind === 'feedback')
     .flatMap((u) => String(u.text || '').split('\n')).map((t) => t.trim())
-    .filter((t) => t.length <= 80 && NOTICE.test(t)).slice(0, 2);
+    .filter((t) => t && t.length <= 80).slice(0, 2);
 
   function changeText(change) {
     if (!change) return '';

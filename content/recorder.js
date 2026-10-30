@@ -174,10 +174,18 @@
 
   // ------------------------------------------------------- screen and parts
 
-  const visible = (el) => {
+  /**
+   * Shown to the person: not hidden by itself or an ancestor (display, visibility, opacity), not placed
+   * off the page, and not shrunk to a point (text for screen readers only, which nobody sees).
+   */
+  const visible = (el, { sized = true } = {}) => {
     if (!el?.getClientRects().length) return false;
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
     const style = getComputedStyle(el);
-    return style.visibility !== 'hidden' && style.display !== 'none';
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    const rect = el.getBoundingClientRect();
+    if (rect.right + scrollX <= 0 || rect.bottom + scrollY <= 0) return false;
+    return !sized || (rect.width > 1 && rect.height > 1);
   };
   const unique = (list) => [...new Set(list.filter(Boolean))];
   const CHROME_REGION = 'nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]';
@@ -446,9 +454,10 @@
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
     // Only what was on screen: text added or changed inside something hidden never counts.
-    const shown = (node) => {
+    // sized: false for where text was removed from - emptied, it may have no height left.
+    const shown = (node, sized = true) => {
       const el = node.nodeType === 1 ? node : node.parentElement;
-      return Boolean(el) && visible(el);
+      return Boolean(el) && visible(el, { sized });
     };
     const take = (records) => {
       for (const r of records) {
@@ -460,7 +469,7 @@
         }
         // One record can both remove and add (replaceChildren): the removal came first.
         // Removed from where it was shown: the parent it left is still in the page.
-        if (shown(r.target)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
+        if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
         for (const n of r.addedNodes) if (shown(n)) lines(n).forEach((l) => note('add', l, inNotice(n)));
         if (r.type === 'characterData' && shown(r.target)) lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
       }
