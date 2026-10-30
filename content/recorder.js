@@ -330,8 +330,12 @@
       verdict.set(node, ok);
       return ok;
     };
-    /** The shown lines under a node (an element or a text node), in page order. */
-    reader.lines = (start, { claim = false } = {}) => {
+    /**
+     * The shown lines under a node (an element or a text node), in page order.
+     * skip(node): leave a shown text node out; seen(node): told each shown text node read;
+     * part(node): the text to use from it (default: all of it).
+     */
+    reader.lines = (start, { claim = false, skip, seen, part } = {}) => {
       const lines = [];
       let line = '';
       let block = null;
@@ -343,9 +347,11 @@
       const take = (node) => {
         if (claimed.has(node) || !node.textContent.trim()) return;
         if (!shown(node)) return;
+        seen?.(node);
+        if (skip?.(node)) return;
         const nodeBlock = blockOf(node.parentElement);
         if (nodeBlock !== block) { flush(); block = nodeBlock; }
-        line += node.textContent;
+        line += part ? part(node) : node.textContent;
         if (claim) claimed.add(node);
       };
       if (reader.cut) return lines;
@@ -398,8 +404,19 @@
    */
   const linkSignature = (a) => `${a.className}|${a.parentElement?.tagName}.${a.parentElement?.className}`;
 
-  function contentLinks() {
-    return [...document.querySelectorAll('a[href]')].filter((a) => !a.closest(CHROME_REGION) && visible(a));
+  /** The elements that pass a test, as many as are looked at before the deadline (the rest are not). */
+  const within = (deadline) => (list, test) => {
+    const out = [];
+    for (const el of list) {
+      if (performance.now() > deadline) break;
+      if (test(el)) out.push(el);
+    }
+    return out;
+  };
+  const unbounded = (list, test) => [...list].filter((el) => test(el));
+
+  function contentLinks(pick = unbounded) {
+    return pick(document.querySelectorAll('a[href]'), (a) => !a.closest(CHROME_REGION) && visible(a));
   }
 
   /**
@@ -419,8 +436,8 @@
    * with a row of related cards keeps its body. Each card may sit in its own wrapper (<div><article>).
    */
   const CARDS_AT = 3;
-  function articlesIn(root) {
-    const articles = [...root.querySelectorAll('article, [role="article"]')].filter((a) => visible(a));
+  function articlesIn(root, pick = unbounded) {
+    const articles = pick(root.querySelectorAll('article, [role="article"]'), (a) => visible(a));
     const rowOf = (a) => {
       let node = a;
       for (let i = 0; i < 3 && node.parentElement && node.parentElement.children.length === 1; i += 1) node = node.parentElement;
@@ -433,22 +450,23 @@
   }
 
   /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
-  function proseLength(root) {
-    const { cards } = articlesIn(root);
+  function proseLength(root, pick = unbounded) {
+    const { cards } = articlesIn(root, pick);
     let total = 0;
-    for (const p of root.querySelectorAll('p')) {
-      if (p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) continue;
+    const body = (p) => {
+      if (total > 100000 || p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) return false;
       const card = p.closest('article, [role="article"]');
-      if (card && cards.has(card)) continue;
+      if (card && cards.has(card)) return false;
       total += textOf(p).length;
-      if (total > 100000) break;
-    }
+      return true;
+    };
+    pick(root.querySelectorAll('p'), body);
     return total;
   }
 
-  function repeatedGroup() {
+  function repeatedGroup(links = contentLinks()) {
     const groups = new Map();
-    for (const a of contentLinks()) {
+    for (const a of links) {
       const key = linkSignature(a);
       if (!groups.has(key)) groups.set(key, new Set());
       groups.get(key).add(a.href);
@@ -462,14 +480,16 @@
    * Everything the side panel needs to say what this screen is and what it
    * is for. Labels only - never field values, never body text.
    */
-  function extractScreen() {
-    const collected = [...document.querySelectorAll('form, [role="search"]')].filter(visible);
+  function extractScreen(started = performance.now()) {
+    // Within the screen's time: past it, what is left is not looked at (counts stay partial).
+    const pick = within(started + SCREEN_MS);
+    const collected = pick(document.querySelectorAll('form, [role="search"]'), visible);
     const forms = collected
       .filter((el) => !collected.some((other) => other !== el && other.contains(el)))
       .slice(0, 6)
       .map((el) => {
-        const fields = [...el.querySelectorAll('input, select, textarea')]
-          .filter((f) => f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button' && visible(f))
+        const fields = pick(el.querySelectorAll('input, select, textarea'),
+          (f) => f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button' && visible(f))
           .slice(0, 12)
           .map((f) => ({ type: f.tagName === 'INPUT' ? (f.type || 'text') : f.tagName.toLowerCase(), label: clip(accessibleName(f), 30) }));
         const submit = el.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
@@ -484,27 +504,27 @@
       })
       .filter((form) => form.fields.length);
 
-    const buttons = unique([...document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]')]
-      .filter((b) => visible(b) && !b.closest('[contenteditable="true"]') && !isContentButton(b))
+    const buttons = unique(pick(document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'),
+      (b) => visible(b) && !b.closest('[contenteditable="true"]') && !isContentButton(b))
       .map((b) => clip(accessibleName(b), 30)))
       .slice(0, 15);
-    const navLinks = unique([...document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]')]
-      .filter(visible)
+    const navLinks = unique(pick(document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]'), visible)
       .map((a) => clip(accessibleName(a), 20)))
       .slice(0, 10);
     // Section names only. Headings in an article, an editor, a card (inside or around a
     // link) or a list item are content - other people's titles - not part of the UI.
-    const headings = unique([...document.querySelectorAll('h2, h3')]
-      .filter((h) => visible(h) && !h.closest('article, [contenteditable="true"], a, li') && !h.querySelector('a'))
+    const headings = unique(pick(document.querySelectorAll('h2, h3'),
+      (h) => visible(h) && !h.closest('article, [contenteditable="true"], a, li') && !h.querySelector('a'))
       .map((h) => clip(textOf(h), 30)))
       .slice(0, 6);
-    const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]')]
-      .filter(visible).map(regionName).slice(0, 3);
-    const editor = [...document.querySelectorAll('[contenteditable="true"], textarea')]
-      .some((el) => visible(el) && el.getBoundingClientRect().height > 120);
-    const h1 = [...document.querySelectorAll('h1')].find(visible);
+    const dialogs = pick(document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]'), visible)
+      .map(regionName).slice(0, 3);
+    const editor = pick(document.querySelectorAll('[contenteditable="true"], textarea'),
+      (el) => visible(el) && el.getBoundingClientRect().height > 120).length > 0;
+    const h1 = pick(document.querySelectorAll('h1'), visible)[0];
     const main = document.querySelector('main, [role="main"]') || document.body;
-    const articles = articlesIn(main).main.length;
+    const articles = articlesIn(main, pick).main.length;
+    const links = contentLinks(pick);
 
     return {
       url: location.href,
@@ -519,10 +539,10 @@
       editor,
       article: articles > 0 && (main.innerText || '').length > 800,
       textLength: (main.innerText || '').length,
-      prose: proseLength(main),
-      tables: [...document.querySelectorAll('table')].filter(visible).length,
-      links: contentLinks().length,
-      repeated: repeatedGroup()
+      prose: proseLength(main, pick),
+      tables: pick(document.querySelectorAll('table'), visible).length,
+      links: links.length,
+      repeated: repeatedGroup(links)
     };
   }
 
@@ -604,7 +624,7 @@
     }
     // Lists: groups of links rendered by the same component, read as one unit per group.
     const groups = new Map();
-    for (const a of reader.late() ? [] : contentLinks()) {
+    for (const a of reader.late() ? [] : contentLinks(within(started + SCREEN_MS))) {
       const key = linkSignature(a);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(a);
@@ -681,10 +701,11 @@
     };
     // parent: where a removed text node was (it has no parentElement any more).
     // read: the text reader of this batch, for what is still in the page (only shown text is read).
-    const lines = (node, parent = null, read = null) => {
+    // options: for notification areas, only what is new (see fresh).
+    const lines = (node, parent = null, read = null, options = undefined) => {
       const el = node.nodeType === 1 ? node : node.parentElement || parent;
       if (!el || el.closest('[contenteditable="true"]')) return [];
-      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node).filter((l) => l.length > 1);
+      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node, options).filter((l) => l.length > 1);
       const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : detachedText(el);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
@@ -699,13 +720,25 @@
     // Applied once when the watch ends, whichever way the text came back (attribute, text, nodes).
     // One reader with one time limit for all of them; past it, every notice area counts as already shown
     // (fail-closed: nothing is taken as new that could not be compared).
-    const before = new Set();
+    // Kept per text node, not per line: a notice that adds 保存しました after 担当: A gives only 保存しました.
+    const shownBefore = new Map();
     const baseline = textReader({ ms: 30 });
     for (const el of document.querySelectorAll(NOTICE)) {
       if (baseline.late()) break;
-      if (visible(el)) lines(el, null, baseline).forEach((l) => before.add(l.replace(/\s+/g, '')));
+      if (visible(el)) baseline.lines(el, { seen: (n) => shownBefore.set(n, n.data) });
     }
     const unknown = baseline.cut;
+    /** In a notification area, only text not shown there before the operation: new nodes, and what was added to old ones. */
+    const fresh = {
+      skip: (n) => shownBefore.get(n) === n.data,
+      part: (n) => {
+        const old = shownBefore.get(n);
+        if (old === undefined) return n.data;
+        if (n.data.startsWith(old)) return n.data.slice(old.length);
+        if (n.data.endsWith(old)) return n.data.slice(0, n.data.length - old.length);
+        return n.data;
+      }
+    };
     const take = (records) => {
       // One reader per batch: a style read now may change before the next batch (a toast fading in).
       const read = textReader({ ms: 30 });
@@ -713,7 +746,7 @@
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || (el.textContent || '').length > 300) continue;
-          if (visible(el)) lines(el, null, read).forEach((l) => note('add', l, true));
+          if (visible(el)) lines(el, null, read, fresh).forEach((l) => note('add', l, true));
           // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
           else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
@@ -729,12 +762,14 @@
           // wrapper itself may have no box (display: contents, only positioned children).
           if (n.nodeType === 1 && !inNotice(n)) {
             for (const inner of [...n.querySelectorAll(NOTICE)].slice(0, 10)) {
-              if (visible(inner)) lines(inner, null, read).forEach((l) => note('add', l, true));
+              if (visible(inner)) lines(inner, null, read, fresh).forEach((l) => note('add', l, true));
             }
           }
-          if (shown(n)) lines(n, null, read).forEach((l) => note('add', l, inNotice(n)));
+          if (shown(n)) lines(n, null, read, inNotice(n) ? fresh : undefined).forEach((l) => note('add', l, inNotice(n)));
         }
-        if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l, inNotice(r.target)));
+        if (r.type === 'characterData' && shown(r.target)) {
+          lines(r.target, null, read, inNotice(r.target) ? fresh : undefined).forEach((l) => note('add', l, inNotice(r.target)));
+        }
       }
     };
     const observer = new MutationObserver(take);
@@ -749,7 +784,7 @@
       const scrub = (e) => clip(e.text, 160);
       // Only what the page shows as a notice (status, alert, toast) leaves the page as text: other text that
       // appeared (a row, a card, a body) may be anyone's, and whether it could be seen is only a best effort.
-      const isNew = (e) => e.notice && !unknown && !before.has(e.text.replace(/\s+/g, ''));
+      const isNew = (e) => e.notice && !unknown;
       const of = (first, last) => [...seen.values()].filter((e) => isNew(e) && e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
       const notices = [...seen.values()].filter((e) => isNew(e) && e.text.length <= 160).slice(0, 4).map(scrub);
@@ -796,7 +831,7 @@
     if (key === screenKey && !force) return;
     screenKey = key;
     const started = performance.now();
-    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(), units: extractUnits(started) });
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(started), units: extractUnits(started) });
   }
 
   /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
@@ -1015,7 +1050,7 @@
       // The last operation's change is handed over too: it would arrive after the recording stopped.
       const pending = finishChange?.(false) || null;
       const started = performance.now();
-      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits(started), pending } : null);
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(started), units: extractUnits(started), pending } : null);
     }
     if (message.type === 'OPS_STOP') {
       config = null;

@@ -123,6 +123,7 @@ test('isPageRewrite folds a same-page URL change that no operation caused', () =
   const search = [{ type: 'navigate', t: 500, url: 'https://example.com/search?q=red' }];
   assert.equal(D.isPageRewrite(search, { type: 'navigate', t: 1800, url: 'https://example.com/search?q=blue' }), null);
   assert.equal(D.isPageRewrite(search, { type: 'navigate', t: 1800, url: 'https://example.com/search?q=red&page=2' }), null);
+  assert.equal(D.isPageRewrite(search, { type: 'navigate', t: 1800, url: 'https://example.com/search?q=red&q=red' }), null);
   assert.equal(D.isPageRewrite([{ type: 'navigate', t: 500, url: 'https://example.com/search?q=red&utm_source=x' }],
     { type: 'navigate', t: 1800, url: 'https://example.com/search?q=red' })?.length, 1);
 });

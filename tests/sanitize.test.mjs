@@ -140,6 +140,9 @@ test('URLs written in text follow the URL policy when the recording hosts are gi
   assert.ok(r.kinds.includes('host'));
   // The same host is given the same alias, and a trailing period stays outside the URL.
   assert.equal(S.scrubText('再掲: HTTPS://docs.internal.test/a.', { hosts }).text, '再掲: https://site-1.invalid/a.');
+  // Scheme-relative URLs too, under the same alias; a path with // inside is not a URL.
+  assert.equal(S.scrubText('通知: //docs.internal.test/orders/1234567 を開く', { hosts }).text, '通知: //site-1.invalid/orders/12***67 を開く');
+  assert.equal(S.scrubText('a/b//c と 1//2', { hosts }).text, 'a/b//c と 1//2');
   // Without the hosts (in the page), text is left to the worker, which knows them.
   assert.equal(S.scrubText('https://docs.internal.test/a').text, 'https://docs.internal.test/a');
 });

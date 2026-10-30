@@ -121,7 +121,8 @@
    * Applies the policy to free text. Masking runs before truncation so a cut
    * can never expose half an address.
    */
-  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+/gi;
+  // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme).
+  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/gi;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
@@ -135,9 +136,10 @@
     if (opts.hosts) {
       text = text.replace(TEXT_URL, (match) => {
         const [, url, tail] = match.match(/^(.*?)([.,;:!?]*)$/);
-        const r = scrubUrl(url, { ...opts.hosts, keywords: opts.keywords });
+        const relative = url.startsWith('//');
+        const r = scrubUrl(relative ? `https:${url}` : url, { ...opts.hosts, keywords: opts.keywords });
         kinds.push(...r.kinds);
-        return `${r.url}${tail}`;
+        return `${relative ? r.url.replace(/^https:/, '') : r.url}${tail}`;
       });
     }
 

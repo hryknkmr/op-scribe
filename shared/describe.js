@@ -154,8 +154,15 @@
   const rewrittenAs = (a, b) => {
     if (!samePage(a, b)) return false;
     try {
-      const before = new URL(a).searchParams;
-      return [...new URL(b).searchParams].every(([key, value]) => before.getAll(key).includes(value));
+      // Counted, not just looked up: ?tag=a -> ?tag=a&tag=a adds a parameter.
+      const left = new Map();
+      for (const [key, value] of new URL(a).searchParams) left.set(`${key}=${value}`, (left.get(`${key}=${value}`) || 0) + 1);
+      for (const [key, value] of new URL(b).searchParams) {
+        const n = left.get(`${key}=${value}`) || 0;
+        if (!n) return false;
+        left.set(`${key}=${value}`, n - 1);
+      }
+      return true;
     } catch {
       return false;
     }
