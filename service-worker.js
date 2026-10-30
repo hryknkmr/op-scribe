@@ -401,9 +401,8 @@ async function verbalize() {
   }));
   const kept = await mutate(async (latest) => {
     if (!latest || latest.id !== rec.id) return null;
-    // A step deleted while the model was reading: the result may quote what was deleted.
-    const ids = new Set(latest.steps.map((s) => s.id));
-    if (rec.steps.some((s) => !ids.has(s.id))) return null;
+    // The recording changed while the model was reading: a deleted step may be quoted, an added one missing.
+    if (latest.steps.map((s) => s.id).join() !== rec.steps.map((s) => s.id).join()) return null;
     const { screens = [], operations = [], ...narration } = result;
     // Keep the understanding on the steps themselves so Gherkin, the side panel and the payload carry it.
     for (const s of screens) {
@@ -443,8 +442,10 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
-  // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`));
+  // Steps on other sites are never handed to this page, nor the model's text: it was written
+  // from neighbouring screens too, which may be on other sites.
+  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`)).map(({ ai, ...step }) => (
+    step.screen ? { ...step, screen: { ...step.screen, ai: undefined } } : step));
   const scan = scanFor(rec, settings);
 
   if (op === 'status') {

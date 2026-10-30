@@ -349,8 +349,10 @@
     const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
 
     const h1 = all('h1')[0];
-    // Decoded so the model can read it (/wiki/%E3%83%A1... -> /wiki/メインページ); scrubbed by push like any text.
-    let path = location.pathname;
+    // Under the URL policy first (ids and @handles partly hidden, like every recorded URL),
+    // then decoded so the model can read it (/wiki/%E3%83%A1... -> /wiki/メインページ).
+    let path = '';
+    try { path = new URL(S.scrubUrl(location.href, { keywords: config?.keywords }).url).pathname; } catch { /* not a web page */ }
     try { path = decodeURIComponent(path); } catch { /* malformed: keep as is */ }
     push('page', '', [`タイトル: ${document.title}`, h1 ? `主見出し: ${textOf(h1)}` : '', `パス: ${path}`].filter(Boolean));
     for (const el of all('[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]')) push('feedback', '', el);

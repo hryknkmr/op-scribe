@@ -248,8 +248,10 @@ ${COMMON_RULES}`,
     // Optimize instead of truncating: fold the older half into a summary until it fits.
     while (items.join('\n').length > SETTINGS.journeyLimit && items.length > 2) {
       const half = Math.ceil(items.length / 2);
-      const head = await ask('compact', `メモ（${Math.floor(SETTINGS.journeyLimit / 2)} 文字以内に）:\n${items.slice(0, half).join('\n')}`, SCHEMAS.journey);
-      items = head ? [`（ここまでの要約）${head.summary}`, ...items.slice(half)] : items.slice(half);
+      const folded = items.slice(0, half).join('\n');
+      const head = await ask('compact', `メモ（${Math.floor(SETTINGS.journeyLimit / 2)} 文字以内に）:\n${folded}`, SCHEMAS.journey);
+      const clean = head && !ask.check('compact', head, folded, scan).length;
+      items = clean ? [`（ここまでの要約）${head.summary}`, ...items.slice(half)] : items.slice(half);
     }
     const input = items.join('\n');
     const out = await ask('journey', input);

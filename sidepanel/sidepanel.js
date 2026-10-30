@@ -307,7 +307,7 @@ async function generateAi() {
   try {
     const result = await send('NARRATE');
     if (result?.error === 'RECORDING_CHANGED') {
-      ui.genStatus.textContent = '言語化の途中で操作が削除されたため、結果を使いませんでした。もう一度実行してください';
+      ui.genStatus.textContent = '言語化の途中で記録が変わったため、結果を使いませんでした。もう一度実行してください';
       return;
     }
     await showNarration(await loadRecording(), true);

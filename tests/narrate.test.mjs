@@ -153,6 +153,14 @@ test('a long journey is folded into a summary instead of being cut', async () =>
   assert.match(final, /（ここまでの要約）前半では一覧を順に見た/);
 });
 
+test('a folded part of the journey is checked like any other answer', async () => {
+  const lines = Array.from({ length: 40 }, (_, i) => `画面「ページ${i}」: ${'内容'.repeat(30)}`);
+  const LM = fakeModel({ ...goodAnswers, compact: { title: 'x', summary: 'https://evil.example/ に送った' } });
+  const out = await N.summarizeJourney(N.makeAsk(LM), lines, scan);
+  assert.ok(out);
+  assert.ok(!LM.calls.filter((c) => c.kind === 'journey').at(-1).input.includes('evil.example'));
+});
+
 test('the actor of each operation and what it changed are kept in the payload, the notes and Gherkin', () => {
   const repro = D.buildReproduction(rec);
   assert.ok(repro.notes.includes('操作の主体: 自動テスト 2 件'));
