@@ -102,9 +102,7 @@ const lines = (text) => String(text || '').split('\n').map((s) => s.trim()).filt
 
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanKeywords(rec) {
-  const hosts = Object.keys(rec?.aliases || {}).map((origin) => {
-    try { return new URL(origin).hostname; } catch { return ''; }
-  });
+  const hosts = S.aliasedHosts(rec?.aliases).map(([host]) => host);
   return [...settings.keywords, ...hosts].filter(Boolean);
 }
 

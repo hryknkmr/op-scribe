@@ -170,4 +170,16 @@ test('IPv6 addresses are partly hidden, times and scope operators are not', () =
   assert.equal(S.scrubText('接続先 fd00::1 と 2001:db8:0:0:0:0:0:1').text, '接続先 fd00:*:* と 2001:*:*:*:*:*:*:*');
   for (const text of ['10:30:00 に開始', 'std::vector', 'Note:: 備考']) assert.equal(S.scrubText(text).text, text, text);
   assert.deepEqual(S.finalScan({ v: 'fd00::1' }).map((f) => f.kinds), [['ip']]);
+  // Ending in an IPv4 address: taken whole as IPv6, not as an IPv4 address with a prefix.
+  assert.equal(S.scrubText('2001:db8:1:2:3:4:192.0.2.33 と ::ffff:192.0.2.1').text, '2001:*:*:*:*:*:* と :*:*:*');
+  assert.deepEqual(S.finalScan({ v: '2001:db8:1:2:3:4:192.0.2.33' }).map((f) => f.kinds), [['ip']]);
+});
+
+test('a host with non-ASCII letters is aliased and scanned in both its Punycode and its Unicode form', () => {
+  const hosts = { hostAllowlist: ['example.com'], aliases: {} };
+  S.scrubText('https://münich.example/a', { hosts });
+  assert.deepEqual(S.aliasedHosts(hosts.aliases).map(([host]) => host).sort(), ['münich.example', 'xn--mnich-kva.example']);
+  assert.equal(S.scrubText('本文: münich.example と xn--mnich-kva.example', { hosts }).text, '本文: site-1.invalid と site-1.invalid');
+  const keywords = S.aliasedHosts(hosts.aliases).map(([host]) => host);
+  assert.deepEqual(S.finalScan({ v: 'münich.example' }, { keywords }).map((f) => f.kinds), [['keyword']]);
 });

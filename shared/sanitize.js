@@ -104,14 +104,64 @@
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, replace: (m) => partialId(m, 4, 4) },
-    { kind: 'ip', re: /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g, replace: partialIp },
-    // IPv6 written out (eight groups) or shortened with ::. Three groups of digits (10:30:00) is a time.
+    // IPv6 first, so one ending in an IPv4 address (2001:db8::192.0.2.33) is taken whole.
+    // Written out, shortened with ::, or ending in IPv4. Three groups of digits (10:30:00) is a time.
+    { kind: 'ip', re: /(?<![\w:.])(?:[0-9a-f]{0,4}:){2,6}(?:\d{1,3}\.){3}\d{1,3}(?![\w.])/gi,
+      accept: (m) => m.includes('::') || m.split(':').length === 7, replace: partialIp6 },
     { kind: 'ip', re: /(?<![\w:.])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4})(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi, replace: partialIp6 },
+    { kind: 'ip', re: /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g, replace: partialIp },
     { kind: 'id', re: /\b[0-9a-f]{24,}\b/gi, replace: (m) => partialId(m, 4, 4) },
     { kind: 'id', re: /(?<!\d)\d{7,}(?!\d)/g, replace: (m) => partialId(m) }
   ];
 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  /** One Punycode label (RFC 3492) as Unicode: xn--mnich-kva -> münich. Malformed input is returned as is. */
+  function punyLabel(label) {
+    if (!/^xn--/i.test(label)) return label;
+    const input = label.slice(4).toLowerCase();
+    const cut = input.lastIndexOf('-');
+    const out = cut > 0 ? [...input.slice(0, cut)] : [];
+    let n = 128, bias = 72, i = 0;
+    const digit = (c) => (c >= 48 && c <= 57 ? c - 22 : c >= 97 && c <= 122 ? c - 97 : 36);
+    for (let pos = cut > 0 ? cut + 1 : 0; pos < input.length;) {
+      const old = i;
+      for (let w = 1, k = 36; ; k += 36) {
+        if (pos >= input.length) return label;
+        const d = digit(input.charCodeAt(pos++));
+        if (d >= 36) return label;
+        i += d * w;
+        const t = k <= bias ? 1 : k >= bias + 26 ? 26 : k - bias;
+        if (d < t) break;
+        w *= 36 - t;
+      }
+      let delta = old === 0 ? Math.floor((i - old) / 700) : (i - old) >> 1;
+      delta += Math.floor(delta / (out.length + 1));
+      let k = 0;
+      for (; delta > 455; k += 36) delta = Math.floor(delta / 35);
+      bias = k + Math.floor((36 * delta) / (delta + 38));
+      n += Math.floor(i / (out.length + 1));
+      i %= out.length + 1;
+      out.splice(i++, 0, String.fromCodePoint(n));
+    }
+    return out.join('');
+  }
+
+  /**
+   * The names of the real hosts a recording aliased, as [name, alias], longest first. A host with
+   * non-ASCII letters is kept in URLs as Punycode (xn--...) but shown in text in Unicode: both forms.
+   */
+  function aliasedHosts(aliases = {}) {
+    const out = [];
+    for (const [origin, alias] of Object.entries(aliases)) {
+      let host;
+      try { host = new URL(origin).hostname; } catch { continue; }
+      out.push([host, alias]);
+      const shown = host.split('.').map(punyLabel).join('.');
+      if (shown !== host) out.push([shown, alias]);
+    }
+    return out.sort((a, b) => b[0].length - a[0].length);
+  }
 
   function keywordPattern(keywords) {
     const list = (keywords || [])
@@ -148,10 +198,7 @@
       });
       // A real host the recording has aliased, written without a URL (internal.test), is aliased too.
       // Longest first, so a.internal.test is not cut to a.site-1.invalid.
-      const known = Object.entries(opts.hosts.aliases || {}).map(([origin, alias]) => {
-        try { return [new URL(origin).hostname, alias]; } catch { return null; }
-      }).filter(Boolean).sort((a, b) => b[0].length - a[0].length);
-      for (const [host, alias] of known) {
+      for (const [host, alias] of aliasedHosts(opts.hosts.aliases)) {
         text = text.replace(new RegExp(`(?<![\\w.-])${escapeRe(host)}(?![\\w-])`, 'gi'), () => {
           kinds.push('host');
           return alias;
@@ -402,6 +449,7 @@
     maskArgs,
     scrubUrl,
     hostAllowed,
+    aliasedHosts,
     finalScan
   };
 

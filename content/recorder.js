@@ -721,19 +721,49 @@
       if (visible(el)) regionBefore.set(el, baseline.lines(el).join('\n'));
     }
     const unknown = baseline.cut;
-    /** now without what it shares with old at either end (担当: A / 状態: 処理中 -> 担当: A / 状態: 完了 gives 完了). */
-    const changed = (old, now) => {
-      let start = 0;
-      while (start < old.length && start < now.length && old[start] === now[start]) start += 1;
-      let end = 0;
-      while (end < old.length - start && end < now.length - start && old[old.length - 1 - end] === now[now.length - 1 - end]) end += 1;
-      return now.slice(start, now.length - end);
+    // A notice compared word by word: split at spaces and punctuation, the separators kept to rejoin it.
+    const SEPARATOR = /([\s/|:：・、。,，()（）「」『』[\]]+)/;
+    const EDGES = /^[\s/|:：・、。,，()（）「」『』[\]]+|[\s/|:：・、。,，()（）「」『』[\]]+$/g;
+    /**
+     * The words of now that are not in old (by their longest common sequence), each run of them rejoined as it
+     * reads, one run per line: 担当: A / 顧客: B / 状態: 待機中 -> 担当: C / 顧客: B / 状態: 完了 gives C and 完了.
+     * Too long to compare: nothing (fail-closed).
+     */
+    const added = (old, now) => {
+      const before = old.split(SEPARATOR).filter((part, i) => i % 2 === 0 && part);
+      const parts = now.split(SEPARATOR);  // word, separator, word, ...
+      const at = parts.map((part, i) => (i % 2 === 0 && part ? i : -1)).filter((i) => i >= 0);
+      if (before.length * at.length > 40000) return '';
+      const table = Array.from({ length: before.length + 1 }, () => new Array(at.length + 1).fill(0));
+      for (let i = before.length - 1; i >= 0; i -= 1) {
+        for (let j = at.length - 1; j >= 0; j -= 1) {
+          table[i][j] = before[i] === parts[at[j]] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+        }
+      }
+      const kept = new Set();
+      for (let i = 0, j = 0; i < before.length && j < at.length;) {
+        if (before[i] === parts[at[j]]) { kept.add(at[j]); i += 1; j += 1; } else if (table[i + 1][j] >= table[i][j + 1]) i += 1; else j += 1;
+      }
+      const runs = [];
+      let run = '';
+      const flush = () => {
+        const text = run.replace(EDGES, '');
+        if (text) runs.push(text);
+        run = '';
+      };
+      parts.forEach((part, i) => {
+        if (i % 2 === 1) run += run ? part : '';
+        else if (part && kept.has(i)) flush();
+        else run += part;
+      });
+      flush();
+      return runs.join('\n');
     };
     /** What a notification area shows that it did not before the operation, noted as notices. */
     const noteRegion = (region, read) => {
       if (!region || !visible(region)) return;
       const now = lines(region, null, read).join('\n');
-      changed(regionBefore.get(region) || '', now).split('\n').map((l) => l.replace(/\s+/g, ' ').trim())
+      added(regionBefore.get(region) || '', now).split('\n').map((l) => l.replace(/\s+/g, ' ').trim())
         .filter((l) => l.length > 1).forEach((l) => note('add', l, true));
     };
     const regionOf = (node) => (node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE) || null;

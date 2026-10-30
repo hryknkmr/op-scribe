@@ -11,7 +11,7 @@
  */
 importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js', 'shared/units.js', 'shared/narrate.js');
 
-const { scrubText, scrubUrl, defaults, finalScan } = self.OpScribeSanitize;
+const { scrubText, scrubUrl, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
 const { narrate } = self.OpScribeNarrate;
 const { buildReproduction, toMarkdown, toGherkin, isPageRewrite } = self.OpScribeDescribe;
 const { classifyScreen, describeComponents } = self.OpScribeScreen;
@@ -378,9 +378,7 @@ const stop = async () => {
 
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanFor(rec, settings) {
-  const hosts = Object.keys(rec.aliases || {}).map((origin) => {
-    try { return new URL(origin).hostname; } catch { return ''; }
-  });
+  const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
   const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
   return (value) => finalScan(value, { keywords });
 }
