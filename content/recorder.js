@@ -209,10 +209,13 @@
       // Effects whose visible area is not computed here: not read rather than guessed.
       if (st.clipPath !== 'none' || (st.maskImage && st.maskImage !== 'none')) return false;
       if ((st.position === 'absolute' || st.position === 'fixed') && st.clip && st.clip !== 'auto') return false;
+      if (/opacity\(\s*0(\.0*)?%?\s*\)/.test(st.filter || '')) return false;
       let inner = null;
       for (const [axis, lo, hi, offset, size] of AXES) {
         const overflow = st[`overflow${axis}`];
         if (overflow === 'visible') continue;
+        // A scaled or rotated area clips along edges this box does not describe: not read rather than guessed.
+        if (!inner && st.transform !== 'none') return false;
         inner ||= paddingBox(el);
         if (CUTS.test(overflow)) {
           if (box[lo] < inner[lo] - 0.5 || box[hi] > inner[hi] + 0.5) return false;
@@ -231,18 +234,30 @@
     const bodyStyle = document.body ? style(document.body) : pageStyle;
     for (const [axis, lo, hi, scroll, size, view] of [['X', 'left', 'right', scrollX, 'scrollWidth', innerWidth], ['Y', 'top', 'bottom', scrollY, 'scrollHeight', innerHeight]]) {
       const locked = CUTS.test(pageStyle[`overflow${axis}`]) || CUTS.test(bodyStyle[`overflow${axis}`]);
+      // Wholly inside: text partly off the screen (fixed) or off the page shows only in part.
       if (fixed || locked) {
-        if (box[hi] <= 0 || box[lo] >= view) return false;
-      } else if (box[hi] + scroll <= 0 || box[lo] + scroll >= page[size]) return false;
+        if (box[lo] < -0.5 || box[hi] > view + 0.5) return false;
+      } else if (box[lo] + scroll < -0.5 || box[hi] + scroll > page[size] + 0.5) return false;
     }
     return true;
   }
+
+  // Styles read during one task, shared by the checks of that task (hundreds of links share their
+  // ancestors). Dropped when the task ends: the page may change them before the next one.
+  let sharedMemo = null;
+  const taskMemo = () => {
+    if (!sharedMemo) {
+      sharedMemo = new Map();
+      setTimeout(() => { sharedMemo = null; }, 0);
+    }
+    return sharedMemo;
+  };
 
   /** An element shown to the person (see above); sized: false for one that may have been emptied. */
   // Also used as a filter callback ((el, index, array)): anything but an options object and a Map is ignored.
   const visible = (el, options, memo) => {
     const sized = !(options && typeof options === 'object' && !Array.isArray(options) && options.sized === false);
-    if (!(memo instanceof Map)) memo = undefined;
+    if (!(memo instanceof Map)) memo = taskMemo();
     if (!el?.getClientRects().length) return false;
     if (el.checkVisibility && !el.checkVisibility(PAINTED)) return false;
     const style = getComputedStyle(el);
@@ -253,6 +268,8 @@
     return !el.parentElement || reachable(el.parentElement, rect, memo);
   };
 
+  // Time for reading one screen (its structure and its text), so a large page is not held up for long.
+  const SCREEN_MS = 150;
   // Text nodes inside these are not screen text: code, a closed box's other choices, typed values.
   const NOT_TEXT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SELECT', 'DATALIST', 'TEXTAREA', 'OPTION']);
   const INLINE = /^(inline|inline-block|inline-flex|inline-grid|contents|ruby|ruby-text)$/;
@@ -262,12 +279,17 @@
    * shown and reachable. Stops for good at the deadline (fail-closed: nothing after that point is read).
    * claimed: text nodes already given to a unit, so each is read once, by the most specific unit.
    */
-  function textReader({ ms = 150 } = {}) {
+  function textReader({ ms = SCREEN_MS } = {}) {
     const deadline = performance.now() + ms;
-    const memo = new Map();
+    const memo = taskMemo();
     const verdict = new Map();
     const claimed = new Set();
     const reader = { cut: false };
+    /** Past the deadline: everything after this point is left out (fail-closed), also by other callers. */
+    reader.late = () => {
+      if (!reader.cut && performance.now() > deadline) reader.cut = true;
+      return reader.cut;
+    };
     const style = (el) => {
       if (!memo.has(el)) memo.set(el, getComputedStyle(el));
       return memo.get(el);
@@ -290,7 +312,10 @@
     const shown = (node) => {
       if (verdict.has(node)) return verdict.get(node);
       const parent = node.parentElement;
-      let ok = Boolean(parent) && painted(parent);
+      // Text drawn in a fully transparent colour is not seen either.
+      const ink = parent && style(parent);
+      const clear = (color) => /^(transparent|rgba\([^)]*,\s*0(\.0*)?\)|rgb\([^)]*\/\s*0(\.0*)?%?\))$/.test(String(color || '').trim());
+      let ok = Boolean(parent) && painted(parent) && !clear(ink.color) && !clear(ink.webkitTextFillColor || ink.color);
       if (ok) {
         const range = document.createRange();
         range.selectNodeContents(node);
@@ -331,7 +356,7 @@
           ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
       });
       for (let node = walker.currentNode; node; node = walker.nextNode()) {
-        if (performance.now() > deadline) { reader.cut = true; break; }
+        if (reader.late()) break;
         if (node.nodeType === 3) take(node);
         else if (node.tagName === 'BR') flush();
       }
@@ -528,23 +553,25 @@
    * Only lines are read, never field values; credentials and partial ids are
    * masked before anything leaves the page.
    */
-  function extractUnits() {
+  /** started: when reading this screen began; the units get what is left of the screen's time. */
+  function extractUnits(started = performance.now()) {
     const units = [];
     let order = 0;
     let budget = MAX_UNIT_CHARS;
     // Each text node goes to the first unit that reads it, so the same words in two places are both kept.
-    const reader = textReader();
-    const memo = new Map();
+    const reader = textReader({ ms: Math.max(30, SCREEN_MS - (performance.now() - started)) });
+    const memo = taskMemo();
     const linesOf = (el) => splitGluedLinks(el, reader.lines(el, { claim: true }));
     const push = (kind, name, el, extra = {}) => {
-      if (budget <= 0) return;
+      if (budget <= 0 || (kind !== 'page' && reader.late())) return;
       const lines = Array.isArray(el) ? el : linesOf(el);
       if (!lines.length) return;
       const text = lines.map((l) => clip(l, MAX_LINE)).join('\n').slice(0, budget);
       budget -= text.length;
       units.push({ kind, name: clip(name, 60), text, order: order++, ...extra });
     };
-    const all = (selector) => [...document.querySelectorAll(selector)].filter((el) => visible(el, {}, memo));
+    // The time limit covers looking for the units too: past it, nothing more is looked at.
+    const all = (selector) => (reader.late() ? [] : [...document.querySelectorAll(selector)].filter((el) => !reader.late() && visible(el, {}, memo)));
 
     const h1 = all('h1')[0];
     // Under the URL policy first (ids and @handles partly hidden, like every recorded URL),
@@ -560,17 +587,18 @@
       const fields = [...form.querySelectorAll('input, select, textarea')]
         .filter((f) => f.type !== 'hidden' && visible(f))
         .map((f) => {
-          // Only the choice shown in the closed box, masked like any field value; the others are not on screen.
-          const chosen = f.tagName === 'SELECT' && f.selectedOptions[0]
-            ? S.maskFieldValue(f.selectedOptions[0].text.trim(), fieldMeta(f), config)?.value : '';
-          const options = chosen ? `（表示中の選択: ${chosen}）` : '';
+          // What is chosen, masked like any field value. The other choices are not read, also in a list box
+          // (size > 1, multiple) where some of them are on screen.
+          const chosen = f.tagName === 'SELECT'
+            ? [...f.selectedOptions].slice(0, 5).map((o) => S.maskFieldValue(o.text.trim(), fieldMeta(f), config)?.value).filter(Boolean) : [];
+          const options = chosen.length ? `（選択中: ${chosen.join(' / ')}）` : '';
           return `${accessibleName(f) || '(無名)'} [${f.type || f.tagName.toLowerCase()}]${options}`;
         });
       push('form', regionName(form), [...fields, ...linesOf(form)]);
     }
     // Lists: groups of links rendered by the same component, read as one unit per group.
     const groups = new Map();
-    for (const a of contentLinks()) {
+    for (const a of reader.late() ? [] : contentLinks()) {
       const key = linkSignature(a);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(a);
@@ -606,6 +634,7 @@
    * - Text that appears and is gone again before the watch ends (a toast) is
    *   kept as transient; text removed and put back (a re-rendered list) is not a change.
    * - Notification areas shown or hidden by attributes (class, hidden, ...) count too.
+   * - Only text in notification areas is handed over (see finish).
    */
   const CHANGE_MS = 5000;
   const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open'];
@@ -688,7 +717,9 @@
       take(observer.takeRecords());
       observer.disconnect();
       const scrub = (e) => clip(e.text, 160);
-      const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8).map(scrub);
+      // Only what the page shows as a notice (status, alert, toast) leaves the page as text: other text that
+      // appeared (a row, a card, a body) may be anyone's, and whether it could be seen is only a best effort.
+      const of = (first, last) => [...seen.values()].filter((e) => e.notice && e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
       const notices = [...seen.values()].filter((e) => e.notice && e.text.length <= 160).slice(0, 4).map(scrub);
       if (notices.length) change.notices = notices;
@@ -733,7 +764,8 @@
     const key = currentKey();
     if (key === screenKey && !force) return;
     screenKey = key;
-    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(), units: extractUnits() });
+    const started = performance.now();
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(), units: extractUnits(started) });
   }
 
   /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
@@ -951,7 +983,8 @@
       // Recording is about to stop: hand over the screen as it is now.
       // The last operation's change is handed over too: it would arrive after the recording stopped.
       const pending = finishChange?.(false) || null;
-      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits(), pending } : null);
+      const started = performance.now();
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(), units: extractUnits(started), pending } : null);
     }
     if (message.type === 'OPS_STOP') {
       config = null;
