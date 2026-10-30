@@ -414,15 +414,18 @@
     // whitespace-free text -> { text, first, last }. Removed nodes are detached, so their
     // innerText loses the cell/line spacing: lines are compared without whitespace.
     const seen = new Map();
-    const note = (kind, text) => {
+    // notice: shown in a notification area (status, alert, toast), so it is the page telling the result.
+    const note = (kind, text, notice = false) => {
       const k = text.replace(/\s+/g, '');
       const entry = seen.get(k);
-      if (!entry) seen.set(k, { text, first: kind, last: kind });
+      if (!entry) seen.set(k, { text, first: kind, last: kind, notice: notice && kind === 'add' });
       else {
         entry.last = kind;
         if (kind === 'add') entry.text = text;  // attached text keeps its spacing
+        if (notice && kind === 'add') entry.notice = true;
       }
     };
+    const inNotice = (node) => Boolean((node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE));
     const lines = (node) => {
       const el = node.nodeType === 1 ? node : node.parentElement;
       if (!el || el.closest('[contenteditable="true"]')) return [];
@@ -434,13 +437,13 @@
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || textOf(el).length > 300) continue;
-          lines(el).forEach((l) => note(visible(el) ? 'add' : 'remove', l));
+          lines(el).forEach((l) => note(visible(el) ? 'add' : 'remove', l, true));
           continue;
         }
         // One record can both remove and add (replaceChildren): the removal came first.
         for (const n of r.removedNodes) lines(n).forEach((l) => note('remove', l));
-        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => note('add', l));
-        if (r.type === 'characterData') lines(r.target).forEach((l) => note('add', l));
+        for (const n of r.addedNodes) if (n.nodeType === 3 || (n.nodeType === 1 && visible(n))) lines(n).forEach((l) => note('add', l, inNotice(n)));
+        if (r.type === 'characterData') lines(r.target).forEach((l) => note('add', l, inNotice(r.target)));
       }
     };
     const observer = new MutationObserver(take);
@@ -452,9 +455,11 @@
       clearTimeout(timer);
       take(observer.takeRecords());
       observer.disconnect();
-      const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8)
-        .map((e) => S.scrubText(e.text.slice(0, 160), { keywords: config?.keywords }).text);
+      const scrub = (e) => S.scrubText(e.text.slice(0, 160), { keywords: config?.keywords }).text;
+      const of = (first, last) => [...seen.values()].filter((e) => e.first === first && e.last === last).slice(0, 8).map(scrub);
       const change = { appeared: of('add', 'add'), removed: of('remove', 'remove'), transient: of('add', 'remove') };
+      const notices = [...seen.values()].filter((e) => e.notice && e.text.length <= 160).slice(0, 4).map(scrub);
+      if (notices.length) change.notices = notices;
       if (!config || !(change.appeared.length || change.removed.length || change.transient.length)) return null;
       if (deliver) send('CHANGE', { seq, change });
       return { seq, change };

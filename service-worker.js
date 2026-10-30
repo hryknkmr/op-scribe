@@ -271,10 +271,15 @@ function pruneUnits(stored, rec) {
 
 async function saveUnits(rec, id, units, settings) {
   if (!Array.isArray(units) || !units.length) return;
+  // Real hosts that are not allowed are shown under their alias, as in every recorded URL.
+  const hosts = Object.entries(rec.aliases || {}).map(([origin, alias]) => {
+    try { return [new URL(origin).hostname, alias]; } catch { return null; }
+  }).filter(Boolean).sort((a, b) => b[0].length - a[0].length);
+  const hide = (text) => hosts.reduce((t, [host, alias]) => t.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), alias), text);
   const clean = units.slice(0, 200).map((u) => ({
     kind: String(u.kind).slice(0, 16),
-    name: scrubText(u.name, { keywords: settings.keywords, maxLength: 60 }).text,
-    text: scrubText(u.text, { keywords: settings.keywords }).text,
+    name: hide(scrubText(u.name, { keywords: settings.keywords, maxLength: 60 }).text),
+    text: hide(scrubText(u.text, { keywords: settings.keywords }).text),
     order: Number(u.order) || 0,
     ...(Number.isFinite(u.count) ? { count: u.count } : {})
   }));
@@ -300,6 +305,9 @@ function attachChange(rec, detail, settings) {
   // Shown and gone again before the watch ended (a toast).
   const transient = lines(detail.change?.transient);
   if (transient.length) step.change.transient = transient;
+  // Of those, what a notification area (status, alert, toast) showed: the page telling the result.
+  const notices = lines(detail.change?.notices).slice(0, 4);
+  if (notices.length) step.change.notices = notices;
   return true;
 }
 

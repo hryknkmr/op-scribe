@@ -256,3 +256,28 @@ test('a number written without its thousands separator is the same number', () =
   assert.deepEqual(N.problemsOf({ summary: '約10000件、¥5000' }, '約10,000件 ¥5,000', null), []);
   assert.match(N.problemsOf({ summary: '約20000件' }, '約10,000件', null)[0], /読んだ文章にない数字/);
 });
+
+test('the journey is given in the order things happened: an operation before the screen it led to', async () => {
+  const LM = fakeModel(goodAnswers);
+  await N.narrate(rec, { LM, scan, unitsOf: (s) => units[s.id] });
+  const lines = LM.calls.filter((c) => c.kind === 'journey').at(-1).input.split('\n');
+  const enter = lines.findIndex((l) => l.startsWith('操作:') && l.includes('Enter'));
+  const results = lines.findIndex((l) => l.startsWith('画面') && l.includes('検索結果を一覧で見る'));
+  assert.ok(enter >= 0 && results > enter, lines.join('\n'));
+});
+
+test('URLs in any case and key names as words are checked against what was read', () => {
+  assert.match(N.problemsOf({ meaning: 'HTTPS://evil.example/path を開く' }, '', null)[0], /URL/);
+  for (const key of ['Ctrl+S で保存する', 'Delete キーで消す', 'ArrowDown で選ぶ']) assert.match(N.problemsOf({ meaning: key }, '', null)[0], /キー操作/);
+  assert.deepEqual(N.problemsOf({ meaning: 'Endpoint の一覧を見る' }, 'Endpoint 一覧', null), []);
+  assert.deepEqual(N.problemsOf({ meaning: 'https://Example.com/ を開く' }, 'https://example.com/', null), []);
+});
+
+test('only what a notification area or a passing toast showed is the result, in any language', async () => {
+  const withChange = (change) => ({ ...rec, steps: rec.steps.map((s) => (s.id === 's4' ? { ...s, change } : s)) });
+  const resultOf = async (change) => (await N.narrate(withChange(change), { LM: fakeModel(goodAnswers), scan, unitsOf: (s) => units[s.id] }))
+    .operations.find((o) => o.id === 's4')?.ai.result;
+  assert.equal(await resultOf({ appeared: ['この記事では、私が旅に出た話をしました。'], removed: [] }), undefined);
+  assert.equal(await resultOf({ appeared: ['Saved'], removed: [], notices: ['Saved'] }), '「Saved」と表示された');
+  assert.equal(await resultOf({ appeared: [], removed: [], transient: ['Changes saved.'] }), '「Changes saved.」と表示された');
+});

@@ -85,11 +85,11 @@ ${COMMON_RULES}`,
     }
   };
 
-  const URLS = /https?:\/\/[^\s)」』>、。"]+/g;
+  const URLS = /https?:\/\/[^\s)」』>、。"]+/gi;
   const MARKS = /‹[^›]*›|\[\[[^\]]+\]\]/g;
   /** Phrases of the instructions themselves: an answer containing one copied the prompt instead of reading the screen. */
   /** Keys the model likes to invent for a click ("pressed Enter to confirm"). */
-  const KEYS = ['Enter', 'エンター', 'Tab キー', 'Esc', 'スペースキー'];
+  const KEYS = ['Enter', 'エンター', 'Tab キー', 'Esc', 'スペースキー', 'Ctrl', 'Cmd', 'Command', '⌘', 'Alt', 'Shift', 'Delete', 'Backspace', 'Arrow', '矢印キー', 'Home', 'End', 'PageUp', 'PageDown'];
   const ECHOES = ['利用者ができること・', 'この画面の内容に即して', '主な部品と内容の要点', '操作の理解に役立つ'];
 
   /** availability() can hang while Chrome resolves the model component; never wait on it forever. */
@@ -109,7 +109,8 @@ ${COMMON_RULES}`,
   function problemsOf(output, source, scan) {
     const problems = [];
     const value = typeof output === 'string' ? output : JSON.stringify(output);
-    const newUrl = (value.match(URLS) || []).find((u) => !source.includes(u));
+    const lower = source.toLowerCase();
+    const newUrl = (value.match(URLS) || []).find((u) => !lower.includes(u.toLowerCase()));
     if (newUrl) problems.push(`読んだ文章にない URL（${newUrl}）`);
     const newMark = (value.match(MARKS) || []).find((m) => !source.includes(m));
     if (newMark) problems.push(`読んだ文章にない伏せ字（${newMark}）`);
@@ -123,7 +124,9 @@ ${COMMON_RULES}`,
     const known = digits(source);
     const newNumber = [...digits(value)].find((n) => !known.has(n));
     if (newNumber) problems.push(`読んだ文章にない数字（${newNumber}）`);
-    const newKey = KEYS.find((key) => value.includes(key) && !source.includes(key));
+    // Latin key names as words: "End" is not in "Endpoint", "Arrow" is in "ArrowDown".
+    const hasKey = (text, key) => (/^[A-Za-z]+$/.test(key) ? new RegExp(`(?<![A-Za-z])${key}(?![a-z])`).test(text) : text.includes(key));
+    const newKey = KEYS.find((key) => hasKey(value, key) && !hasKey(source, key));
     if (newKey) problems.push(`記録にないキー操作（${newKey}）`);
     return problems;
   }
@@ -214,9 +217,14 @@ ${COMMON_RULES}`,
   }
 
   /** Notices, confirmations and errors among the text an operation made appear. */
-  const NOTICE = /(しました|されました|できました|ますか|ですか|してください|できません|ありません|失敗|エラー|完了)[。.!！?？]*$/;
-  const noticesOf = (change) => [...(change?.transient || []), ...(change?.appeared || [])]
-    .filter((t) => t.length <= 80 && NOTICE.test(t)).slice(0, 2);
+  const NOTICE = /(しました|されました|できました|ますか|ですか|してください|できません|ありません|失敗|エラー|完了)[。.!！?？]*$|^(saved|success|done|deleted|updated|created|sent|copied|error|failed)\b|\b(saved|deleted|updated|created|sent|copied|failed)[.!]*$/i;
+  /**
+   * What the page showed as the result: text in a notification area (status, alert, toast), and
+   * text shown and gone again that reads as a notice. Other text that appeared (a list that grew,
+   * an article) is a change on the screen, not the page telling the result.
+   */
+  const noticesOf = (change) => [...new Set([...(change?.notices || []),
+    ...(change?.transient || []).filter((t) => NOTICE.test(t))])].filter((t) => t.length <= 80).slice(0, 2);
 
   /** Notices in the screen's status and alert areas. */
   const feedbackOf = (units) => (units || []).filter((u) => u.kind === 'feedback')
@@ -310,12 +318,13 @@ ${COMMON_RULES}`,
             // Stated from the record: the model tends to leave a toast out of the screen it summarizes.
             memo.summary = `${memo.summary} ${notices.map((t) => `「${t}」`).join('、')}と表示されている。`;
           }
+          // The operation that led here first, then the screen it led to: the journey is in the order things happened.
+          // A notice that was already on the previous screen (a toast that stays) is not this operation's result.
+          await settle(memo, notices.filter((t) => !screenNotices.includes(t)));
           if (memo) {
             step.screen.ai = memo;
             journey.push(`画面「${step.screen.title || ''}」: ${memo.purpose} ${memo.summary || ''}`.trim());
           }
-          // A notice that was already on the previous screen (a toast that stays) is not this operation's result.
-          await settle(memo, notices.filter((t) => !screenNotices.includes(t)));
           screenMemo = memo;
           screenNotices = notices;
         } else if (ACTIONS.has(step.type)) {

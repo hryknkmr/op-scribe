@@ -60,6 +60,8 @@ let generator = 'none';
 let edited = false;
 // The verbalization's summary, sent with the Markdown it belongs to while that is unedited.
 let summary = '';
+// The recording (id and revision) the text in the editors was made from, or last confirmed against.
+let source = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
 
@@ -214,6 +216,7 @@ ui.start.addEventListener('click', () => {
     generator = 'none';
     edited = false;
     summary = '';
+    source = null;
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
@@ -243,6 +246,7 @@ ui.clear.addEventListener('click', async () => {
   generator = 'none';
   edited = false;
   summary = '';
+  source = null;
   await chrome.storage.session.remove(DRAFT_KEY);
   await refresh();
 });
@@ -258,7 +262,7 @@ ui.noteForm.addEventListener('submit', async (event) => {
 // ------------------------------------------------------------ reproduction
 
 const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited, summary }
+  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited, summary, source }
 });
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording. */
@@ -268,6 +272,7 @@ async function setRepro(rec, markdown, by, about = '') {
   generator = by;
   edited = false;
   summary = about;
+  source = { recordingId: rec.id, revision: rec.revision };
   await saveDraft();
 }
 
@@ -339,7 +344,7 @@ async function showNarration(rec, force = false) {
     ui.genStatus.textContent = 'Built-in AI で言語化しています…';
     return;
   }
-  if (!force && ui.repro.value.trim() && generator !== 'none') return;
+  if (!force && ui.repro.value.trim() && (edited || generator !== 'none')) return;
   await setRepro(rec, narration.markdown, narration.generator, narration.summary);
   ui.genStatus.textContent = narration.reason
     ? `${GENERATOR_LABELS[narration.generator]}（${narration.reason}）`
@@ -357,10 +362,24 @@ ui.gherkin.addEventListener('input', onEdit);
 
 // ------------------------------------------------------------------ output
 
-/** Builds the payload and runs the final gate. Every exit (send, copy, save) goes through here. */
+const STALE_MESSAGE = '手順の文を確認してから、もう一度実行してください';
+
+/** Text made before the recording changed may still quote a deleted step: it leaves only once confirmed. */
+async function confirmFresh(rec) {
+  const stale = (ui.repro.value.trim() || ui.gherkin.value.trim())
+    && (source?.recordingId !== rec.id || source?.revision !== rec.revision);
+  if (!stale) return true;
+  if (!confirm('手順の文は、操作の追加・削除の前に作ったか書いたものです。削除した操作の内容が残っていないことを確認しましたか？')) return false;
+  source = { recordingId: rec.id, revision: rec.revision };
+  await saveDraft();
+  return true;
+}
+
+/** Builds the payload and runs the final gate. Send and save go through here; copy has the same gates in copyText. */
 async function preparePayload() {
   const rec = await loadRecording();
   if (!rec) return { error: '記録がありません' };
+  if (!(await confirmFresh(rec))) return { error: STALE_MESSAGE };
   const reproduction = {
     generator: ui.repro.value.trim() ? (generator === 'none' ? 'manual' : generator) : 'none',
     markdown: ui.repro.value,
@@ -450,6 +469,10 @@ async function copyText(label, text) {
   const rec = await loadRecording();
   if (!text.trim()) {
     ui.outputStatus.textContent = '再現手順がまだありません（「再現手順」で生成してください）';
+    return;
+  }
+  if (!(await confirmFresh(rec))) {
+    ui.outputStatus.textContent = STALE_MESSAGE;
     return;
   }
   const findings = scanWith(rec)({ [label]: text });
@@ -553,6 +576,7 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
       generator = draft.generator;
       edited = Boolean(draft.edited);
       summary = draft.summary || '';
+      source = draft.source || null;
     }
     await refresh();
   } catch (error) {

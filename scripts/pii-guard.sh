@@ -43,7 +43,7 @@ EXCLUDE_PATHS=(
 # 実在しうるメールアドレスの混入検出。予約ドメイン（RFC 2606 / 6761）と noreply のみ許可。
 EMAIL_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
 # 実在ドメインは許可しない。コミットの共著者表記に使う固定の noreply アドレスだけ完全一致で通す。
-EMAIL_ALLOW_RE='@(([A-Za-z0-9-]+\.)*example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$|(^|:)noreply@anthropic\.com$' 
+EMAIL_ALLOW_RE='@(([A-Za-z0-9-]+\.)*example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$|(^|:)noreply@anthropic\.com$'
 
 if [[ ! -f "$PATTERNS_FILE" ]]; then
   echo "pii-guard: patterns file not found: $PATTERNS_FILE" >&2
