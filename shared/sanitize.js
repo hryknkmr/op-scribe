@@ -82,6 +82,8 @@
 
   /** 192.168.10.5 → 192.168.*.* */
   const partialIp = (ip) => ip.split('.').map((part, i) => (i < 2 ? part : '*')).join('.');
+  // IPv6: the first group only (fd00::1 -> fd00:*:*).
+  const partialIp6 = (ip) => ip.split(':').map((part, i) => (i < 1 ? part : '*')).join(':');
 
   // Order matters: credentials first, then contact details, then generic ids.
   const RULES = [
@@ -103,6 +105,8 @@
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, replace: (m) => partialId(m, 4, 4) },
     { kind: 'ip', re: /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g, replace: partialIp },
+    // IPv6 written out (eight groups) or shortened with ::. Three groups of digits (10:30:00) is a time.
+    { kind: 'ip', re: /(?<![\w:.])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4})(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi, replace: partialIp6 },
     { kind: 'id', re: /\b[0-9a-f]{24,}\b/gi, replace: (m) => partialId(m, 4, 4) },
     { kind: 'id', re: /(?<!\d)\d{7,}(?!\d)/g, replace: (m) => partialId(m) }
   ];
@@ -142,6 +146,17 @@
         kinds.push(...r.kinds);
         return `${relative ? r.url.replace(/^https:/, '') : r.url}${tail}`;
       });
+      // A real host the recording has aliased, written without a URL (internal.test), is aliased too.
+      // Longest first, so a.internal.test is not cut to a.site-1.invalid.
+      const known = Object.entries(opts.hosts.aliases || {}).map(([origin, alias]) => {
+        try { return [new URL(origin).hostname, alias]; } catch { return null; }
+      }).filter(Boolean).sort((a, b) => b[0].length - a[0].length);
+      for (const [host, alias] of known) {
+        text = text.replace(new RegExp(`(?<![\\w.-])${escapeRe(host)}(?![\\w-])`, 'gi'), () => {
+          kinds.push('host');
+          return alias;
+        });
+      }
     }
 
     const keywords = keywordPattern(opts.keywords);

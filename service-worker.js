@@ -271,17 +271,12 @@ function pruneUnits(stored, rec) {
 
 async function saveUnits(rec, id, units, settings) {
   if (!Array.isArray(units) || !units.length) return;
-  // URLs in the text follow the URL policy; real hosts written without a URL are aliased too.
+  // URLs in the text follow the URL policy; real hosts written without a URL are aliased too (scrubText).
   const hosts = { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases };
-  // Read at each use: aliases made for URLs in earlier text apply to later text too.
-  const known = () => Object.entries(rec.aliases || {}).map(([origin, alias]) => {
-    try { return [new URL(origin).hostname, alias]; } catch { return null; }
-  }).filter(Boolean).sort((a, b) => b[0].length - a[0].length);
-  const hide = (text) => known().reduce((t, [host, alias]) => t.replace(new RegExp(host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), alias), text);
   const clean = units.slice(0, 200).map((u) => ({
     kind: String(u.kind).slice(0, 16),
-    name: hide(scrubText(u.name, { keywords: settings.keywords, maxLength: 60, hosts }).text),
-    text: hide(scrubText(u.text, { keywords: settings.keywords, hosts }).text),
+    name: scrubText(u.name, { keywords: settings.keywords, maxLength: 60, hosts }).text,
+    text: scrubText(u.text, { keywords: settings.keywords, hosts }).text,
     order: Number(u.order) || 0,
     ...(Number.isFinite(u.count) ? { count: u.count } : {})
   }));

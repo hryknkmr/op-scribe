@@ -146,6 +146,8 @@ test('URLs written in text follow the URL policy when the recording hosts are gi
   for (const url of ['//intranet/a', '//localhost:8080/a', '//10.0.0.5/a', '//[fd00::1]/a']) {
     assert.match(S.scrubText(`開く ${url}`, { hosts }).text, /^開く \/\/site-\d+\.invalid(:\d+)?\/a$/, url);
   }
+  // A host the recording has aliased is aliased when written without a URL too; an unvisited subdomain is not.
+  assert.equal(S.scrubText('docs.internal.test を見た（a.docs.internal.test は別）', { hosts }).text, 'site-1.invalid を見た(a.docs.internal.test は別)');
   // Without the hosts (in the page), text is left to the worker, which knows them.
   assert.equal(S.scrubText('https://docs.internal.test/a').text, 'https://docs.internal.test/a');
 });
@@ -162,4 +164,10 @@ test('a URL nested in a URL follows the same host policy and its aliases reach t
   assert.deepEqual(ctx.aliases, { 'https://private.internal.test': 'site-1.invalid' });
   // The real host is known now, so the final scan stops it wherever else it appears.
   assert.equal(S.finalScan({ note: 'private.internal.test' }, { keywords: ['private.internal.test'] }).length, 1);
+});
+
+test('IPv6 addresses are partly hidden, times and scope operators are not', () => {
+  assert.equal(S.scrubText('接続先 fd00::1 と 2001:db8:0:0:0:0:0:1').text, '接続先 fd00:*:* と 2001:*:*:*:*:*:*:*');
+  for (const text of ['10:30:00 に開始', 'std::vector', 'Note:: 備考']) assert.equal(S.scrubText(text).text, text, text);
+  assert.deepEqual(S.finalScan({ v: 'fd00::1' }).map((f) => f.kinds), [['ip']]);
 });

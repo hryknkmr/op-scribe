@@ -330,12 +330,8 @@
       verdict.set(node, ok);
       return ok;
     };
-    /**
-     * The shown lines under a node (an element or a text node), in page order.
-     * skip(node): leave a shown text node out; seen(node): told each shown text node read;
-     * part(node): the text to use from it (default: all of it).
-     */
-    reader.lines = (start, { claim = false, skip, seen, part } = {}) => {
+    /** The shown lines under a node (an element or a text node), in page order. */
+    reader.lines = (start, { claim = false } = {}) => {
       const lines = [];
       let line = '';
       let block = null;
@@ -347,11 +343,9 @@
       const take = (node) => {
         if (claimed.has(node) || !node.textContent.trim()) return;
         if (!shown(node)) return;
-        seen?.(node);
-        if (skip?.(node)) return;
         const nodeBlock = blockOf(node.parentElement);
         if (nodeBlock !== block) { flush(); block = nodeBlock; }
-        line += part ? part(node) : node.textContent;
+        line += node.textContent;
         if (claim) claimed.add(node);
       };
       if (reader.cut) return lines;
@@ -701,11 +695,10 @@
     };
     // parent: where a removed text node was (it has no parentElement any more).
     // read: the text reader of this batch, for what is still in the page (only shown text is read).
-    // options: for notification areas, only what is new (see fresh).
-    const lines = (node, parent = null, read = null, options = undefined) => {
+    const lines = (node, parent = null, read = null) => {
       const el = node.nodeType === 1 ? node : node.parentElement || parent;
       if (!el || el.closest('[contenteditable="true"]')) return [];
-      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node, options).filter((l) => l.length > 1);
+      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node).filter((l) => l.length > 1);
       const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : detachedText(el);
       return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
     };
@@ -717,33 +710,33 @@
     };
     // What the notification areas already showed before the operation: shown again by a class or style
     // change (an animation), it is not something that appeared.
-    // Applied once when the watch ends, whichever way the text came back (attribute, text, nodes).
-    // One reader with one time limit for all of them; past it, every notice area counts as already shown
-    // (fail-closed: nothing is taken as new that could not be compared).
-    // Kept per text node, not per line: a notice that adds 保存しました after 担当: A gives only 保存しました.
-    const shownBefore = new Map();
+    // Each notification area's text before the operation. What it shows later is compared with that as a
+    // whole, so a node replaced (textContent = ...) or changed in the middle gives only what changed.
+    // One reader with one time limit for all of them; past it, nothing counts as new (fail-closed: nothing
+    // is taken as new that could not be compared).
+    const regionBefore = new Map();
     const baseline = textReader({ ms: 30 });
     for (const el of document.querySelectorAll(NOTICE)) {
       if (baseline.late()) break;
-      if (visible(el)) baseline.lines(el, { seen: (n) => shownBefore.set(n, n.data) });
+      if (visible(el)) regionBefore.set(el, baseline.lines(el).join('\n'));
     }
     const unknown = baseline.cut;
-    /** In a notification area, only text not shown there before the operation: new nodes, and what was added to old ones. */
-    const fresh = {
-      skip: (n) => shownBefore.get(n) === n.data,
-      // What changed in a node shown before: its text without what it shares with the old text at either
-      // end (担当: A / 状態: 処理中 -> 担当: A / 状態: 完了 gives 完了).
-      part: (n) => {
-        const old = shownBefore.get(n);
-        if (old === undefined) return n.data;
-        let start = 0;
-        while (start < old.length && start < n.data.length && old[start] === n.data[start]) start += 1;
-        let end = 0;
-        while (end < old.length - start && end < n.data.length - start
-          && old[old.length - 1 - end] === n.data[n.data.length - 1 - end]) end += 1;
-        return n.data.slice(start, n.data.length - end);
-      }
+    /** now without what it shares with old at either end (担当: A / 状態: 処理中 -> 担当: A / 状態: 完了 gives 完了). */
+    const changed = (old, now) => {
+      let start = 0;
+      while (start < old.length && start < now.length && old[start] === now[start]) start += 1;
+      let end = 0;
+      while (end < old.length - start && end < now.length - start && old[old.length - 1 - end] === now[now.length - 1 - end]) end += 1;
+      return now.slice(start, now.length - end);
     };
+    /** What a notification area shows that it did not before the operation, noted as notices. */
+    const noteRegion = (region, read) => {
+      if (!region || !visible(region)) return;
+      const now = lines(region, null, read).join('\n');
+      changed(regionBefore.get(region) || '', now).split('\n').map((l) => l.replace(/\s+/g, ' ').trim())
+        .filter((l) => l.length > 1).forEach((l) => note('add', l, true));
+    };
+    const regionOf = (node) => (node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE) || null;
     const take = (records) => {
       // One reader per batch: a style read now may change before the next batch (a toast fading in).
       const read = textReader({ ms: 30 });
@@ -751,7 +744,7 @@
         if (r.type === 'attributes') {
           const el = r.target.closest?.(NOTICE);
           if (!el || (el.textContent || '').length > 300) continue;
-          if (visible(el)) lines(el, null, read, fresh).forEach((l) => note('add', l, true));
+          if (visible(el)) noteRegion(el, read);
           // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
           else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
           continue;
@@ -767,14 +760,14 @@
           // wrapper itself may have no box (display: contents, only positioned children).
           if (n.nodeType === 1 && !inNotice(n)) {
             for (const inner of [...n.querySelectorAll(NOTICE)].slice(0, 10)) {
-              if (visible(inner)) lines(inner, null, read, fresh).forEach((l) => note('add', l, true));
+              noteRegion(inner, read);
             }
           }
-          if (shown(n)) lines(n, null, read, inNotice(n) ? fresh : undefined).forEach((l) => note('add', l, inNotice(n)));
+          if (inNotice(n)) noteRegion(regionOf(n), read);
+          else if (shown(n)) lines(n, null, read).forEach((l) => note('add', l));
         }
-        if (r.type === 'characterData' && shown(r.target)) {
-          lines(r.target, null, read, inNotice(r.target) ? fresh : undefined).forEach((l) => note('add', l, inNotice(r.target)));
-        }
+        if (r.type === 'characterData' && inNotice(r.target)) noteRegion(regionOf(r.target), read);
+        else if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l));
       }
     };
     const observer = new MutationObserver(take);
