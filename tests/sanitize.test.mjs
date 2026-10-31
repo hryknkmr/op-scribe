@@ -274,3 +274,21 @@ test('credentials written as key and value in text are hidden', () => {
   }
   assert.equal(S.scrubText('password=[[secret]]').text, 'password=[[secret]]');
 });
+
+test('a counter after a key name and card expiry fields are understood', () => {
+  for (const name of ['cvv2', 'cvc2', 'exp_month', 'card_exp_year']) assert.equal(S.maskFieldValue('123', { name }).value, '[[card]]', name);
+  for (const name of ['otp1', 'verificationCode1']) assert.equal(S.maskFieldValue('123456', { name }).value, '[[secret]]', name);
+});
+
+test('a URL that cannot be parsed is hidden whole', () => {
+  assert.equal(S.scrubText('open https://private.internal.test:bad/x now', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'open [[url:invalid]] now');
+});
+
+test('finalScan stops credential URL parameters and numeric credentials, not the filter\'s own counts', () => {
+  const findings = S.finalScan({
+    markdown: 'open https://example.com/callback?code=abc123 and https://example.com/?code=[[secret]]&id=ab**23',
+    args: { otp: 123456 },
+    recording: { privacy: { redactions: { secret: 2, card: 1 } } }
+  });
+  assert.deepEqual(findings.map((f) => f.path), ['markdown', 'args.otp']);
+});

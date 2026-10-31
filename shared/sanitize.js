@@ -239,10 +239,14 @@
   // What a key or a field's name says its value is. One judge for form fields, URL parameters, WebMCP
   // arguments and the final scan, so that the same name means the same everywhere.
 
-  /** A key as lowercase words: orderID -> order id, APIKey -> api key, verification_code -> verification code. */
+  /**
+   * A key as lowercase words: orderID -> order id, APIKey -> api key, verification_code -> verification code.
+   * A number at the end of a word is a counter, not part of the name: cvv2 -> cvv, otp1 -> otp (2fa stays).
+   */
   const wordsOf = (key) => String(key || '').normalize('NFKC')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .toLowerCase().split(/[^a-z0-9\u0080-￿]+/).filter(Boolean);
+    .toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
 
   // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
   const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
@@ -272,7 +276,7 @@
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
     if (JA_CARD.test(text) || has(['cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber']) || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
-        || words.some((w) => w.startsWith('expir'))) return 'card';
+        || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
         || pair(KEY_OWNERS, 'key') || pair(CODE_OWNERS, 'code') || words.some((w) => /^(?:pass|pwd|otp|pin)$/.test(w) && protocol)
         || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
@@ -429,8 +433,8 @@
     try {
       url = new URL(String(raw));
     } catch {
-      const r = scrubText(raw, { keywords: ctx.keywords, maxLength: 200 });
-      return { url: r.text, kinds: r.kinds };
+      // Not parsed (a bad port, broken IPv6): its host cannot be put under the policy, so none of it is kept.
+      return { url: mark('url:invalid'), kinds: ['host'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds };
@@ -488,12 +492,31 @@
       const kinds = [' ', ''].flatMap((gap) => scrubText(String(text).replace(PLACEHOLDER, gap), { keywords: opts.keywords }).kinds);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
-    const walk = (v, path, key = '') => {
-      if (typeof v === 'string') {
-        // A text value under a key naming a credential is one, unless it is only a placeholder of this filter.
-        if (key && classifyKey(key) && ['secret', 'card'].includes(classifyKey(key)) && v.replace(PLACEHOLDER, '').trim()) {
-          findings.push({ path: path || '(root)', kinds: [classifyKey(key)] });
+    const credential = (key, options) => ['secret', 'card'].includes(classifyKey(key, options));
+    // Credential parameters of URLs written in the text (an edited ?code=abc123): what scrubUrl would hide.
+    const urlParams = (text, path) => {
+      for (const match of String(text).match(TEXT_URL) || []) {
+        let url;
+        try { url = new URL(match.startsWith('//') ? `https:${match}` : match); } catch { continue; }
+        const fragment = url.hash.slice(1);
+        const query = fragment.includes('?') ? fragment.slice(fragment.indexOf('?') + 1) : fragment.includes('=') ? fragment : '';
+        for (const [k, v] of [...url.searchParams, ...new URLSearchParams(query)]) {
+          if (v && v.replace(PLACEHOLDER, '').trim() && credential(k, { protocol: true })) {
+            findings.push({ path: path || '(root)', kinds: ['secret'] });
+            return;
+          }
         }
+      }
+    };
+    const walk = (v, path, key = '') => {
+      // Counts of what this filter hid, keyed by kind (secret: 2): not values.
+      if (key === 'redactions') return undefined;
+      // A value under a key naming a credential is one, unless it is only a placeholder of this filter.
+      if (key && credential(key) && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
+        findings.push({ path: path || '(root)', kinds: [classifyKey(key)] });
+      }
+      if (typeof v === 'string') {
+        urlParams(v, path);
         return check(v, path);
       }
       if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`));
