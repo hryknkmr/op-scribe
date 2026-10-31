@@ -103,9 +103,9 @@
       // An unquoted value is taken up to the next space.
       kind: 'secret',
       // Keys in any letters: 認証コード: 123456.
-      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)((?:Basic|Bearer)\s+[^\s"'&,}]+|"[^"]*"?|'[^']*'?|[^\s"'&,}]+)/giu,
+      re: /(?<![\p{L}\p{N}_.-])([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)((?:Basic|Bearer)\s+[^\s"'&,}]+|"[^"]*"?|'[^']*'?|[^\s"'&,}]+)/giu,
       accept: (match) => {
-        const [, key, , value] = match.match(/^(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
+        const [, key, , value] = match.match(/^([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
         return ['secret', 'card'].includes(classifyKey(key)) && !isPlaceholder(value.replace(/^["']|["']$/g, ''));
       },
       replace: (match, key, sep, value) => {
@@ -210,7 +210,7 @@
    */
   // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
   // a host with or without dots, in any letters, an IP address, [IPv6]). Over-matching only hides more.
-  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:[^\s/@<>"']+@)?(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
+  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|\b(?:data|javascript|vbscript|mailto|file|blob):[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:[^\s/@<>"']+@)?(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
@@ -408,7 +408,7 @@
     if (value == null || typeof value === 'boolean') return value;
     if (typeof value === 'number' || typeof value === 'string') {
       if (typeof value === 'number' && !Number.isFinite(value)) return mark('value');
-      const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200 });
+      const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200, trustHidden: opts.trustHidden });
       return typeof value === 'number' && r.value === String(value) ? value : r.value;
     }
     if (depth >= 3) return mark('nested');
@@ -554,11 +554,12 @@
       const r = scrubText(decodedFragment.slice(nested), { keywords: ctx.keywords, hosts: hostsOf(ctx) });
       kinds.push(...r.kinds);
       hash = `#${route(decodedFragment.slice(0, nested))}${r.text}`;
-    } else if (fragment.includes('?')) {
-      const at = fragment.indexOf('?');
-      hash = `#${route(fragment.slice(0, at))}?${scrubParams(new URLSearchParams(fragment.slice(at + 1)), ctx, kinds).join('&')}`;
-    } else if (/^[^/]*=/.test(fragment)) {
-      hash = `#${scrubParams(new URLSearchParams(fragment), ctx, kinds).join('&')}`;
+    } else if (decodedFragment.includes('?')) {
+      // Judged on the decoded fragment: #/route%3Fcode%3Dabc is a route with parameters too.
+      const at = decodedFragment.indexOf('?');
+      hash = `#${route(decodedFragment.slice(0, at))}?${scrubParams(new URLSearchParams(decodedFragment.slice(at + 1)), ctx, kinds).join('&')}`;
+    } else if (/^[^/]*=/.test(decodedFragment)) {
+      hash = `#${scrubParams(new URLSearchParams(decodedFragment), ctx, kinds).join('&')}`;
     } else if (fragment) {
       hash = `#${route(fragment)}`;
     }
@@ -587,13 +588,19 @@
     const credential = (key, options) => ['secret', 'card'].includes(classifyKey(key, options));
     // URLs written in the text (an edited ?code=abc123, /orders/123456): whatever scrubUrl would still hide,
     // except the host, which only the recording can place (its aliases are scanned as keywords).
+    const aliasNames = (raw) => {
+      if (Array.isArray(opts.aliases)) return opts.aliases;
+      // Every host in this URL that has the form of an alias.
+      return (raw.match(/\bsite-\d+\.invalid\b/gi) || []).map((h) => h.toLowerCase());
+    };
     const urlParams = (text, path) => {
       for (const match of String(text).match(TEXT_URL) || []) {
         const relative = match.startsWith('//');
         const raw = relative ? `https:${match}` : match;
-        // Hosts, nested ones too, when the caller knows the allowlist: allowed, or an alias this filter wrote (*.invalid).
+        // Hosts, nested ones too, when the caller knows the allowlist: allowed, or an alias this filter wrote
+        // (opts.aliases: the recording's alias names; without them, the form site-N.invalid).
         const known = Array.isArray(opts.hostAllowlist);
-        const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, '*.invalid'] : [], keywords: opts.keywords, trustHidden: true })
+        const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, ...aliasNames(raw)] : [], keywords: opts.keywords, trustHidden: true })
           .kinds.filter((kind) => known || kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });

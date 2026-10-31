@@ -166,7 +166,8 @@ function cleanStep(raw, rec, settings) {
     step.source = 'agent';
     if (raw.args && typeof raw.args === 'object') {
       // Masked by key again here (the page may not have), then as text.
-      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords })), { keywords: settings.keywords, hosts: ctx });
+      // The content script masked them already: its partial masks are kept as they are (trustHidden), anything else is masked.
+      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords, trustHidden: true })), { keywords: settings.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
@@ -235,7 +236,7 @@ const stop = () => mutate(async (rec) => {
 function scanFor(rec, settings) {
   const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
   const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
-  return (value) => finalScan(value, { keywords, hostAllowlist: settings.hostAllowlist });
+  return (value) => finalScan(value, { keywords, hostAllowlist: settings.hostAllowlist, aliases: Object.values(rec.aliases || {}) });
 }
 
 const addPattern = (url) => mutate(async (rec) => {

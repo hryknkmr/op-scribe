@@ -96,7 +96,9 @@ function scanKeywords(rec) {
   return [...settings.keywords, ...hosts].filter(Boolean);
 }
 
-const scanWith = (rec) => (value) => S.finalScan(value, { keywords: scanKeywords(rec), hostAllowlist: settings.hostAllowlist });
+const scanWith = (rec) => (value) => S.finalScan(value, {
+  keywords: scanKeywords(rec), hostAllowlist: settings.hostAllowlist, aliases: Object.values(rec?.aliases || {})
+});
 
 function describeFindings(findings) {
   return findings.slice(0, 8).map((f) => `${f.path}: ${f.kinds.map((k) => KIND_LABELS[k] || k).join(', ')}`);

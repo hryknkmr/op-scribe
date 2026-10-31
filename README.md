@@ -158,6 +158,7 @@ pnpm receiver
 
 受信サーバ側でも伏せ忘れを検査し、見つかった場合は 422 を返して保存しません。
 `OPSCRIBE_TOKEN=任意の文字列 pnpm receiver` で起動すると、`Authorization: Bearer 任意の文字列` が無い送信を拒否します。
+受信サーバは、別名（`site-N.invalid`）以外のホストを含む送信を拒否します。実名で受け取ってよいホストは `OPSCRIBE_HOST_ALLOWLIST=example.com,docs.example.com` のように指定します。
 
 ---
 

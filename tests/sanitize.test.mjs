@@ -436,3 +436,15 @@ test('invisible controls cannot split a name or a listed word; nested contact ke
   assert.deepEqual(args, { phone: '****' });
   assert.deepEqual(S.finalScan({ args }), []);
 });
+
+test('encoded fragment parameters, exact aliases at the exit, keys starting with a digit, other schemes in text, stable re-masking', () => {
+  const url = 'https://example.com/#/route%3Fcode%3Dabc123';
+  assert.equal(S.scrubUrl(url, { hostAllowlist: ['example.com'] }).url, 'https://example.com/#/route?code=[[secret]]');
+  assert.equal(S.finalScan({ url }).length, 1);
+  assert.deepEqual(S.finalScan({ a: 'https://private.internal.invalid/', b: 'https://site-1.invalid/x' }, { hostAllowlist: [] }).map((f) => f.path), ['a']);
+  assert.deepEqual(S.finalScan({ b: 'https://site-2.invalid/x' }, { hostAllowlist: [], aliases: ['site-1.invalid'] }).map((f) => f.path), ['b']);
+  assert.equal(S.scrubText('2fa=123456 10:30').text, '2fa=[[secret]] 10:30');
+  assert.deepEqual(S.finalScan({ a: 'data:text/plain,x', b: 'javascript:alert(1)' }).map((f) => f.path), ['a', 'b']);
+  const once = S.maskArgs({ email: 'a@example.com', phone: '090-1234-5678' });
+  assert.deepEqual(S.maskArgs(once, { trustHidden: true }), once);
+});

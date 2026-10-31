@@ -21,6 +21,8 @@ const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
 const OUT_DIR = join(process.cwd(), 'recordings');
 const MAX_BYTES = 1024 * 1024;
+// Hosts a payload may name as they are (comma separated); any other host must be an alias (site-N.invalid).
+const HOST_ALLOWLIST = (process.env.OPSCRIBE_HOST_ALLOWLIST || '').split(',').map((h) => h.trim()).filter(Boolean);
 
 const reply = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -48,7 +50,7 @@ createServer(async (req, res) => {
   }
   if (payload?.schema !== 'op-scribe.recording/v1') return reply(res, 422, { error: 'unknown schema' });
 
-  const findings = finalScan(payload);
+  const findings = finalScan(payload, { hostAllowlist: HOST_ALLOWLIST });
   if (findings.length) {
     console.warn('rejected: still contains', findings);
     return reply(res, 422, { error: 'unmasked values', findings });
