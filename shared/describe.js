@@ -81,7 +81,7 @@
     return String(text ?? '').replace(/\[\[([a-z]+)(?::([\w-]+))?\]\]/gi, (match, kind, arg) => {
       if (kind === 'text') return `‹任意の文字列 ${arg}文字›`;
       if (kind === 'file') return `‹ファイル ${arg}件›`;
-      if (kind === 'url') return arg === 'invalid' || arg === 'none' ? '‹URL›' : `‹${arg} ページ›`;
+      if (kind === 'url') return ['invalid', 'none', 'long'].includes(arg) ? '‹URL›' : `‹${arg} ページ›`;
       return `‹${LABELS[kind] || kind}›`;
     });
   }

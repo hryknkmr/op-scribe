@@ -17,6 +17,7 @@
 (function (root) {
   'use strict';
 
+  const { LIMITS } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
@@ -164,7 +165,7 @@
     return { kind: 'free' };
   }
 
-  const KEPT_LIMIT = { choice: 120, search: 120, text: 200, arg: 200 };
+  const KEPT_LIMIT = LIMITS.kept;
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
   const lengthOf = (text) => [...text].length;
 
@@ -214,15 +215,17 @@
    */
   function walkArgs(node, { isLeaf, leaf, keywords }, depth = 0) {
     if (isLeaf(node)) return leaf(node);
-    if (depth >= 3) return typed.redacted('arg', 'nested');
+    if (depth >= LIMITS.argDepth) return typed.redacted('arg', 'nested');
     const walk = (child) => walkArgs(child, { isLeaf, leaf, keywords }, depth + 1);
-    if (Array.isArray(node)) return node.slice(0, 10).map(walk);
+    if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk);
     const out = {};
-    for (const [k, v] of Object.entries(node).slice(0, 20)) {
-      const name = scrubText(k, { keywords, maxLength: 40 });
+    let masked = 0;
+    for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
+      const name = scrubText(k, { keywords, maxLength: LIMITS.argKey });
       const cls = classifyField({ name: k });
+      // Masked keys are numbered so two of them do not collapse into one (W5).
       // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
-      Object.defineProperty(out, name.kinds.length ? 'masked' : name.text, {
+      Object.defineProperty(out, name.kinds.length ? `masked-${masked += 1}` : name.text, {
         value: cls.kind === 'secret' || cls.kind === 'pii' ? typed.redacted('arg', cls.label) : walk(v),
         enumerable: true,
         writable: true,
@@ -245,7 +248,7 @@
       leaf: (node) => {
         if (node == null || typeof node === 'boolean') return node ?? null;
         if (typeof node === 'number') {
-          return !commercial && Number.isFinite(node) && Math.abs(node) < 1e6
+          return !commercial && Number.isFinite(node) && Math.abs(node) < LIMITS.keptNumber
             ? typed.keptNumber(node)
             : typed.redacted('arg', 'number');
         }
@@ -294,7 +297,7 @@
       return { url: mark('url:invalid'), kinds: ['url'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return { url: mark(`url:${url.protocol.replace(':', '').slice(0, 16)}`), kinds: ['url'] };
+      return { url: mark(`url:${url.protocol.replace(':', '').slice(0, LIMITS.scheme)}`), kinds: ['url'] };
     }
 
     const host = url.hostname.toLowerCase();
@@ -341,7 +344,10 @@
       kinds.push('hash');
     }
 
-    return { url: `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`, kinds };
+    const out = `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`;
+    // A URL too long to send is redacted as a whole rather than cut (row U1).
+    if ([...out].length > LIMITS.url) return { url: mark('url:long'), kinds: [...kinds, 'url'] };
+    return { url: out, kinds };
   }
 
   // -------------------------------------------------------------- final gate

@@ -202,7 +202,8 @@
         if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable) && !modifiers.length) return;
         if (el && isTextField(el)) recordValue(el);
         emit('key', { key: [...modifiers, 'Enter'].join('+'), target: el ? describe(resolveTarget(el)) : undefined });
-      } else if (event.key === 'Escape') {
+      } else if (event.key === 'Escape' && !event.shiftKey && !modifiers.length) {
+        // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
         emit('key', { key: 'Escape' });
       }
     },

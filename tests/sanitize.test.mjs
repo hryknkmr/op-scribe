@@ -208,3 +208,13 @@ test('an argument key named __proto__ stays an ordinary key (row W5; review R4)'
   assert.deepEqual(Object.keys(out), ['__proto__', 'ok']);
   assert.equal(Object.getPrototypeOf(out), Object.prototype);
 });
+
+test('masked argument keys are numbered so none overwrites another (row W5; review R5)', () => {
+  const out = S.maskArgs({ AcmeOne: 'a', AcmeTwo: 'b', q: 'c' }, { env: 'standard', keywords: ['Acme'] });
+  assert.deepEqual(Object.keys(out), ['masked-1', 'masked-2', 'q']);
+});
+
+test('a URL longer than the limit after masking is redacted as a whole (row U1; review R5)', () => {
+  const long = `https://example.com/${'a/'.repeat(1200)}`;
+  assert.deepEqual(S.scrubUrl(long, { hostAllowlist: ['example.com'] }), { url: '[[url:long]]', kinds: ['url'] });
+});

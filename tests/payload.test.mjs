@@ -255,3 +255,12 @@ test('checkPayload: kept numbers stay in range, and the start URL is a step URL 
   assert.equal(empty.recording.startUrl, '[[url:none]]');
   assert.deepEqual(P.checkPayload(empty), []);
 });
+
+test('what the masking cuts, the check accepts: a 41-character argument key (rows W5, E1; review R5)', () => {
+  const S2 = require('../shared/sanitize.js');
+  const standardRec = clone(rec);
+  for (const step of standardRec.steps) step.env = 'standard';
+  standardRec.steps[4].args = S2.maskArgs({ ['k'.repeat(60)]: 'x' }, { env: 'standard' });
+  assert.equal([...Object.keys(standardRec.steps[4].args)[0]].length, 41);
+  assert.deepEqual(P.checkPayload(build(standardRec)), []);
+});

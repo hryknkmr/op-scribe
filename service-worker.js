@@ -11,9 +11,10 @@
  * typed values are checked, URLs are aliased, user keywords masked, and
  * redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
+importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
 const { scrubText, scrubUrl, defaults } = self.OpScribeSanitize;
+const { LIMITS } = self.OpScribeLimits;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 const { policyOf, envOf, oneLine, cleanStep } = self.OpScribeRecord;
 
@@ -21,7 +22,7 @@ const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
-const MAX_STEPS = 500;
+const MAX_STEPS = LIMITS.steps;
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   try {
@@ -93,7 +94,7 @@ async function syncContentScripts(patterns) {
     {
       id: SCRIPT_IDS.recorder,
       matches: patterns,
-      js: ['shared/sanitize.js', 'shared/target.js', 'content/recorder.js'],
+      js: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'],
       runAt: 'document_start',
       persistAcrossSessions: false
     },
@@ -111,7 +112,7 @@ async function syncContentScripts(patterns) {
 /** Registered scripts only reach future navigations; the open page needs a direct injection. */
 async function injectNow(tabId) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
   } catch (error) {
     console.warn('[op-scribe] inject failed', error);
@@ -288,8 +289,8 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
-        rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, 50)
-          .map((n) => scrubText(oneLine(n), { keywords: settings.keywords, maxLength: 80 }).text);
+        rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
+          .map((n) => scrubText(oneLine(n), { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);

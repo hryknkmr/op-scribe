@@ -13,13 +13,12 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
+  const { LIMITS, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
   const { scrubText, scrubUrl, hostAllowed, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
-  // What a step must carry to mean anything (row T6); without it the step is not recorded.
-  const REQUIRED = { navigate: 'url', input: 'value', select: 'value', check: 'checked', upload: 'value', key: 'key', tool: 'tool', note: 'note' };
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
-  const KEPT_LIMIT = { choice: 120, search: 120, text: 200, arg: 200 };
+  const KEPT_LIMIT = LIMITS.kept;
   const KIND = /^[a-z]{1,16}$/;
   // ADR 0003 rows T4 and T5.
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
@@ -73,7 +72,7 @@
         return { treatment: 'length', field: f, kind, length: Math.min(value.length, 1e6) };
       case 'kept': {
         if (f === 'arg' && typeof value.number === 'number') {
-          return env !== 'commercial' && Number.isFinite(value.number) && Math.abs(value.number) < 1e6
+          return env !== 'commercial' && Number.isFinite(value.number) && Math.abs(value.number) < LIMITS.keptNumber
             ? typed.keptNumber(value.number)
             : typed.redacted('arg', 'number');
         }
@@ -162,11 +161,11 @@
       step.target = {};
       if (is(TOKEN, t.role)) step.target.role = t.role;
       if (is(TOKEN, t.tag)) step.target.tag = t.tag;
-      if (t.name) step.target.name = text(t.name, 80);
+      if (t.name) step.target.name = text(t.name, LIMITS.name);
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
-        if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
+        if (!r.kinds.length) step.target.selector = r.text.slice(0, LIMITS.selector);
       }
       if (t.href) step.target.href = url(t.href);
     }
@@ -174,13 +173,18 @@
     if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
     if (is(KEY, raw.key)) step.key = raw.key;
     if (type === 'tool') {
-      step.tool = text(raw.tool, 80);
+      step.tool = text(raw.tool, LIMITS.tool);
       step.ok = raw.ok !== false;
       step.source = 'agent';
       if (raw.args !== undefined) step.args = cleanArgs(raw.args, env, settings, kinds);
     }
-    if (type === 'note') step.note = text(raw.note, 300);
-    if (REQUIRED[type] && (step[REQUIRED[type]] === undefined || step[REQUIRED[type]] === '')) return null;
+    if (type === 'note') step.note = text(raw.note, LIMITS.note);
+    // Only what this kind of step may carry, and nothing without what it must (row T6).
+    const rule = STEP_RULES[type];
+    for (const f of Object.keys(step)) {
+      if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
+    }
+    if (rule.required.some((f) => step[f] === undefined || step[f] === '')) return null;
     if (type === 'upload' && step.value.field !== 'file') step.value = typed.file(0);
     if (type !== 'upload' && step.value?.field === 'file') step.value = typed.redacted('text', 'v');
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {

@@ -18,6 +18,8 @@
   'use strict';
 
   const D = root.OpScribeDescribe || require('./describe.js');
+  // Limits are shared with the masking; the judgment is not (see above).
+  const { LIMITS, cut, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -26,7 +28,7 @@
 
   const str = (row, max, re) => ({ type: 'string', row, max, re });
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-  const URL_VALUE = str('U1', 2048);
+  const URL_VALUE = str('U1', LIMITS.url);
   const opt = (node) => ({ ...node, optional: true });
 
   const TARGET = {
@@ -34,8 +36,8 @@
     fields: {
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
-      name: opt(str('T2', 81)),
-      selector: opt(str('T3', 160)),
+      name: opt(str('T2', cut(LIMITS.name))),
+      selector: opt(str('T3', LIMITS.selector)),
       href: opt(URL_VALUE)
     }
   };
@@ -53,10 +55,10 @@
       value: opt({ type: 'typed', row: 'I1-I8' }),
       checked: opt({ type: 'bool', row: 'T6' }),
       key: opt(str('T5', 32, /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/)),
-      tool: opt(str('W6', 81)),
+      tool: opt(str('W6', cut(LIMITS.tool))),
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
-      note: opt(str('T1', 301))
+      note: opt(str('T1', cut(LIMITS.note)))
     }
   };
 
@@ -83,20 +85,20 @@
           environment: {
             type: 'object',
             fields: {
-              browser: opt(str('M3', 60)),
-              platform: opt(str('M3', 60)),
-              language: opt(str('M3', 60))
+              browser: opt(str('M3', LIMITS.environment)),
+              platform: opt(str('M3', LIMITS.environment)),
+              language: opt(str('M3', LIMITS.environment))
             }
           },
-          steps: { type: 'array', max: 500, of: STEP },
+          steps: { type: 'array', max: LIMITS.steps, of: STEP },
           webmcpTools: {
             type: 'array',
-            max: 50,
+            max: LIMITS.toolList,
             of: {
               type: 'object',
               fields: {
                 site: URL_VALUE,
-                tools: { type: 'array', max: 50, of: str('W6', 81) }
+                tools: { type: 'array', max: LIMITS.toolList, of: str('W6', cut(LIMITS.tool)) }
               }
             }
           }
@@ -150,7 +152,7 @@
         ? rec.startUrl
         : (rec.steps || []).find((s) => s.url)?.url || '[[url:none]]',
       environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS))
-        .map(([k, v]) => [k, String(v).slice(0, 60)])),
+        .map(([k, v]) => [k, String(v).slice(0, LIMITS.environment)])),
       steps: (rec.steps || []).map((step, i) => {
         const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
         if (step.target) out.target = pick(step.target, TARGET_FIELDS);
@@ -181,7 +183,7 @@
   const TREATMENTS = new Set(['kept', 'length', 'redacted']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KIND = /^[a-z]{1,16}$/;
-  const KEPT_MAX = { choice: 121, search: 121, text: 201, arg: 201 };
+  const KEPT_MAX = Object.fromEntries(Object.entries(LIMITS.kept).map(([f, n]) => [f, cut(n)]));
   const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
   const hasOnly = (obj, keys) => Object.keys(obj).every((k) => keys.includes(k));
 
@@ -192,7 +194,7 @@
     if (v.treatment === 'kept') {
       if (!hasOnly(v, ['treatment', 'field', 'text', 'number'])) return bad('unknown field');
       if (v.field === 'arg' && typeof v.number === 'number' && v.text === undefined) {
-        if (!Number.isFinite(v.number) || Math.abs(v.number) >= 1e6) return bad('number outside the kept range');
+        if (!Number.isFinite(v.number) || Math.abs(v.number) >= LIMITS.keptNumber) return bad('number outside the kept range');
         if (env === 'commercial') return bad('commercial number kept');
         return undefined;
       }
@@ -227,20 +229,20 @@
       if (node.field !== 'arg') problems.push({ path, problem: 'not an argument value' });
       return;
     }
-    if (depth >= 3) {
+    if (depth >= LIMITS.argDepth) {
       problems.push({ path, problem: 'too deep' });
       return;
     }
     if (Array.isArray(node)) {
-      if (node.length > 10) problems.push({ path, problem: 'too many items' });
+      if (node.length > LIMITS.argItems) problems.push({ path, problem: 'too many items' });
       node.forEach((v, i) => checkArgs(v, env, `${path}[${i}]`, problems, depth + 1));
       return;
     }
     if (isObject(node)) {
       const entries = Object.entries(node);
-      if (entries.length > 20) problems.push({ path, problem: 'too many keys' });
+      if (entries.length > LIMITS.argKeys) problems.push({ path, problem: 'too many keys' });
       for (const [k, v] of entries) {
-        if ([...k].length > 40) problems.push({ path, problem: 'key too long' });
+        if ([...k].length > cut(LIMITS.argKey)) problems.push({ path, problem: 'key too long' });
         checkArgs(v, env, `${path}.${k}`, problems, depth + 1);
       }
       return;
@@ -307,19 +309,7 @@
     }
   }
 
-  // Row T6: what each kind of step must and may carry, besides n, type, t, env and source.
-  const STEP_RULES = {
-    navigate: { required: ['url'], allowed: ['url'] },
-    click: { required: [], allowed: ['url', 'target'] },
-    input: { required: ['value'], allowed: ['url', 'target', 'value'] },
-    select: { required: ['value'], allowed: ['url', 'target', 'value'] },
-    check: { required: ['checked'], allowed: ['url', 'target', 'checked'] },
-    upload: { required: ['value'], allowed: ['url', 'target', 'value'] },
-    key: { required: ['key'], allowed: ['url', 'target', 'key'] },
-    submit: { required: [], allowed: ['url', 'target'] },
-    tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
-    note: { required: ['note'], allowed: ['url', 'note'] }
-  };
+  // Row T6: STEP_RULES (shared/limits.js) says what each kind of step must and may carry.
   const BASE_FIELDS = ['n', 'type', 't', 'env', 'source'];
 
   function checkStepKind(step, path, problems) {
