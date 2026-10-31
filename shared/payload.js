@@ -152,7 +152,7 @@
         ? rec.startUrl
         : (rec.steps || []).find((s) => s.url)?.url || '[[url:none]]',
       environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS))
-        .map(([k, v]) => [k, String(v).slice(0, LIMITS.environment)])),
+        .map(([k, v]) => [k, [...String(v)].slice(0, LIMITS.environment).join('')])),
       steps: (rec.steps || []).map((step, i) => {
         const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
         if (step.target) out.target = pick(step.target, TARGET_FIELDS);

@@ -20,7 +20,7 @@
     // ARIA widget roles: elements a person operates, whatever their tag.
     ...['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox', 'radio',
       'switch', 'option', 'combobox', 'treeitem', 'slider', 'spinbutton', 'listbox', 'searchbox',
-      'textbox', 'gridcell', 'scrollbar'].map((role) => `[role="${role}"]`),
+      'textbox', 'gridcell', 'scrollbar'].map((role) => `[role~="${role}"]`),
     '[contenteditable=""]', '[contenteditable="true"]'
   ].join(',');
   const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'password', 'number',
@@ -31,7 +31,7 @@
 
   const isTextField = (el) => (el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has(el.type))
     || el.tagName === 'TEXTAREA' || el.isContentEditable
-    || ['textbox', 'searchbox'].includes(el.getAttribute('role'));
+    || ['textbox', 'searchbox'].includes(String(el.getAttribute('role') || '').trim().split(/\s+/)[0]);
 
   /** The element a person operated, or null when the event hit page content. */
   const operated = (el) => (el ? el.closest(INTERACTIVE) : null);

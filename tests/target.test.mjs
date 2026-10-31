@@ -23,11 +23,12 @@ function el(tag, attrs = {}, text = '', children = []) {
     hasAttribute: (name) => name in attrs,
     matches(selectors) {
       return selectors.split(',').some((one) => {
-        const m = /^([a-z]*)(?:\[([a-z-]+)(?:="([^"]*)")?\])?$/.exec(one.trim());
+        const m = /^([a-z]*)(?:\[([a-z-]+)(?:(~?)="([^"]*)")?\])?$/.exec(one.trim());
         if (!m) throw new Error(`unsupported selector ${one}`);
         if (m[1] && m[1] !== tag) return false;
         if (m[2] && !(m[2] in attrs)) return false;
-        return m[3] === undefined || attrs[m[2]] === m[3];
+        if (m[4] === undefined) return true;
+        return m[3] ? String(attrs[m[2]]).split(/\s+/).includes(m[4]) : attrs[m[2]] === m[4];
       });
     },
     closest(selectors) {
@@ -92,4 +93,10 @@ test('ARIA widgets are operated elements, whatever their tag (review R3)', () =>
     assert.equal(T.operated(node), node, role);
     assert.equal(T.accessibleName(node), '音量 50', role);
   }
+});
+
+test('role is a list of tokens (rows I6, T2; review new R4)', () => {
+  const node = el('div', { role: 'button checkbox' }, '保存');
+  assert.equal(T.operated(node), node);
+  assert.equal(T.accessibleName(node), '保存');
 });

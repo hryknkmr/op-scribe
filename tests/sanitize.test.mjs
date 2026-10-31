@@ -245,3 +245,19 @@ test('a host followed by "." and a letter is another host; a sentence end is not
   assert.deepEqual(S.finalScan({ m: 'x.example を見た' }, { hosts: ['x'] }), []);
   assert.equal(S.finalScan({ m: 'open shop.example.com.' }, { hosts: ['shop.example.com'] }).length, 1);
 });
+
+test('a fallback role list still makes a search box (row I6; review new R4)', () => {
+  assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'searchbox textbox' }, commercial).value.field, 'search');
+});
+
+test('cutting never splits a character or leaves half a placeholder (review new R4)', () => {
+  const emoji = S.scrubText(`a${'😀'.repeat(100)}`, { maxLength: 50 }).text;
+  assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(emoji), 'no lone surrogate');
+  assert.equal([...emoji].length, 51);
+  for (const n of [71, 72, 73, 74, 75, 76, 77, 78, 79]) {
+    const cut = S.scrubText(`${'あ'.repeat(n)}user@example.com`, { maxLength: 80 }).text;
+    // Every "[[" is a whole placeholder, and nothing of one is left before the "…".
+    assert.ok(!/\[\[(?![a-z]+\]\])/.test(cut), cut);
+    assert.ok(!/\[…$/.test(cut), cut);
+  }
+});

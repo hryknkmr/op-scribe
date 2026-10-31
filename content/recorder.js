@@ -118,7 +118,7 @@
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
       role: el.getAttribute('role'),
-      inSearch: Boolean(el.closest('[role="search"]')),
+      inSearch: Boolean(el.closest('[role~="search"]')),
       contentEditable: el.isContentEditable
     };
   }

@@ -119,8 +119,11 @@
       });
     }
 
-    if (opts.maxLength && text.length > opts.maxLength) {
-      text = `${text.slice(0, opts.maxLength).replace(/\[\[[^\]]*$/, '')}…`;
+    // Cut by characters (code points), never inside a surrogate pair, and drop
+    // a placeholder the cut left unfinished ("[", "[[email" or "[[email]").
+    const chars = [...text];
+    if (opts.maxLength && chars.length > opts.maxLength) {
+      text = `${chars.slice(0, opts.maxLength).join('').replace(/\[(?:\[[^\]]*\]?)?$/, '')}…`;
     }
     return { text, kinds };
   }
@@ -161,7 +164,9 @@
       return { kind: 'choice' };
     }
     // Markup only: a field that merely looks like a search box is free text.
-    if (type === 'search' || meta.role === 'searchbox' || meta.inSearch) return { kind: 'search' };
+    // role is a list of tokens; the first one is the element's role ("searchbox textbox").
+    const role = String(meta.role || '').trim().split(/\s+/)[0];
+    if (type === 'search' || role === 'searchbox' || meta.inSearch) return { kind: 'search' };
     return { kind: 'free' };
   }
 

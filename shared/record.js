@@ -165,7 +165,7 @@
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
-        if (!r.kinds.length) step.target.selector = r.text.slice(0, LIMITS.selector);
+        if (!r.kinds.length) step.target.selector = [...r.text].slice(0, LIMITS.selector).join('');
       }
       if (t.href) step.target.href = url(t.href);
     }
