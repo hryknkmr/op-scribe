@@ -22,7 +22,7 @@
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
   // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
-  const OWN_PLACEHOLDER = /\[\[(?:(?:text|file|url):([a-z0-9+.-]{1,16})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|(?:text|file):\d+|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
@@ -404,7 +404,8 @@
     const hosts = hostPattern(opts.hosts);
     const check = (text, path) => {
       // Skip the placeholder, not what it carries: "[[url:acme]]" in a hand-edited
-      // Markdown is still scanned for "acme" (E4, E6).
+      // Markdown is still scanned for "acme" (E4, E6). The count in [[text:N]] and
+      // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
       const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
       const { kinds } = scrubText(plain, { keywords: opts.keywords });
       if (hosts?.test(plain.normalize('NFKC'))) kinds.push('host');

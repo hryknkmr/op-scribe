@@ -312,7 +312,8 @@ async function generateAi() {
   ui.genAi.disabled = true;
   try {
     const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
-    const { output, input: prompt } = await rewrite(input, rec.startUrl, (text) => { ui.genStatus.textContent = text; });
+    const start = D.startUrlOf(rec);
+    const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : start, (text) => { ui.genStatus.textContent = text; });
     const problems = validate(output, prompt, scanWith(rec));
     if (problems.length) {
       await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);

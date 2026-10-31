@@ -105,3 +105,13 @@ test('a cleared commercial field reads as cleared', () => {
   assert.equal(D.describeStep({ type: 'input', target: { role: 'textbox', name: '本文' }, value: { treatment: 'length', field: 'text', kind: 'text', length: 0 } }),
     '「本文」入力欄を空にする');
 });
+
+test('a deleted first navigation does not come back as the start (#16; review R11)', () => {
+  const deleted = { startUrl: 'https://site-1.invalid/secret-page', steps: [
+    { type: 'click', t: 1, env: 'standard', url: 'https://site-1.invalid/', target: { role: 'button', name: 'OK' } }
+  ] };
+  assert.equal(D.startUrlOf(deleted), 'https://site-1.invalid/');
+  assert.ok(!D.toMarkdown(D.buildReproduction(deleted)).includes('secret-page'));
+  assert.ok(!D.toGherkin(deleted).includes('secret-page'));
+  assert.equal(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), '[[url:none]]');
+});

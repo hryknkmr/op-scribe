@@ -149,9 +149,7 @@
       startedAt: new Date(rec.startedAt).toISOString(),
       endedAt: rec.endedAt ? new Date(rec.endedAt).toISOString() : null,
       // Always the URL of a step, so the receiver can judge it by that step's environment.
-      startUrl: (rec.steps || []).some((s) => s.url === rec.startUrl)
-        ? rec.startUrl
-        : (rec.steps || []).find((s) => s.url)?.url || '[[url:none]]',
+      startUrl: D.startUrlOf(rec),
       environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS))
         .map(([k, v]) => [k, [...String(v)].slice(0, LIMITS.environment).join('')])),
       steps: (rec.steps || []).map((step, i) => {

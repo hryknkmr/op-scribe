@@ -68,6 +68,18 @@
     return out;
   }
 
+  /**
+   * Where the recording starts, from the steps it still has: the recorded
+   * start URL only while a step still carries it (a deleted first navigation
+   * must not come back, #16), otherwise the first step's URL, or [[url:none]].
+   * The Markdown, the Gherkin, the payload and the model input all use this.
+   */
+  function startUrlOf(rec) {
+    const steps = rec?.steps || [];
+    if (rec?.startUrl && steps.some((s) => s.url === rec.startUrl)) return rec.startUrl;
+    return steps.find((s) => s.url)?.url || '[[url:none]]';
+  }
+
   /** commercial | standard | mixed | none, from the environment of each step. */
   function coverageOf(steps) {
     const envs = new Set((steps || []).map((s) => s.env));
@@ -192,9 +204,10 @@
       previous = step;
     }
 
-    const first = steps.find((s) => s.url)?.url || rec?.startUrl;
-    if (rec?.startUrl && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
-      out.unshift({ action: `${rec.startUrl} を開く` });
+    const startUrl = startUrlOf(rec);
+    const first = steps.find((s) => s.url)?.url;
+    if (startUrl !== '[[url:none]]' && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
+      out.unshift({ action: `${startUrl} を開く` });
     }
 
     const preconditions = [];
@@ -293,7 +306,7 @@
       ''
     ];
     const start = steps[0]?.type === 'navigate' ? steps[0] : null;
-    const startUrl = start?.url || rec?.startUrl;
+    const startUrl = start?.url || startUrlOf(rec);
     // [[url:none]]: the payload of a recording whose steps were all deleted.
     if (startUrl && startUrl !== '[[url:none]]') {
       out.push('  Background:', `    Given "${startUrl}" を開いている`, ...table([['url', startUrl]], '      '), '');
@@ -326,7 +339,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const api = { display, displayArgs, coverageOf, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { display, displayArgs, coverageOf, startUrlOf, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
