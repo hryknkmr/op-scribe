@@ -100,6 +100,9 @@
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'email', re: /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, replace: partialEmail },
+    // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.
+    // Words written right before such an address are taken with it: over-matching only hides more.
+    { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g, replace: partialPhone },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
@@ -176,8 +179,8 @@
    * can never expose half an address.
    */
   // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
-  // a host with or without dots, an IP address, [IPv6]). Over-matching only hides more.
-  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/gi;
+  // a host with or without dots, in any letters, an IP address, [IPv6]). Over-matching only hides more.
+  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
@@ -208,10 +211,11 @@
 
     const keywords = keywordPattern(opts.keywords);
     if (keywords) {
-      text = text.replace(keywords, () => {
+      // Placeholders this filter wrote are left whole: a listed word "secret" must not break [[secret]].
+      text = text.split(new RegExp(`(${PLACEHOLDER.source})`)).map((part, i) => (i % 2 ? part : part.replace(keywords, () => {
         kinds.push('keyword');
         return mark('masked');
-      });
+      }))).join('');
     }
 
     for (const rule of RULES) {
@@ -234,8 +238,9 @@
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
   const CARD_HINT = /card.?(number|no|num)|cc.?(num|number)|cvc|cvv|security.?code|expir|有効期限|カード番号|セキュリティコード/i;
   // pin_code and verification-code too: _ and - are word characters for \b, so letters are looked at instead.
-  const SECRET_HINT = /pass|pwd|secret|token|otp|totp|2fa|mfa|(?<![a-z])pin(?![a-z])|(?:verif\w*|confirm\w*|auth\w*|access|login|sms|one.?time)[\s_-]?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
-  const EMAIL_HINT = /mail|メール/i;
+  const SECRET_HINT = /pass|pwd|secret|token|otp|totp|2fa|mfa|credential|bearer|(?:api|access|private|signing|client|license)[\s_-]?key|apikey|(?<![a-z])pin(?![a-z])|(?:verif\w*|confirm\w*|auth\w*|access|login|sms|one.?time)[\s_-]?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
+  // Not "mailing address": a postal address is kept like other text.
+  const EMAIL_HINT = /e-?mail|(?<![a-z])mail(?:[\s_-]?add?ress|[\s_-]?addr)?(?![a-z])|メール/i;
   const PHONE_HINT = /phone|\btel\b|mobile|fax|電話|携帯/i;
 
   /**
@@ -269,13 +274,13 @@
     if (!text) return { value: '', kinds: [] };
     if (cls.kind === 'secret') return { value: mark(cls.label), kinds: [cls.label] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: 200 });
-    // A contact field keeps its value only when the whole of it was recognized as one address or number;
-    // anything else in it (alice@localhost, a partial address) is partially hidden as a whole.
+    // A contact field keeps its value only when the whole of it was recognized as one address or number
+    // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
+    // recognized in it (alice@localhost next to an id, words around a credential): hidden entirely.
     if (cls.kind === 'email' || cls.kind === 'phone') {
-      const whole = cls.kind === 'email' ? /^[^\s@]*\*{3}@[^\s@]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
-      if (!whole.test(r.text.trim())) {
-        return { value: partialId(text.trim(), 1, cls.kind === 'phone' ? 4 : 1), kinds: [cls.kind] };
-      }
+      if (!r.kinds.length) return { value: partialId(r.text, 1, cls.kind === 'phone' ? 4 : 1), kinds: [cls.kind] };
+      const whole = cls.kind === 'email' ? /^[^\s@[\]]*\*{3}@[^\s@[\]]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
+      if (!whole.test(r.text.trim())) return { value: mark('masked'), kinds: [...new Set([...r.kinds, cls.kind])] };
     }
     return { value: r.text, kinds: r.kinds };
   }
@@ -283,7 +288,7 @@
   /** Masks WebMCP tool arguments with the same rules as form fields, keyed by argument name. */
   function maskArgs(value, opts = {}, depth = 0, key = '') {
     // The key decides first: { otp: 123456 } is a credential whatever its type.
-    if (key && classifyField({ name: key }).kind === 'secret' && value != null && typeof value !== 'object') {
+    if (key && secretKey(key) && value != null && typeof value !== 'object') {
       return mark('secret');
     }
     if (value == null || typeof value === 'boolean') return value;
@@ -326,7 +331,9 @@
   }
 
   const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36})$/i;
-  const SECRET_PARAM = /token|code|key|secret|sig|session|auth|pass|nonce|ticket|state|otp|(?<![a-z])pin(?![a-z])/i;
+  const SECRET_PARAM = /token|code|(?<![a-z])key(?![a-z])|[_-]key|key[_-]|secret|sig|session|auth(?!or)|pass|nonce|ticket|state|otp|(?<![a-z])pin(?![a-z])/i;
+  // Keys naming an id: their values are partly hidden like an id in a path.
+  const ID_KEY = /^(?:id|ids|uid|uuid|ID)$|[_-](?:id|ID)$|[a-z]Id$/;
 
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
@@ -352,15 +359,21 @@
     return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
   }
 
-  /** Query parameters under the policy: credential keys hidden, other values masked like text. */
+  /** A key that names a credential, the same for form fields, URL parameters and WebMCP arguments. */
+  const secretKey = (key) => SECRET_PARAM.test(key) || classifyField({ name: key }).kind === 'secret';
+
+  /** Query parameters under the policy: credential keys hidden, id keys partly hidden, other values masked like text. */
   function scrubParams(entries, ctx, kinds) {
     const params = [];
     for (const [k, v] of entries) {
       const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
       let value = '';
-      if (v && SECRET_PARAM.test(k)) {
+      if (v && secretKey(k)) {
         value = mark('secret');
         kinds.push('secret');
+      } else if (v && (ID_KEY.test(k) || ID_SEGMENT.test(v))) {
+        value = encodeURIComponent(partialId(v)).replace(/%2A/gi, '*');
+        kinds.push('id');
       } else if (v) {
         const r = scrubText(v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
         kinds.push(...r.kinds);
@@ -408,17 +421,18 @@
     const fragment = url.hash.slice(1);
     const [route, query] = fragment.includes('?') ? [fragment.slice(0, fragment.indexOf('?')), fragment.slice(fragment.indexOf('?') + 1)]
       : fragment.includes('=') ? ['', fragment] : [fragment, null];
-    if (query !== null) {
-      const routed = route.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
-      const fragmentParams = scrubParams(new URLSearchParams(query), ctx, kinds);
-      hash = `#${routed}${route || fragment.includes('?') ? '?' : ''}${fragmentParams.join('&')}`;
-    } else if (url.hash.includes('://')) {
-      // A URL inside the fragment (#/redirect/https://...): read as text, so its host follows the policy.
-      let decoded = url.hash.slice(1);
+    if (url.hash.includes('://')) {
+      // A URL inside the fragment (#/redirect/https://...?x=1): read as text, so its host and its own
+      // parameters follow the policy. Checked before the fragment's own parameters, which it would split.
+      let decoded = fragment;
       try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
       const r = scrubText(decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
       kinds.push(...r.kinds);
       hash = `#${r.text}`;
+    } else if (query !== null) {
+      const routed = route.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
+      const fragmentParams = scrubParams(new URLSearchParams(query), ctx, kinds);
+      hash = `#${routed}${route || fragment.includes('?') ? '?' : ''}${fragmentParams.join('&')}`;
     } else if (url.hash.length > 1) {
       hash = `#${url.hash.slice(1).split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/')}`;
     }

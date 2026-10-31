@@ -193,7 +193,14 @@ test('verification and PIN code fields are credentials, in any spelling', () => 
 });
 
 test('a contact field is kept only when its whole value is one recognized address or number', () => {
-  assert.equal(S.maskFieldValue('alice@localhost ref 1234567', { type: 'email' }).value, 'a******7');
+  assert.equal(S.maskFieldValue('alice@localhost ref 1234567', { type: 'email' }).value, '[[masked]]');
+  // A stronger rule is never weakened by the contact field: credentials, cards and listed words stay hidden.
+  assert.equal(S.maskFieldValue('password=hunter22', { type: 'email' }).value, '[[masked]]');
+  assert.equal(S.maskFieldValue('4111 1111 1111 1111', { type: 'tel' }).value, '[[masked]]');
+  assert.equal(S.maskFieldValue('Acme@example.com', { type: 'email' }, { keywords: ['Acme'] }).value, '[[masked]]');
+  // A postal address is not an email field.
+  assert.equal(S.maskFieldValue('123 Main Street', { label: 'Mailing address' }).value, '123 Main Street');
+  assert.equal(S.maskFieldValue('a@example.com', { name: 'mailaddress' }).value, 'a***@e***.com');
   assert.equal(S.maskFieldValue('user@example.com', { type: 'email' }).value, 'u***@e***.com');
   assert.equal(S.maskFieldValue('090-1234-5678', { type: 'tel' }).value, '***-****-5678');
 });
@@ -210,4 +217,36 @@ test('credential parameters are hidden in the query and in the fragment', () => 
 test('finalScan reads text around a placeholder as a whole', () => {
   const findings = S.finalScan({ a: 'Ac[[secret]]me', b: 'user[[secret]]@example.com', c: 'password=[[secret]]' }, { keywords: ['Acme'] });
   assert.deepEqual(findings.map((f) => f.path), ['a', 'b']);
+});
+
+test('API and private key fields are credentials, also as WebMCP arguments', () => {
+  for (const meta of [{ name: 'api_key' }, { label: 'API key' }, { name: 'private_key' }, { name: 'accessKey' }]) {
+    assert.equal(S.maskFieldValue('AbCd1234EfGh5678', meta).value, '[[secret]]', JSON.stringify(meta));
+  }
+  assert.deepEqual(S.maskArgs({ apiKey: 'AbCd1234EfGh5678', keyword: 'shoes' }), { apiKey: '[[secret]]', keyword: 'shoes' });
+});
+
+test('hosts and addresses in non-ASCII letters are hidden whole', () => {
+  const hosts = { hostAllowlist: [], aliases: {} };
+  assert.equal(S.scrubText('see //münich.example/a and //例え.テスト/a', { hosts }).text, 'see //site-1.invalid/a and //site-2.invalid/a');
+  assert.deepEqual(S.finalScan({ x: 'münich.example 例え.テスト' }, { keywords: S.aliasedHosts(hosts.aliases).map(([h]) => h) }).length, 1);
+  assert.equal(S.scrubText('連絡先は 太郎@例え.テスト まで。ASCII: user@example.comです').text, '連絡先は 太***@例***.テスト まで。ASCII: u***@e***.comです');
+});
+
+test('URL parameters use the same credential keys as fields, and id values are partly hidden', () => {
+  const url = (raw) => S.scrubUrl(raw, { hostAllowlist: ['example.com'] }).url;
+  assert.equal(url('https://example.com/?credential=shortSecret&bearer=shortSecret'), 'https://example.com/?credential=[[secret]]&bearer=[[secret]]');
+  assert.equal(url('https://example.com/?id=abcdef123456&keyword=shoes&author=x'), 'https://example.com/?id=ab******56&keyword=shoes&author=x');
+  assert.equal(url('https://example.com/#id=abcdef123456'), 'https://example.com/#id=ab******56');
+  assert.deepEqual(S.maskArgs({ credential: 'x', apiKey: 'y', author: 'z' }), { credential: '[[secret]]', apiKey: '[[secret]]', author: 'z' });
+});
+
+test('a URL nested in the fragment keeps its own query and still follows the host policy', () => {
+  const ctx = { hostAllowlist: ['example.com'], aliases: {} };
+  assert.equal(S.scrubUrl('https://example.com/#/redirect/https://private.internal.test/a?x=1&token=abcd', ctx).url,
+    'https://example.com/#/redirect/https://site-1.invalid/a?x=1&token=[[secret]]');
+});
+
+test('a listed word never breaks a placeholder', () => {
+  assert.equal(S.scrubText('[[secret]] と secret', { keywords: ['secret'] }).text, '[[secret]] と [[masked]]');
 });

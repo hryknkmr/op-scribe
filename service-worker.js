@@ -11,7 +11,7 @@
  */
 importScripts('shared/sanitize.js', 'shared/describe.js');
 
-const { scrubText, scrubUrl, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
+const { scrubText, scrubUrl, maskArgs, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 
 const REC_KEY = 'opsRecording';
@@ -146,10 +146,11 @@ function cleanStep(raw, rec, settings) {
     const t = raw.target;
     step.target = { role: text(t.role, 24), tag: text(t.tag, 16) };
     if (t.name) step.target.name = text(t.name, 80);
-    // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
+    // A selector is a locator, not prose: if anything had to be masked, or it holds a URL or a host
+    // the policy cannot place, drop it entirely.
     if (t.selector) {
-      const r = scrubText(t.selector, { keywords: settings.keywords });
-      if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
+      const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: settings.hostAllowlist, aliases: {} } });
+      if (!r.kinds.length && !/\/\/|@/.test(t.selector)) step.target.selector = r.text.slice(0, 160);
     }
     if (t.href) step.target.href = url(t.href);
   }
@@ -161,7 +162,8 @@ function cleanStep(raw, rec, settings) {
     step.ok = raw.ok !== false;
     step.source = 'agent';
     if (raw.args && typeof raw.args === 'object') {
-      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords, hosts: ctx });
+      // Masked by key again here (the page may not have), then as text.
+      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords })), { keywords: settings.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
