@@ -274,3 +274,13 @@ test('checkPayload bounds typed lengths and file counts like the masking does (r
     value: { treatment: 'redacted', field: 'file', kind: 'file', count: Number.MAX_SAFE_INTEGER } });
   assert.notDeepEqual(P.checkPayload(regen(files)), []);
 });
+
+test('an argument tree far too deep is refused without rendering it (rows E1, E3; review new R2)', () => {
+  const payload = clone(build());
+  let deep = true;
+  for (let i = 0; i < 20000; i += 1) deep = { d: deep };
+  payload.recording.steps[4].args = deep;
+  let problems;
+  assert.doesNotThrow(() => { problems = P.checkPayload(payload); });
+  assert.ok(problems.some((p) => p.problem === 'too deep'));
+});

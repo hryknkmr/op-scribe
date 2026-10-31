@@ -63,7 +63,13 @@ createServer(async (req, res) => {
   }
   if (payload?.schema !== SCHEMA) return reply(res, 422, { error: 'unknown schema' });
 
-  const problems = checkPayload(payload);
+  let problems;
+  try {
+    problems = checkPayload(payload);
+  } catch (error) {
+    // Whatever the payload does to the check, it is refused, and the receiver keeps running (#13).
+    problems = [{ path: '(root)', problem: `check failed: ${error.name}` }];
+  }
   if (problems.length) {
     console.warn('rejected: unexpected shape', problems);
     return reply(res, 422, { error: 'unexpected shape', problems });

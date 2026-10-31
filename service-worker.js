@@ -289,6 +289,8 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
+        // The payload holds tools for at most toolList sites (row W6).
+        if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
         rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
           .map((n) => scrubText(oneLine(n), { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
         return { save: rec, reply: { ok: true } };

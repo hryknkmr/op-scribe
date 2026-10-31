@@ -380,6 +380,8 @@
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
       if (step.args !== undefined) checkArgs(step.args, step.env, `${path}.args`, problems);
     });
+    // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.
+    if (problems.length) return problems;
     if (payload.privacy.coverage !== D.coverageOf(steps)) {
       problems.push({ path: 'privacy.coverage', problem: 'does not match the steps' });
     }

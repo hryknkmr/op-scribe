@@ -335,6 +335,8 @@
       if (v) {
         const harmless = !commercial
           && !SENSITIVE_PARAM.test(k)
+          // The same vocabulary as form fields (rows I3, I4, U7): address, card, postal ...
+          && !['secret', 'pii'].includes(classifyField({ name: k }).kind)
           && /^[\w.-]{1,24}$/.test(v)
           && !scrubText(v, { keywords: ctx.keywords }).kinds.length;
         value = harmless ? encodeURIComponent(v) : mark('v');
@@ -372,7 +374,7 @@
   function hostPattern(hosts) {
     const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase()).filter(Boolean)
       .sort((a, b) => b.length - a.length);
-    return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-])`, 'iu') : null;
+    return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
 
   function finalScan(value, opts = {}) {

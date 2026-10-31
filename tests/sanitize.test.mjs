@@ -234,3 +234,14 @@ test('finalScan finds real host names of any length, only as whole hosts (row K5
   assert.deepEqual(S.finalScan({ markdown: 'box と xylophone と x-ray' }, { hosts: ['x'] }), []);
   assert.deepEqual(S.finalScan({ markdown: 'see intranet.corp.invalid now' }, { hosts: ['intranet.corp.invalid'] }).length, 1);
 });
+
+test('URL query keys use the form-field vocabulary too (row U7; review new R2)', () => {
+  const { url } = S.scrubUrl('https://example.com/?address=abc&card=1234&postal=1&tab=items',
+    { hostAllowlist: ['example.com'], env: 'standard' });
+  assert.equal(url, 'https://example.com/?address=[[v]]&card=[[v]]&postal=[[v]]&tab=items');
+});
+
+test('a host followed by "." and a letter is another host; a sentence end is not (row K5; review new R2)', () => {
+  assert.deepEqual(S.finalScan({ m: 'x.example を見た' }, { hosts: ['x'] }), []);
+  assert.equal(S.finalScan({ m: 'open shop.example.com.' }, { hosts: ['shop.example.com'] }).length, 1);
+});
