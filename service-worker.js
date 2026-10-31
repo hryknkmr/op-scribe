@@ -150,7 +150,9 @@ function cleanStep(raw, rec, settings) {
     // the policy cannot place, drop it entirely.
     if (t.selector) {
       const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: settings.hostAllowlist, aliases: {} } });
-      if (!r.kinds.length && !/\/\/|@/.test(t.selector)) step.target.selector = r.text.slice(0, 160);
+      // An id-like number or a host name inside the selector (#user-123456, [data-testid="x.example.test"]) too.
+      const identifying = /\/\/|@|\d{3,}|[0-9a-f]{8,}|["'][^"']*[\w-]\.[a-z]{2,}[^"']*["']/i.test(t.selector);
+      if (!r.kinds.length && !identifying) step.target.selector = r.text.slice(0, 160);
     }
     if (t.href) step.target.href = url(t.href);
   }
@@ -324,7 +326,8 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
-        rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: settings.keywords, maxLength: 80 }).text);
+        const hosts = { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases };
+        rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: settings.keywords, maxLength: 80, hosts }).text);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);

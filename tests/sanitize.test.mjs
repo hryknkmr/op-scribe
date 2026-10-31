@@ -250,3 +250,27 @@ test('a URL nested in the fragment keeps its own query and still follows the hos
 test('a listed word never breaks a placeholder', () => {
   assert.equal(S.scrubText('[[secret]] と secret', { keywords: ['secret'] }).text, '[[secret]] と [[masked]]');
 });
+
+test('one key judge: the same name means the same in fields, URLs, WebMCP arguments and the final scan', () => {
+  assert.equal(S.classifyKey('orderID'), 'id');
+  assert.equal(S.classifyKey('newpassword'), 'secret');
+  assert.equal(S.classifyKey('Recovery code'), 'secret');
+  assert.equal(S.classifyKey('state'), null);
+  assert.equal(S.classifyKey('state', { protocol: true }), 'secret');
+  assert.equal(S.maskFieldValue('abc123', { name: 'user_id' }).value, 'ab**23');
+  assert.equal(S.maskFieldValue('Tokyo', { name: 'state' }).value, 'Tokyo');
+  assert.equal(S.maskFieldValue('SAVE10', { name: 'promo_code' }).value, 'SAVE10');
+  assert.deepEqual(S.maskArgs({ token: { value: 'abcd' }, authorization: 'Basic dXNlcjpwYXNz', user_id: 'abc123', nested: { order_id: { v: 'zz9' } } }),
+    { token: '[[secret]]', authorization: '[[secret]]', user_id: 'ab**23', nested: { order_id: { v: 'z**' } } });
+  assert.equal(S.scrubUrl('https://example.com/?authorization=Basic%20x&email=alice%40localhost&orderID=abc123', { hostAllowlist: ['example.com'] }).url,
+    'https://example.com/?authorization=[[secret]]&email=a******t&orderID=ab**23');
+  assert.deepEqual(S.finalScan({ args: { token: 'abc' }, steps: [{ key: 'Enter', args: { otp: '[[secret]]' } }] }).map((f) => f.path), ['args.token']);
+});
+
+test('credentials written as key and value in text are hidden', () => {
+  for (const [input, output] of [['otp=123456', 'otp=[[secret]]'], ['cvv=123', 'cvv=[[secret]]'], ['session=abcd', 'session=[[secret]]'],
+    ['Authorization: Basic dXNlcjpwYXNz', 'Authorization: [[secret]]'], ['backup code: ABCDEF', 'backup code: [[secret]]'], ['{"pin":"1234"}', '{"pin":"[[secret]]"}']]) {
+    assert.equal(S.scrubText(input).text, output);
+  }
+  assert.equal(S.scrubText('password=[[secret]]').text, 'password=[[secret]]');
+});

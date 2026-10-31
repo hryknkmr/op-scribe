@@ -90,10 +90,11 @@
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
-    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]{10,}=*/gi },
+    { kind: 'secret', re: /\b(?:Bearer|Basic)\s+[\w.~+/-]{8,}=*/gi },
     {
+      // A credential written as key and value in text or JSON: otp=123456, "pin": "1234", backup code: ABCDEF.
       kind: 'secret',
-      re: /\b(token|api[_-]?key|secret|password|passwd|pwd)(\s*[:=]\s*)[^\s"'&]{4,}/gi,
+      re: /\b(token|api[_-]?key|secret|password|passwd|pwd|passcode|otp|pin|cvc|cvv|session|authorization|credentials?|(?:backup|recovery|verification|auth|one[_-]?time)[ _-]?code)(["']?\s*[:=]\s*["']?)(?!\[\[)[^\s"'&,}]{3,}/gi,
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
@@ -233,34 +234,90 @@
     return { text, kinds };
   }
 
+  // ------------------------------------------------------------- key meaning
+
+  // What a key or a field's name says its value is. One judge for form fields, URL parameters, WebMCP
+  // arguments and the final scan, so that the same name means the same everywhere.
+
+  /** A key as lowercase words: orderID -> order id, APIKey -> api key, verification_code -> verification code. */
+  const wordsOf = (key) => String(key || '').normalize('NFKC')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase().split(/[^a-z0-9\u0080-￿]+/).filter(Boolean);
+
+  // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
+  const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
+  const CREDENTIAL_PARTS = /password|passwd|passphrase|secret|token|credential|authorization|apikey|accesskey|privatekey/;
+  const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session'];
+  const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
+    'sms', 'backup', 'recovery', 'time', 'otp', 'mfa', 'pin'];
+  // Only in URLs and protocol arguments: OAuth and signed-URL parameters. A form field named "state" or "code" is a
+  // place or a promotion code, and is kept.
+  const PROTOCOL_WORDS = new Set(['auth', 'key', 'code', 'state', 'session', 'sid', 'sig', 'signature', 'nonce', 'ticket', 'pass', 'saml', 'assertion']);
+  const JA_CARD = /有効期限|カード番号|セキュリティコード/;
+  const JA_SECRET = /暗証|パスワード|認証コード|確認コード|ワンタイム/;
+  const JA_EMAIL = /メール/;
+  const JA_PHONE = /電話|携帯/;
+  const PHONE_WORDS = new Set(['phone', 'tel', 'telephone', 'mobile', 'fax', 'cell']);
+  const ID_WORDS = new Set(['id', 'ids', 'uid', 'uuid', 'guid']);
+
+  /**
+   * card | secret | email | phone | id | null. protocol: the key is a URL parameter or a protocol
+   * argument, where a few more words (code, state, session, ...) name credentials.
+   */
+  function classifyKey(key, { protocol = false } = {}) {
+    const text = String(key || '').normalize('NFKC');
+    const words = wordsOf(text);
+    if (!words.length) return null;
+    const has = (list) => words.some((w) => list.includes(w));
+    const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
+    if (JA_CARD.test(text) || has(['cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber']) || pair(['card', 'cc'], 'number')
+        || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
+        || words.some((w) => w.startsWith('expir'))) return 'card';
+    if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
+        || pair(KEY_OWNERS, 'key') || pair(CODE_OWNERS, 'code') || words.some((w) => /^(?:pass|pwd|otp|pin)$/.test(w) && protocol)
+        || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
+    if (JA_EMAIL.test(text) || words.some((w) => w.includes('email') || /^mail(?:add?ress|addr)?$/.test(w)) || pair(['e'], 'mail')) return 'email';
+    if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w) || w.endsWith('phone'))) return 'phone';
+    if (ID_WORDS.has(words[words.length - 1])) return 'id';
+    return null;
+  }
+
   // ------------------------------------------------------------------ fields
 
-  const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
-  const CARD_HINT = /card.?(number|no|num)|cc.?(num|number)|cvc|cvv|security.?code|expir|有効期限|カード番号|セキュリティコード/i;
-  // pin_code and verification-code too: _ and - are word characters for \b, so letters are looked at instead.
-  const SECRET_HINT = /pass|pwd|secret|token|otp|totp|2fa|mfa|credential|bearer|(?:api|access|private|signing|client|license)[\s_-]?key|apikey|(?<![a-z])pin(?![a-z])|(?:verif\w*|confirm\w*|auth\w*|access|login|sms|one.?time)[\s_-]?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
-  // Not "mailing address": a postal address is kept like other text.
-  const EMAIL_HINT = /e-?mail|(?<![a-z])mail(?:[\s_-]?add?ress|[\s_-]?addr)?(?![a-z])|メール/i;
-  const PHONE_HINT = /phone|\btel\b|mobile|fax|電話|携帯/i;
+  const SECRET_AUTOCOMPLETE = /\b(?:one-time-code|current-password|new-password)\b/;
+  const RANK = ['card', 'secret', 'email', 'phone', 'id'];
 
   /**
    * Decides how a form control's value may be recorded.
-   * kind: secret | email | phone | text | ignore
+   * kind: secret (label secret | card) | email | phone | id | text | ignore
    */
   function classifyField(meta = {}) {
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
-    const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel]
-      .filter(Boolean).join(' ').normalize('NFKC');
-
     if (type === 'hidden') return { kind: 'ignore' };
-    if (/\bcc-/.test(autocomplete) || CARD_HINT.test(hints)) return { kind: 'secret', label: 'card' };
-    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints)) {
-      return { kind: 'secret', label: 'secret' };
+    const found = new Set([meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel].map((h) => classifyKey(h)));
+    if (/\bcc-/.test(autocomplete) || found.has('card')) return { kind: 'secret', label: 'card' };
+    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || found.has('secret')) return { kind: 'secret', label: 'secret' };
+    if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
+    if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
+    const kind = RANK.find((k) => found.has(k));
+    return { kind: kind || 'text' };
+  }
+
+  /** A value whose key or field says what it is (classifyKey's kinds), under the policy for that kind. */
+  function maskByKind(kind, text, opts = {}) {
+    if (kind === 'secret' || kind === 'card') return { value: mark(kind), kinds: [kind] };
+    const r = scrubText(text, { keywords: opts.keywords, maxLength: opts.maxLength, hosts: opts.hosts });
+    // A contact field keeps its value only when the whole of it was recognized as one address or number
+    // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
+    // recognized in it (alice@localhost next to an id, words around a credential): hidden entirely.
+    if (kind === 'email' || kind === 'phone') {
+      if (!r.kinds.length) return { value: partialId(r.text, 1, kind === 'phone' ? 4 : 1), kinds: [kind] };
+      const whole = kind === 'email' ? /^[^\s@[\]]*\*{3}@[^\s@[\]]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
+      if (!whole.test(r.text.trim())) return { value: mark('masked'), kinds: [...new Set([...r.kinds, kind])] };
     }
-    if (type === 'email' || /\bemail\b/.test(autocomplete) || EMAIL_HINT.test(hints)) return { kind: 'email' };
-    if (type === 'tel' || /\btel\b/.test(autocomplete) || PHONE_HINT.test(hints)) return { kind: 'phone' };
-    return { kind: 'text' };
+    if (kind === 'id' && !r.kinds.length) return { value: partialId(r.text), kinds: ['id'] };
+    return { value: r.text, kinds: r.kinds };
   }
 
   /**
@@ -272,42 +329,29 @@
     if (cls.kind === 'ignore') return null;
     const text = raw == null ? '' : String(raw);
     if (!text) return { value: '', kinds: [] };
-    if (cls.kind === 'secret') return { value: mark(cls.label), kinds: [cls.label] };
-    const r = scrubText(text, { keywords: opts.keywords, maxLength: 200 });
-    // A contact field keeps its value only when the whole of it was recognized as one address or number
-    // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
-    // recognized in it (alice@localhost next to an id, words around a credential): hidden entirely.
-    if (cls.kind === 'email' || cls.kind === 'phone') {
-      if (!r.kinds.length) return { value: partialId(r.text, 1, cls.kind === 'phone' ? 4 : 1), kinds: [cls.kind] };
-      const whole = cls.kind === 'email' ? /^[^\s@[\]]*\*{3}@[^\s@[\]]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
-      if (!whole.test(r.text.trim())) return { value: mark('masked'), kinds: [...new Set([...r.kinds, cls.kind])] };
-    }
-    return { value: r.text, kinds: r.kinds };
+    return maskByKind(cls.kind === 'secret' ? cls.label : cls.kind, text, { keywords: opts.keywords, maxLength: 200 });
   }
 
-  /** Masks WebMCP tool arguments with the same rules as form fields, keyed by argument name. */
-  function maskArgs(value, opts = {}, depth = 0, key = '') {
-    // The key decides first: { otp: 123456 } is a credential whatever its type.
-    if (key && secretKey(key) && value != null && typeof value !== 'object') {
-      return mark('secret');
-    }
+  /**
+   * Masks WebMCP tool arguments by key, as URL parameters are. A key's meaning covers everything under it:
+   * { token: { value: ... } } is hidden whole, { user_id: { v: ... } } is an id all the way down.
+   */
+  function maskArgs(value, opts = {}, depth = 0, key = '', inherited = null) {
+    const meaning = (key && classifyKey(key, { protocol: true })) || inherited;
+    if ((meaning === 'secret' || meaning === 'card') && value != null) return mark(meaning);
     if (value == null || typeof value === 'boolean') return value;
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) return mark('value');
-      const r = scrubText(String(value));
-      return r.kinds.length ? r.text : value;
-    }
-    if (typeof value === 'string') {
-      const masked = maskFieldValue(value, { name: key }, opts);
-      return masked ? masked.value : '';
+    if (typeof value === 'number' || typeof value === 'string') {
+      if (typeof value === 'number' && !Number.isFinite(value)) return mark('value');
+      const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200 });
+      return typeof value === 'number' && r.value === String(value) ? value : r.value;
     }
     if (depth >= 3) return mark('nested');
-    if (Array.isArray(value)) return value.slice(0, 10).map((v) => maskArgs(v, opts, depth + 1, key));
+    if (Array.isArray(value)) return value.slice(0, 10).map((v) => maskArgs(v, opts, depth + 1, '', meaning));
     if (typeof value === 'object') {
       const out = {};
       for (const [k, v] of Object.entries(value).slice(0, 20)) {
         const safeKey = scrubText(k, { keywords: opts.keywords }).kinds.length ? 'masked' : k;
-        out[safeKey] = maskArgs(v, opts, depth + 1, k);
+        out[safeKey] = maskArgs(v, opts, depth + 1, k, meaning);
       }
       return out;
     }
@@ -331,9 +375,6 @@
   }
 
   const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36})$/i;
-  const SECRET_PARAM = /token|code|(?<![a-z])key(?![a-z])|[_-]key|key[_-]|secret|sig|session|auth(?!or)|pass|nonce|ticket|state|otp|(?<![a-z])pin(?![a-z])/i;
-  // Keys naming an id: their values are partly hidden like an id in a path.
-  const ID_KEY = /^(?:id|ids|uid|uuid|ID)$|[_-](?:id|ID)$|[a-z]Id$/;
 
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
@@ -359,25 +400,18 @@
     return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
   }
 
-  /** A key that names a credential, the same for form fields, URL parameters and WebMCP arguments. */
-  const secretKey = (key) => SECRET_PARAM.test(key) || classifyField({ name: key }).kind === 'secret';
-
   /** Query parameters under the policy: credential keys hidden, id keys partly hidden, other values masked like text. */
   function scrubParams(entries, ctx, kinds) {
     const params = [];
     for (const [k, v] of entries) {
       const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
       let value = '';
-      if (v && secretKey(k)) {
-        value = mark('secret');
-        kinds.push('secret');
-      } else if (v && (ID_KEY.test(k) || ID_SEGMENT.test(v))) {
-        value = encodeURIComponent(partialId(v)).replace(/%2A/gi, '*');
-        kinds.push('id');
-      } else if (v) {
-        const r = scrubText(v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+      if (v) {
+        // The key decides first (classifyKey); a value shaped like an id is partly hidden whatever its key.
+        const meaning = classifyKey(k, { protocol: true }) || (ID_SEGMENT.test(v) ? 'id' : null);
+        const r = maskByKind(meaning, v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
         kinds.push(...r.kinds);
-        value = encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
+        value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
       }
       params.push(`${encodeURIComponent(key)}=${value}`);
     }
@@ -454,13 +488,19 @@
       const kinds = [' ', ''].flatMap((gap) => scrubText(String(text).replace(PLACEHOLDER, gap), { keywords: opts.keywords }).kinds);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
-    const walk = (v, path) => {
-      if (typeof v === 'string') return check(v, path);
+    const walk = (v, path, key = '') => {
+      if (typeof v === 'string') {
+        // A text value under a key naming a credential is one, unless it is only a placeholder of this filter.
+        if (key && classifyKey(key) && ['secret', 'card'].includes(classifyKey(key)) && v.replace(PLACEHOLDER, '').trim()) {
+          findings.push({ path: path || '(root)', kinds: [classifyKey(key)] });
+        }
+        return check(v, path);
+      }
       if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`));
       if (v && typeof v === 'object') {
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k);
+          walk(item, path ? `${path}.${k}` : k, k);
         }
       }
       return undefined;
@@ -478,6 +518,7 @@
     partialEmail,
     partialId,
     partialPhone,
+    classifyKey,
     classifyField,
     maskFieldValue,
     maskArgs,
