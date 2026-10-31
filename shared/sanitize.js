@@ -24,6 +24,8 @@
   // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
   // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
   // so "[[text:09012345678]]" written by hand is scanned like any other text.
+  // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
+  const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
   const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
@@ -121,7 +123,7 @@
     if (input == null) return { text: '', kinds };
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
-    text = text.replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
+    text = text.replace(INVISIBLE, '');
     // After the invisible characters are gone, so a zero-width space between two "[" cannot slip through.
     if (opts.escape !== false) text = text.replace(/\[(?=\[)/g, '[ ');
     // Text that went through here before keeps its own placeholders: set them
@@ -190,8 +192,9 @@
   function classifyField(meta = {}) {
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
+    // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
     const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel]
-      .filter(Boolean).join(' ').normalize('NFKC');
+      .filter(Boolean).join(' ').normalize('NFKC').replace(INVISIBLE, '');
 
     if (type === 'hidden') return { kind: 'ignore' };
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints)) {
@@ -318,7 +321,9 @@
       keywords: opts.keywords,
       isLeaf: (node) => node === null || typeof node !== 'object',
       leaf: (node) => {
-        if (node == null || typeof node === 'boolean') return node ?? null;
+        // null and booleans as they are; undefined, a BigInt or anything else that is not
+        // text or a number is redacted below, never turned into null (W4; review R24).
+        if (node === null || typeof node === 'boolean') return node;
         if (typeof node === 'number') {
           return !commercial && Number.isFinite(node) && Math.abs(node) < LIMITS.keptNumber
             ? typed.keptNumber(node)
@@ -388,10 +393,12 @@
     const host = parsedHost(url.hostname);
     const commercial = ctx.env === 'commercial' || hostAllowed(host, ctx.commercialHosts);
     let origin;
+    // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
+    const port = url.port ? `:${url.port}` : '';
     if (hostAllowed(host, ctx.hostAllowlist)) {
-      origin = `${url.protocol}//${url.host}`;
+      origin = `${url.protocol}//${host}${port}`;
     } else {
-      origin = `${url.protocol}//${aliasFor(url.origin, aliases)}`;
+      origin = `${url.protocol}//${aliasFor(`${url.protocol}//${host}${port}`, aliases)}`;
       kinds.push('host');
     }
 

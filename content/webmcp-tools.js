@@ -35,7 +35,7 @@
     return raw && typeof raw === 'object' ? raw : {};
   }
 
-  /** Arguments must survive structured cloning; anything exotic is dropped. */
+  /** Arguments must survive structured cloning; what cannot is redacted by the recorder. */
   /**
    * A copy postMessage can carry: plain values, arrays and objects, without
    * functions or other things it cannot clone. Not a JSON round trip, which
@@ -43,15 +43,16 @@
    * to redact them (ADR 0003, W3). Deeper than the recorder looks is cut.
    */
   function cloneable(value, depth = 0) {
-    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+    // undefined and BigInt are carried as they are, so the recorder redacts them (W4);
+    // a function or a symbol, which postMessage cannot carry, arrives as undefined.
+    if (value === null || value === undefined || ['string', 'number', 'boolean', 'bigint'].includes(typeof value)) return value;
     if (typeof value !== 'object' || depth > 8) return undefined;
     try {
       if (typeof value.toJSON === 'function') return cloneable(value.toJSON(), depth + 1);
-      if (Array.isArray(value)) return value.slice(0, 100).map((v) => cloneable(v, depth + 1) ?? null);
+      if (Array.isArray(value)) return value.slice(0, 100).map((v) => cloneable(v, depth + 1));
       const out = {};
       for (const [k, v] of Object.entries(value).slice(0, 100)) {
-        const c = cloneable(v, depth + 1);
-        if (c !== undefined) Object.defineProperty(out, k, { value: c, enumerable: true, writable: true, configurable: true });
+        Object.defineProperty(out, k, { value: cloneable(v, depth + 1), enumerable: true, writable: true, configurable: true });
       }
       return out;
     } catch {

@@ -334,3 +334,26 @@ test('finalScan undoes CSS escapes before it looks (E6; review R23)', () => {
   assert.deepEqual(S.finalScan({ s: '#Acme\\/Prod' }, { keywords: ['Acme/Prod'] }), [{ path: 's', kinds: ['keyword'] }]);
   assert.deepEqual(S.finalScan({ s: '#save\\.button' }), []);
 });
+
+test('field names are classified after invisible characters are removed (rows I3, I4; review R24)', () => {
+  assert.equal(S.classifyField({ type: 'text', name: 'pa​ssword' }).kind, 'secret');
+  assert.equal(S.classifyField({ type: 'text', label: 'メー⁠ル' }).kind, 'pii');
+});
+
+test('undefined and BigInt arguments are redacted as values, never dropped or made null (row W4; review R24)', () => {
+  const args = S.maskArgs({ a: undefined, b: 10n, list: ['x', undefined, null] }, { env: 'standard' });
+  assert.deepEqual(args, {
+    a: { treatment: 'redacted', field: 'arg', kind: 'value' },
+    b: { treatment: 'redacted', field: 'arg', kind: 'value' },
+    list: [S.typed.kept('arg', 'x'), { treatment: 'redacted', field: 'arg', kind: 'value' }, null]
+  });
+});
+
+test('a host with a trailing dot is the same site (row U4; review R24)', () => {
+  const aliases = {};
+  const a = S.scrubUrl('https://example.com./a', { aliases }).url;
+  const b = S.scrubUrl('https://example.com/b', { aliases }).url;
+  assert.equal(new URL(a).host, new URL(b).host);
+  assert.equal(Object.keys(aliases).length, 1);
+  assert.equal(S.scrubUrl('https://example.com.:8443/', { hostAllowlist: ['example.com'] }).url, 'https://example.com:8443/');
+});
