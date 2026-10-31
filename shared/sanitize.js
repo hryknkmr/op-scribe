@@ -116,7 +116,14 @@
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
-    { kind: 'secret', re: /\b(?:Bearer|Basic)\s+[\w.~+/-]{8,}=*/gi },
+    // Bearer and its token, at any length; Basic with what decodes to user:password, or a long token.
+    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi },
+    { kind: 'secret', re: /\bBasic\s+[A-Za-z0-9+/]+=*/g, accept: (m) => {
+      const token = m.replace(/^Basic\s+/, '');
+      let decoded = '';
+      try { decoded = atob(token); } catch { /* not base64 */ }
+      return decoded.includes(':') || token.length >= 8;
+    } },
     {
       // A credential written as key and value in text or JSON (client_secret=abc, "pin": "1234", backup code: ABC,
       // password="hunter 2"): the key is judged by classifyKey, like every other key; a quoted value is taken whole.
@@ -524,11 +531,14 @@
   };
 
   /** Decoded until it no longer changes (at most 3 times): https%253A%252F%252F... is a URL too. See overEncoded. */
+  // Each run of valid percent escapes is decoded on its own: one malformed escape (%ZZ) does not stop the rest.
+  const decodeOnce = (value) => value.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try { return decodeURIComponent(run); } catch { return run; }
+  });
   const decodeDeep = (value) => {
     let out = String(value);
-    for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(out); i += 1) {
-      let next;
-      try { next = decodeURIComponent(out); } catch { break; }
+    for (let i = 0; i < 3; i += 1) {
+      const next = decodeOnce(out);
       if (next === out) break;
       out = next;
     }
@@ -537,7 +547,7 @@
   // Still encoded after decodeDeep (encoded more deeply than is read): hidden whole rather than half read.
   const overEncoded = (value) => {
     const decoded = decodeDeep(value);
-    try { return decodeURIComponent(decoded) !== decoded; } catch { return false; }
+    return decodeOnce(decoded) !== decoded;
   };
   // What a production URL keeps of a value or a path segment: short, plain letters and digits.
   const PLAIN = /^[\w.-]{1,24}$/;
@@ -595,14 +605,16 @@
         // The key is decoded like the value: %2574oken is token.
         const meaning = classifyKey(decodeDeep(k), { protocol: true }) || (ID_SEGMENT.test(decoded) ? 'id' : null);
         let r;
-        if (ctx.trustHidden && isPlaceholder(decoded)) r = { value: decoded, kinds: [] };
+        // At the exit, what this filter wrote (a placeholder, ab**23) passes again, on production too.
+        if (ctx.trustHidden && alreadyHidden(decoded.trim())) r = { value: decoded, kinds: [] };
         else if (meaning === 'secret' || meaning === 'card') r = maskByKind(meaning, decoded, { trustHidden: ctx.trustHidden });
         // Encoded more deeply than is read, or (on production) anything but a short plain value, whatever its key
         // says (an email address is not plain): hidden whole.
         else if (overEncoded(v) || (ctx.strict && !PLAIN.test(decoded))) r = { value: mark('v'), kinds: ['query'] };
         else r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
         kinds.push(...r.kinds);
-        value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
+        value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*')
+          .replace(/\[\[[^\]]*\]\]/g, (m) => m.replace(/%3A/gi, ':'));
       }
       params.push(`${encodeURIComponent(key)}=${value}`);
     }

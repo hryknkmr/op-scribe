@@ -612,3 +612,14 @@ test('every invisible format character is ignored in names, keys, listed words a
   assert.equal(S.finalScan({ a: 'to⁦ken=abc' }).length, 1);
   assert.equal(S.scrubText('a؜b️c').text, 'abc');
 });
+
+test('own partial masks pass the exit on production, a malformed escape does not stop decoding, short Bearer and Basic', () => {
+  const ctx = { hostAllowlist: ['www.example.com'], productionHosts: ['www.example.com'], aliases: {} };
+  const url = S.scrubUrl('https://www.example.com/?uid=abc123', ctx).url;
+  assert.equal(url, 'https://www.example.com/?uid=ab**23');
+  assert.deepEqual(S.finalScan({ steps: [{ privacy: { profile: 'commercial' }, url }] }, { hostAllowlist: ['www.example.com'] }), []);
+  const raw = 'https://example.com/?next=https%253A%252F%252Fprivate.internal.test%ZZ';
+  assert.equal(S.scrubUrl(raw, { hostAllowlist: ['example.com'], aliases: {} }).url, 'https://example.com/?next=[[url:invalid]]');
+  assert.equal(S.finalScan({ raw }, { hostAllowlist: ['example.com'] }).length, 1);
+  assert.equal(S.scrubText(`Basic ${btoa('a:b')} / Bearer abc123 / Basic auth を使う`).text, '[[secret]] / [[secret]] / Basic auth を使う');
+});
