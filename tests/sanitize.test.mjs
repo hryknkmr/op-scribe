@@ -291,8 +291,8 @@ test('keywords that are part of a placeholder name are not used (row K2; review 
 });
 
 test('masking text again never rewrites inside its own placeholders (review R12)', () => {
-  assert.equal(S.scrubText('[[email]] / Acme / [[text:1234567]]', { keywords: ['Acme'], escape: false }).text,
-    '[[email]] / [[masked]] / [[text:1234567]]');
+  assert.equal(S.scrubText('[[email]] / Acme / [[text:123456]]', { keywords: ['Acme'], escape: false }).text,
+    '[[email]] / [[masked]] / [[text:123456]]');
   // Private-use characters from the page cannot pose as a set-aside placeholder.
   assert.equal(S.scrubText('ab [[id]]', { escape: false }).text, 'ab [[id]]');
 });
@@ -302,4 +302,16 @@ test('pin_code is a credential field (row I3; review R13)', () => {
     assert.equal(S.classifyField({ name }).kind, 'secret', name);
   }
   assert.equal(S.classifyField({ name: 'pinterest' }).kind, 'free');
+});
+
+test('only counts within the limits are this extension\'s placeholders (K3, E4, E6; review R14)', () => {
+  assert.deepEqual(S.finalScan({ m: '[[text:09012345678]]' }).map((f) => f.kinds), [['phone']]);
+  assert.deepEqual(S.finalScan({ m: '[[text:1000000]] [[text:0]] [[file:999]]' }), []);
+  assert.equal(S.finalScan({ m: '[[text:12345678]]' }).length, 1);
+  assert.equal(S.finalScan({ m: '[[file:1234567]]' }).length, 1);
+});
+
+test('a non-finite number marked by the page script is redacted as a number (row W3; review R14)', () => {
+  const NON_FINITE = '\u0000op-scribe:non-finite';
+  assert.deepEqual(S.maskArgs({ n: NON_FINITE }, { env: 'standard' }), { n: { treatment: 'redacted', field: 'arg', kind: 'number' } });
 });

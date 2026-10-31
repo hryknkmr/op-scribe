@@ -22,7 +22,11 @@
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
   // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
-  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|(?:text|file):\d+|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+  // A non-finite number from content/webmcp-tools.js, which must send JSON.
+  const NON_FINITE = '\u0000op-scribe:non-finite';
+  // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
+  // so "[[text:09012345678]]" written by hand is scanned like any other text.
+  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
@@ -287,6 +291,7 @@
       isLeaf: (node) => node === null || typeof node !== 'object',
       leaf: (node) => {
         if (node == null || typeof node === 'boolean') return node ?? null;
+        if (node === NON_FINITE) return typed.redacted('arg', 'number');
         if (typeof node === 'number') {
           return !commercial && Number.isFinite(node) && Math.abs(node) < LIMITS.keptNumber
             ? typed.keptNumber(node)

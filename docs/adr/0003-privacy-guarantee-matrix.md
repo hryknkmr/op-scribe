@@ -45,12 +45,12 @@
 | ID | 経路 | commercial | standard | 強さ | 実装 |
 | --- | --- | --- | --- | --- | --- |
 | I1 | `type=hidden` | `dropped` | `dropped` | 構造 | ② |
+| I7 | ファイルの選択（欄の名前に関係なく、I2〜I4 より先に当てる。ファイル名も中身も残さない） | `redacted`（file、件数だけ） | 同じ | 構造 | ② |
 | I2 | パスワード欄。`autocomplete` が `one-time-code`・`current-password`・`new-password`・`cc-*` | `redacted`（secret） | `redacted`（secret） | 構造 | ② |
 | I3 | 欄の名前（name・id・ラベル・placeholder・aria-label）が認証情報・カードを指す | `redacted`（secret） | `redacted`（secret） | 規則（一覧にある語）。一覧に無い同義語はできる限り | ②（語彙は `classifyField` の一覧。④ で広げる） |
 | I4 | メール欄・電話欄・個人情報の欄（`type`・`autocomplete`・名前で判定） | `length` | 目標: 値全体が 1 つのアドレス・番号なら `partial`、そうでなければ `redacted`。暫定: `redacted` | 構造（`type`・`autocomplete` で判定したとき、生の値をそのまま残さないこと）・規則（名前の語彙で判定したとき）。`partial` か `redacted` かの選択はできる限り | ②（暫定）・④（`partial`） |
 | I5 | 選択肢（`select`・`range`・`color`）。ラジオ・チェックボックスは値を記録せず、オン・オフ（`checked`、T6）と要素の名前（T2）だけを残す | `kept`（120 字） | `kept`（120 字） | 構造（残すこと）。中はできる限り | ② |
 | I6 | 検索欄（`type=search`・`role=searchbox`・`role=search` の中。マークアップだけで判定） | `kept`（120 字） | `kept`（120 字） | 構造（残すこと）。中はできる限り | ② |
-| I7 | ファイルの選択 | `redacted`（file、件数だけ） | 同じ | 構造 | ② |
 | I8 | そのほかの入力欄・テキストエリア・編集できる要素 | `length` | `kept`（200 字） | 構造（commercial）・できる限り（standard） | ② |
 
 ### WebMCP（W）

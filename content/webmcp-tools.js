@@ -36,8 +36,13 @@
   }
 
   /** Arguments must survive structured cloning; anything exotic is dropped. */
+  // JSON would turn NaN and Infinity into null; mark them so the recorder redacts them as
+  // numbers (ADR 0003, W3). The same string is NON_FINITE in shared/sanitize.js.
+  const NON_FINITE = '\u0000op-scribe:non-finite';
+
   function cloneable(value) {
-    try { return JSON.parse(JSON.stringify(value ?? {})); } catch { return {}; }
+    const keep = (key, v) => (typeof v === 'number' && !Number.isFinite(v) ? NON_FINITE : v);
+    try { return JSON.parse(JSON.stringify(value ?? {}, keep)); } catch { return {}; }
   }
 
   // ------------------------------------------------- request/response channel
