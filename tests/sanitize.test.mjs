@@ -604,3 +604,11 @@ test('a card number set apart by any one separator is a card number', () => {
   }
   assert.equal(S.scrubText('41******11').text, '41******11');
 });
+
+test('every invisible format character is ignored in names, keys, listed words and the final scan', () => {
+  assert.equal(S.maskFieldValue('short-secret', { name: 'to⁦ken' }).value, '[[secret]]');
+  assert.match(S.scrubUrl('https://example.com/?to⁦ken=short-secret', { hostAllowlist: ['example.com'] }).url, /=\[\[secret\]\]$/);
+  assert.equal(S.scrubText('Ac⁦me', { keywords: ['Acme'] }).text, '[[masked]]');
+  assert.equal(S.finalScan({ a: 'to⁦ken=abc' }).length, 1);
+  assert.equal(S.scrubText('a؜b️c').text, 'abc');
+});

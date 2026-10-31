@@ -94,3 +94,8 @@ test('payload v2: the privacy policy and coverage, and Gherkin rebuilt when a st
   // A typed value left on a production step is stopped at the exit; the same value elsewhere is not.
   assert.deepEqual(S.finalScan(payload).map((f) => f.path), ['recording.steps[0].value']);
 });
+
+test('Markdown asks for test values in place of partly hidden ones', () => {
+  const md = D.toMarkdown(D.buildReproduction({ steps: [{ type: 'input', t: 1, url: 'https://site-1.invalid/', value: 's***@e***.com', target: { role: 'textbox', name: 'メール' } }] }));
+  assert.match(md, /\* で一部を伏せた値（例: s\*\*\*@e\*\*\*\.com）は、そのまま入力せず、テスト用の値に置き換えること/);
+});

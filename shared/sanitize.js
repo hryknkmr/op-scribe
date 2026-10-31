@@ -226,7 +226,8 @@
   }
 
   // Zero-width and bidi controls can hide content from the human reviewer, and split a word (o\u200btp).
-  const invisible = (value) => String(value).replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
+  // Every format character (zero-width, bidi embeddings and isolates, U+061C, tags) and variation selectors.
+  const invisible = (value) => String(value).replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, '');
   /** A name or a word as it is compared: NFKC, without invisible controls. */
   const plain = (value) => invisible(String(value ?? '').normalize('NFKC'));
 

@@ -145,6 +145,10 @@
     if (steps.some((s) => /\[\[(?:secret|email|phone|card|personal)\]\]/.test(JSON.stringify(s)))) {
       preconditions.push('‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること');
     }
+    // Partly hidden values (s***@e***.com, ***-****-5678, 12****78) are not to be typed as they are.
+    if (steps.some((s) => typeof s.value === 'string' && /\*{2,}/.test(s.value))) {
+      preconditions.push('* で一部を伏せた値（例: s***@e***.com）は、そのまま入力せず、テスト用の値に置き換えること');
+    }
     if (steps.some((s) => /\[\[text:/.test(JSON.stringify(s)))) {
       notes.push('‹任意の文字列 N文字› は記録時の入力を伏せたもの。再現時は同じ程度の長さの値を使う');
     }
