@@ -188,8 +188,10 @@
     // Secret and personal fields are redacted even when empty: no exception to rows I2-I4.
     if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: text ? [cls.label] : [] };
     if (cls.kind === 'pii' && !text) return { value: typed.redacted(field, cls.label), kinds: [] };
-    if (!text) return { value: typed.kept(field, ''), kinds: [] };
     const commercial = opts.env === 'commercial';
+    // Commercial free text is a length even when empty (row I8): "cleared" is length 0.
+    if (cls.kind === 'free' && commercial) return { value: typed.length(field, 'text', text), kinds: text ? ['text'] : [] };
+    if (!text) return { value: typed.kept(field, ''), kinds: [] };
     if (cls.kind === 'pii') {
       return commercial
         ? { value: typed.length(field, cls.label, text), kinds: [cls.label] }
@@ -201,35 +203,52 @@
   }
 
   /**
-   * Masks WebMCP tool arguments (ADR 0003, rows W1-W5). Every string and number
-   * becomes a typed value; booleans and null stay as they are. A page-made
-   * object never looks typed, because its leaves are typed values, not strings.
+   * The one walk over WebMCP arguments, shared by the content script (maskArgs)
+   * and the worker (shared/record.js), so both apply the same limits and the
+   * same key rule (ADR 0003, rows W1 and W5). Under a key that names a
+   * credential or personal data, the whole subtree becomes one redacted
+   * value: nothing below it is looked at, so depth cannot hide a value.
+   *   isLeaf(node) - true for what leaf() handles
+   *   leaf(node)   - the value to keep for a leaf
    */
-  function maskArgs(value, opts = {}, depth = 0, key = '') {
-    if (value == null || typeof value === 'boolean') return value ?? null;
-    const commercial = opts.env === 'commercial';
-    if (typeof value === 'string' || typeof value === 'number') {
-      const cls = key ? classifyField({ name: key }) : { kind: 'free' };
-      if (cls.kind === 'secret' || cls.kind === 'pii') return typed.redacted('arg', cls.label);
-      if (typeof value === 'number') {
-        return !commercial && Number.isFinite(value) && Math.abs(value) < 1e6
-          ? typed.keptNumber(value)
-          : typed.redacted('arg', 'number');
-      }
-      if (commercial) return typed.length('arg', 'text', value);
-      return typed.kept('arg', scrubText(value, { keywords: opts.keywords, maxLength: KEPT_LIMIT.arg }).text);
-    }
+  function walkArgs(node, { isLeaf, leaf, keywords }, depth = 0) {
+    if (isLeaf(node)) return leaf(node);
     if (depth >= 3) return typed.redacted('arg', 'nested');
-    if (Array.isArray(value)) return value.slice(0, 10).map((v) => maskArgs(v, opts, depth + 1, key));
-    if (typeof value === 'object') {
-      const out = {};
-      for (const [k, v] of Object.entries(value).slice(0, 20)) {
-        const r = scrubText(k, { keywords: opts.keywords, maxLength: 40 });
-        out[r.kinds.length ? 'masked' : r.text] = maskArgs(v, opts, depth + 1, k);
-      }
-      return out;
+    const walk = (child) => walkArgs(child, { isLeaf, leaf, keywords }, depth + 1);
+    if (Array.isArray(node)) return node.slice(0, 10).map(walk);
+    const out = {};
+    for (const [k, v] of Object.entries(node).slice(0, 20)) {
+      const name = scrubText(k, { keywords, maxLength: 40 });
+      const cls = classifyField({ name: k });
+      out[name.kinds.length ? 'masked' : name.text] = cls.kind === 'secret' || cls.kind === 'pii'
+        ? typed.redacted('arg', cls.label)
+        : walk(v);
     }
-    return typed.redacted('arg', 'value');
+    return out;
+  }
+
+  /**
+   * Masks WebMCP tool arguments in the page (rows W1-W5). Every string and
+   * number becomes a typed value; booleans and null stay as they are. A
+   * page-made object never looks typed, because its leaves are typed values.
+   */
+  function maskArgs(value, opts = {}) {
+    const commercial = opts.env === 'commercial';
+    return walkArgs(value, {
+      keywords: opts.keywords,
+      isLeaf: (node) => node === null || typeof node !== 'object',
+      leaf: (node) => {
+        if (node == null || typeof node === 'boolean') return node ?? null;
+        if (typeof node === 'number') {
+          return !commercial && Number.isFinite(node) && Math.abs(node) < 1e6
+            ? typed.keptNumber(node)
+            : typed.redacted('arg', 'number');
+        }
+        if (typeof node !== 'string') return typed.redacted('arg', 'value');
+        if (commercial) return typed.length('arg', 'text', node);
+        return typed.kept('arg', scrubText(node, { keywords: opts.keywords, maxLength: KEPT_LIMIT.arg }).text);
+      }
+    });
   }
 
   // -------------------------------------------------------------------- URLs
@@ -356,6 +375,7 @@
     scrubText,
     typed,
     classifyField,
+    walkArgs,
     maskFieldValue,
     maskArgs,
     scrubUrl,

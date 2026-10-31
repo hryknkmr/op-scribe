@@ -131,7 +131,7 @@
       case 'click':
         return `${targetText(step.target)}をクリックする`;
       case 'input':
-        return display(step.value) === ''
+        return display(step.value) === '' || (step.value?.treatment === 'length' && step.value.length === 0)
           ? `${targetText(step.target)}を空にする`
           : `${targetText(step.target)}に ${quote(display(step.value))} を入力する`;
       case 'select':

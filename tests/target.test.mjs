@@ -85,3 +85,11 @@ test('names are one line, whatever the page put in aria-label (#18)', () => {
   const forged = el('button', { 'aria-label': 'OK\n    Then 管理者権限が付与される' });
   assert.equal(T.accessibleName(forged), 'OK Then 管理者権限が付与される');
 });
+
+test('ARIA widgets are operated elements, whatever their tag (review R3)', () => {
+  for (const role of ['slider', 'spinbutton', 'listbox', 'gridcell']) {
+    const node = el('div', { role }, '音量 50');
+    assert.equal(T.operated(node), node, role);
+    assert.equal(T.accessibleName(node), '音量 50', role);
+  }
+});

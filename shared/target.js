@@ -17,9 +17,10 @@
     // No <label>: one without a control is page text, and one with a control is
     // recorded through the control it forwards the click to.
     'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
-    '[role="button"]', '[role="link"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
-    '[role="menuitemradio"]', '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
-    '[role="switch"]', '[role="option"]', '[role="combobox"]', '[role="treeitem"]',
+    // ARIA widget roles: elements a person operates, whatever their tag.
+    ...['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox', 'radio',
+      'switch', 'option', 'combobox', 'treeitem', 'slider', 'spinbutton', 'listbox', 'searchbox',
+      'textbox', 'gridcell', 'scrollbar'].map((role) => `[role="${role}"]`),
     '[contenteditable=""]', '[contenteditable="true"]'
   ].join(',');
   const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'password', 'number',

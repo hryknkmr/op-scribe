@@ -13,7 +13,7 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { scrubText, scrubUrl, hostAllowed, typed, classifyField } = S;
+  const { scrubText, scrubUrl, hostAllowed, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   // What a step must carry to mean anything (row T6); without it the step is not recorded.
@@ -79,6 +79,7 @@
         }
         const text = typeof value.text === 'string' ? value.text : '';
         if (f === 'secret' || f === 'pii' || f === 'file') return fail(f);
+        if (!text && env === 'commercial' && (f === 'text' || f === 'arg')) return typed.length(f, 'text', '');
         if (!text) return typed.kept(f, '');
         if (env === 'commercial' && (f === 'text' || f === 'arg')) return fail(f);
         // Already escaped by the content script: keep its own placeholders.
@@ -92,30 +93,41 @@
   }
 
   /**
-   * WebMCP arguments (rows W1-W5): same shape rules as maskArgs, values checked
-   * again. key is the nearest object key above the value (arrays inherit it):
-   * under a credential or personal key nothing is kept, whatever arrives (W1).
+   * WebMCP arguments (rows W1-W5), walked by the same walkArgs as maskArgs:
+   * the same limits, and a credential or personal key redacts its whole
+   * subtree, whatever arrives. Typed leaves are checked again.
    */
-  function cleanArgs(node, env, settings, kinds, depth = 0, key = '') {
-    if (node === null || typeof node === 'boolean') return node;
-    if (node && typeof node === 'object' && typeof node.treatment === 'string') {
-      const cls = key ? classifyField({ name: key }) : null;
-      if (cls && (cls.kind === 'secret' || cls.kind === 'pii')) return typed.redacted('arg', cls.label);
-      return cleanValue(node, env, settings, kinds, 'arg');
-    }
-    if (depth >= 3) return typed.redacted('arg', 'nested');
-    if (Array.isArray(node)) return node.slice(0, 10).map((v) => cleanArgs(v, env, settings, kinds, depth + 1, key));
-    if (node && typeof node === 'object') {
-      const out = {};
-      for (const [k, v] of Object.entries(node).slice(0, 20)) {
-        const r = scrubText(k, { keywords: settings.keywords, maxLength: 40 });
-        out[r.kinds.length ? 'masked' : r.text] = cleanArgs(v, env, settings, kinds, depth + 1, k);
+  function cleanArgs(node, env, settings, kinds) {
+    return walkArgs(node, {
+      keywords: settings.keywords,
+      isLeaf: (n) => n === null || typeof n !== 'object' || typeof n.treatment === 'string',
+      leaf: (n) => {
+        if (n === null || typeof n === 'boolean') return n;
+        if (n && typeof n === 'object') return cleanValue(n, env, settings, kinds, 'arg');
+        // A raw string or number never comes from maskArgs.
+        kinds.push('v');
+        return typed.redacted('arg', 'v');
       }
-      return out;
+    });
+  }
+
+  /**
+   * Rows I3, I4 again in the worker: the content script sends the field's
+   * names (never its value) and the worker classifies them with the same
+   * classifyField. A field that turns out to be secret or personal is
+   * redacted even if the content script kept it. The names are not stored.
+   */
+  function reclassify(value, meta, env) {
+    if (!meta || typeof meta !== 'object' || !value) return value;
+    const bounded = {};
+    for (const k of ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role']) {
+      if (typeof meta[k] === 'string') bounded[k] = meta[k].slice(0, 200);
     }
-    // A raw string or number never comes from maskArgs.
-    kinds.push('v');
-    return typed.redacted('arg', 'v');
+    const cls = classifyField(bounded);
+    if (cls.kind === 'secret') return typed.redacted('secret', cls.label);
+    if (cls.kind !== 'pii' || value.field === 'pii') return value;
+    if (env === 'commercial' && value.treatment === 'length') return { ...value, field: 'pii', kind: cls.label };
+    return typed.redacted('pii', cls.label);
   }
 
   /**
@@ -158,7 +170,7 @@
       }
       if (t.href) step.target.href = url(t.href);
     }
-    if (raw.value !== undefined) step.value = cleanValue(raw.value, env, settings, kinds);
+    if (raw.value !== undefined) step.value = reclassify(cleanValue(raw.value, env, settings, kinds), raw.field, env);
     if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
     if (is(KEY, raw.key)) step.key = raw.key;
     if (type === 'tool') {

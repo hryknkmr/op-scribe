@@ -195,7 +195,7 @@
       }
       if (typeof v.text !== 'string' || v.number !== undefined) return bad('kept value is not text');
       if (v.field === 'secret' || v.field === 'pii' || v.field === 'file') return bad(`${v.field} kept`);
-      if (v.text === '') return undefined;
+      if (v.text === '') return env === 'commercial' && (v.field === 'text' || v.field === 'arg') ? bad('commercial free text kept') : undefined;
       if (env === 'commercial' && (v.field === 'text' || v.field === 'arg')) return bad('commercial free text kept');
       if ([...v.text].length > KEPT_MAX[v.field]) return bad('too long');
       return undefined;
@@ -250,8 +250,9 @@
     switch (node.type) {
       case 'object': {
         if (!isObject(value)) return bad('not an object');
+        // Own keys only: "constructor" or "toString" are not fields of the definition.
         for (const k of Object.keys(value)) {
-          if (!(k in node.fields)) bad(`unknown field ${k.slice(0, 40)}`);
+          if (!Object.hasOwn(node.fields, k)) bad(`unknown field ${k.slice(0, 40)}`);
         }
         for (const [k, child] of Object.entries(node.fields)) {
           const p = path ? `${path}.${k}` : k;
@@ -280,6 +281,11 @@
         if (typeof value !== 'string') return bad('not a string');
         if ([...value].length > node.max) return bad('too long');
         if (node.re && !node.re.test(value)) return bad('unexpected form');
+        // A date must exist, not only have the right digits (row M2).
+        if (node.re === ISO) {
+          const date = new Date(value);
+          if (Number.isNaN(date.getTime()) || date.toISOString() !== value) return bad('not a real date');
+        }
         return undefined;
       case 'const':
         return value === node.value ? undefined : bad('unexpected value');

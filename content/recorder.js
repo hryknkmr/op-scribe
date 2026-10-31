@@ -143,10 +143,13 @@
     const value = currentValue(el);
     if (committed.get(el) === value) return;
     committed.set(el, value);
-    const masked = S.maskFieldValue(value, fieldMeta(el), maskOptions());
+    const meta = fieldMeta(el);
+    const masked = S.maskFieldValue(value, meta, maskOptions());
     if (!masked) return;
     emit(el.tagName === 'SELECT' ? 'select' : 'input', {
       target: describe(el),
+      // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
+      field: { ...meta, contentEditable: undefined, inSearch: undefined },
       value: masked.value,
       valueKinds: masked.kinds
     });

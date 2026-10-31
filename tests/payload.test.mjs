@@ -219,3 +219,17 @@ test('checkPayload: standard URLs keep only the allowed forms, and key steps car
   ok.recording.steps[0].url = 'https://site-1.invalid/?tab=items&q=[[v]]#/settings';
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
+
+test('checkPayload: prototype names are not fields, dates must exist, commercial empty text is not kept (rows E1, M2, I8; review R3)', () => {
+  const cases = [
+    (p) => { p.constructor = 'benign'; },
+    (p) => { p.recording.toString = 'x'; },
+    (p) => { p.recording.startedAt = '2026-99-99T99:99:99.999Z'; },
+    (p) => { p.recording.steps[3].value = { treatment: 'kept', field: 'text', text: '' }; }
+  ];
+  for (const change of cases) {
+    const payload = clone(build());
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
+  }
+});

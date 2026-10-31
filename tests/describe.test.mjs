@@ -100,3 +100,8 @@ test('page text cannot forge Gherkin steps or Markdown items (#18, row E7)', () 
   assert.ok(!/^ *When 削除する/m.test(markdown), markdown);
   assert.equal(markdown.split('\n').filter((l) => /^\d+\. /.test(l)).length, 2, markdown);
 });
+
+test('a cleared commercial field reads as cleared', () => {
+  assert.equal(D.describeStep({ type: 'input', target: { role: 'textbox', name: '本文' }, value: { treatment: 'length', field: 'text', kind: 'text', length: 0 } }),
+    '「本文」入力欄を空にする');
+});

@@ -100,7 +100,10 @@ test('maskFieldValue: hidden fields are not recorded; empty secret and personal 
     { treatment: 'redacted', field: 'secret', kind: 'secret' });
   assert.deepEqual(S.maskFieldValue('', { type: 'email' }, commercial).value,
     { treatment: 'redacted', field: 'pii', kind: 'email' });
+  // Commercial free text is a length even when cleared (R3).
   assert.deepEqual(S.maskFieldValue('', { type: 'text' }, commercial).value,
+    { treatment: 'length', field: 'text', kind: 'text', length: 0 });
+  assert.deepEqual(S.maskFieldValue('', { type: 'text' }, standard).value,
     { treatment: 'kept', field: 'text', text: '' });
 });
 

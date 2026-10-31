@@ -132,10 +132,8 @@ test('WebMCP arguments under a credential or personal key are redacted, whatever
   const args = { email: typed.kept('arg', 'Alice'), list: { phone: [typed.kept('arg', '1'), typed.keptNumber(2)] }, q: typed.kept('arg', 'shoes') };
   const step = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', args }, newRec(), settings, { tabUrl: BETA });
   assert.deepEqual(step.args.email, { treatment: 'redacted', field: 'arg', kind: 'email' });
-  assert.deepEqual(step.args.list.phone, [
-    { treatment: 'redacted', field: 'arg', kind: 'phone' },
-    { treatment: 'redacted', field: 'arg', kind: 'phone' }
-  ]);
+  // The whole subtree under the key is one redacted value (R3).
+  assert.deepEqual(step.args.list.phone, { treatment: 'redacted', field: 'arg', kind: 'phone' });
   assert.deepEqual(step.args.q, typed.kept('arg', 'shoes'));
 });
 
@@ -146,4 +144,31 @@ test('steps without what they must carry are not recorded (row T6; review R1)', 
   assert.equal(R.cleanStep({ type: 'note' }, rec, settings), null);
   const upload = R.cleanStep({ type: 'upload', pageUrl: BETA, value: typed.kept('text', 'a.txt') }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(upload.value, typed.file(0));
+});
+
+test('a credential key redacts everything below it, at any depth and of any type (row W1; review R3)', () => {
+  for (const env of [{ tabUrl: BETA }, { tabUrl: PROD }]) {
+    const raw = { password: { value: typed.kept('arg', 'hunter2'), on: true }, outer: { token: [null, typed.keptNumber(1)] } };
+    const step = R.cleanStep({ type: 'tool', pageUrl: env.tabUrl, tool: 'x', args: raw }, newRec(), settings, env);
+    assert.deepEqual(step.args.password, { treatment: 'redacted', field: 'arg', kind: 'secret' });
+    assert.deepEqual(step.args.outer.token, { treatment: 'redacted', field: 'arg', kind: 'secret' });
+  }
+  // The content script side walks the same way.
+  assert.deepEqual(S.maskArgs({ password: { value: 'hunter2', on: true } }, { env: 'standard' }),
+    { password: { treatment: 'redacted', field: 'arg', kind: 'secret' } });
+});
+
+test('the worker classifies the field names again and redacts what the content script kept (rows I3, I4; review R3)', () => {
+  const rec = newRec();
+  const kept = typed.kept('text', 'hunter2');
+  const secret = R.cleanStep({ ...input(kept), pageUrl: BETA, field: { type: 'text', name: 'Password' } }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(secret.value, { treatment: 'redacted', field: 'secret', kind: 'secret' });
+  assert.equal(secret.field, undefined, 'the names are not stored');
+  const mail = R.cleanStep({ ...input(typed.kept('text', 'a')), pageUrl: BETA, field: { type: 'text', name: 'email' } }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(mail.value, { treatment: 'redacted', field: 'pii', kind: 'email' });
+  const length = { treatment: 'length', field: 'text', kind: 'text', length: 3 };
+  const prod = R.cleanStep({ ...input(length), field: { name: 'email' } }, rec, settings, { tabUrl: PROD });
+  assert.deepEqual(prod.value, { treatment: 'length', field: 'pii', kind: 'email', length: 3 });
+  const plain = R.cleanStep({ ...input(typed.kept('text', 'hello')), pageUrl: BETA, field: { name: 'comment' } }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(plain.value, typed.kept('text', 'hello'));
 });
