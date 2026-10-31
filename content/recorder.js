@@ -320,8 +320,9 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     const next = changes.opsSettings?.newValue;
     if (area !== 'local' || !next || !config) return;
-    // Only the listed words: the host lists stay as they were when recording started (docs/adr/0001).
-    config = { ...config, keywords: next.keywords || [] };
+    // Only the listed words, and only added ones: the host lists stay as they were when recording started, and a
+    // word removed mid-recording is still hidden until it ends (docs/adr/0001).
+    config = { ...config, keywords: [...new Set([...(config.keywords || []), ...(next.keywords || [])])] };
   });
 
   globalThis.__opScribeRecorder = { hello };

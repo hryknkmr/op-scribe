@@ -93,7 +93,8 @@ const lines = (text) => String(text || '').split('\n').map((s) => s.trim()).filt
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanKeywords(rec) {
   const hosts = S.aliasedHosts(rec?.aliases).map(([host]) => host);
-  return [...settings.keywords, ...hosts].filter(Boolean);
+  // The words the recording started with stay listed for it, even if removed from the settings since.
+  return [...new Set([...(rec?.policy?.keywords || []), ...settings.keywords, ...hosts])].filter(Boolean);
 }
 
 const scanWith = (rec) => (value) => S.finalScan(value, {

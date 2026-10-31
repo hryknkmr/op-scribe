@@ -22,6 +22,26 @@ const TOKEN = process.env.OPSCRIBE_TOKEN || '';
 const OUT_DIR = join(process.cwd(), 'recordings');
 const MAX_BYTES = 1024 * 1024;
 // Hosts a payload may name as they are (comma separated); any other host must be an alias (site-N.invalid).
+const PROFILES = new Set(['commercial', 'standard']);
+
+/** What is wrong with a v2 payload's shape and its privacy summary, or '' (docs/FORMAT.md, docs/adr/0001). */
+function structureProblem(payload) {
+  if (payload?.schema !== 'op-scribe.recording/v2') return 'unknown schema';
+  const recording = payload.recording;
+  const privacy = recording?.privacy;
+  if (privacy?.policy !== 'tiered-commercial/v1') return 'unknown privacy policy';
+  if (!Array.isArray(recording.steps)) return 'steps missing';
+  if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';
+  if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';
+  const commercial = recording.steps.filter((step) => step.privacy.profile === 'commercial').length;
+  const standard = recording.steps.length - commercial;
+  const coverage = !commercial ? 'standard-only' : !standard ? 'commercial-only' : 'mixed';
+  if (privacy.commercialSteps !== commercial || privacy.standardSteps !== standard || privacy.coverage !== coverage) {
+    return 'privacy summary does not match the steps';
+  }
+  return '';
+}
+
 const HOST_ALLOWLIST = (process.env.OPSCRIBE_HOST_ALLOWLIST || '').split(',').map((h) => h.trim()).filter(Boolean);
 
 const reply = (res, status, body) => {
@@ -48,9 +68,8 @@ createServer(async (req, res) => {
   } catch {
     return reply(res, 400, { error: 'invalid json' });
   }
-  if (payload?.schema !== 'op-scribe.recording/v2' || payload?.recording?.privacy?.policy !== 'tiered-commercial/v1') {
-    return reply(res, 422, { error: 'unknown schema or privacy policy' });
-  }
+  const invalid = structureProblem(payload);
+  if (invalid) return reply(res, 422, { error: invalid });
 
   const findings = finalScan(payload, { hostAllowlist: HOST_ALLOWLIST });
   if (findings.length) {

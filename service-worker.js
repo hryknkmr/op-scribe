@@ -128,7 +128,9 @@ function bump(rec, kinds) {
  */
 const policyOf = (rec, settings) => ({
   hostAllowlist: rec.policy?.hostAllowlist ?? settings.hostAllowlist,
-  productionHosts: rec.policy?.productionHosts ?? settings.productionHosts ?? []
+  productionHosts: rec.policy?.productionHosts ?? settings.productionHosts ?? [],
+  // Listed words only grow during a recording: the ones it started with, plus any added since.
+  keywords: [...new Set([...(rec.policy?.keywords || []), ...(settings.keywords || [])])]
 });
 
 const hostOf = (value) => {
@@ -150,12 +152,12 @@ function cleanStep(raw, rec, settings, origin = null) {
     hostAllowlist: policy.hostAllowlist,
     productionHosts: policy.productionHosts,
     aliases: rec.aliases,
-    keywords: settings.keywords,
+    keywords: policy.keywords,
     strict: commercial
   };
   const kinds = [];
   const text = (value, maxLength) => {
-    const r = scrubText(value, { keywords: settings.keywords, maxLength, hosts: ctx });
+    const r = scrubText(value, { keywords: policy.keywords, maxLength, hosts: ctx });
     kinds.push(...r.kinds);
     return r.text;
   };
@@ -175,7 +177,7 @@ function cleanStep(raw, rec, settings, origin = null) {
     // A selector is a locator, not prose: if anything had to be masked, or it holds a URL or a host
     // the policy cannot place, drop it entirely.
     if (t.selector) {
-      const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: policy.hostAllowlist, aliases: {} } });
+      const r = scrubText(t.selector, { keywords: policy.keywords, hosts: { hostAllowlist: policy.hostAllowlist, aliases: {} } });
       // An id-like number or a host name inside the selector (#user-123456, [data-testid="x.example.test"]) too.
       // A CSS-escaped dot (#private\.example\.test) is a host name in an id.
       const identifying = /\/\/|@|\\|\d{3,}|[0-9a-f]{8,}|["'][^"']*[\w-]\.[a-z]{2,}[^"']*["']/i.test(t.selector);
@@ -191,7 +193,7 @@ function cleanStep(raw, rec, settings, origin = null) {
     if (commercial && step.valueClass === 'text' && value && !isPlaceholder(value)) step.value = '[[v]]';
     // A contact or id field's value is masked for its kind again here (the content script's partial mask is kept).
     else if (['email', 'phone', 'id', 'secret', 'card'].includes(step.valueClass)) {
-      const r = maskByKind(step.valueClass, value, { keywords: settings.keywords, maxLength: 200, trustHidden: true });
+      const r = maskByKind(step.valueClass, value, { keywords: policy.keywords, maxLength: 200, trustHidden: true });
       kinds.push(...r.kinds);
       step.value = r.value;
     } else step.value = text(value, 200);
@@ -205,7 +207,7 @@ function cleanStep(raw, rec, settings, origin = null) {
     if (raw.args && typeof raw.args === 'object') {
       // Masked by key again here (the page may not have), then as text.
       // The content script masked them already: its partial masks are kept as they are (trustHidden), anything else is masked.
-      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords, trustHidden: true, strict: commercial })), { keywords: settings.keywords, hosts: ctx });
+      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: policy.keywords, trustHidden: true, strict: commercial })), { keywords: policy.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
@@ -240,14 +242,14 @@ async function start({ tabId, url }) {
       endedAt: null,
       privacyLevel: 'partial',
       // The host lists as they were when recording started: used until it ends (docs/adr/0001).
-      policy: { hostAllowlist: [...settings.hostAllowlist], productionHosts: [...(settings.productionHosts || [])] },
+      policy: { hostAllowlist: [...settings.hostAllowlist], productionHosts: [...(settings.productionHosts || [])], keywords: [...settings.keywords] },
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},
       webmcpTools: {},
       steps: []
     };
-    rec.startUrl = scrubUrl(url, { ...rec.policy, keywords: settings.keywords, aliases: rec.aliases }).url;
+    rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
     await injectNow(tabId);
@@ -275,7 +277,7 @@ const stop = () => mutate(async (rec) => {
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanFor(rec, settings) {
   const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
-  const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
+  const keywords = [...policyOf(rec, settings).keywords, ...hosts].filter(Boolean);
   return (value) => finalScan(value, { keywords, hostAllowlist: policyOf(rec, settings).hostAllowlist, aliases: Object.values(rec.aliases || {}) });
 }
 
@@ -357,7 +359,8 @@ async function handle(message, sender) {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
       const settings = await getSettings();
-      return { active: true, config: { keywords: settings.keywords, productionHosts: policyOf(rec, settings).productionHosts } };
+      const policy = policyOf(rec, settings);
+      return { active: true, config: { keywords: policy.keywords, productionHosts: policy.productionHosts } };
     }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
@@ -369,7 +372,7 @@ async function handle(message, sender) {
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
         const hosts = { ...policyOf(rec, settings), aliases: rec.aliases };
-        rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: settings.keywords, maxLength: 80, hosts }).text);
+        rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: hosts.keywords, maxLength: 80, hosts }).text);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);
