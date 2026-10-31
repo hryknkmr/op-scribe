@@ -381,3 +381,9 @@ test('patterns see the text before keywords are masked (K2, K3; review R30)', ()
   assert.ok(mail.kinds.includes('email') && !mail.text.includes('user'), mail.text);
   assert.deepEqual(S.scrubText('Acme の件', { keywords: ['Acme'] }), { text: '[[masked]] の件', kinds: ['keyword'] });
 });
+
+test('a keyword never breaks a placeholder the patterns made (K2; review R31)', () => {
+  const r = S.scrubText('to user@example.com', { keywords: ['[['] });
+  assert.equal(r.text, 'to [[email]]');
+  assert.equal(S.scrubText('x [[ y', { keywords: ['[['] }).text, 'x [ [ y', 'a page "[[" is broken first (K1), so the word never appears');
+});

@@ -61,7 +61,7 @@
 
 | ID | 経路 | commercial | standard | 強さ | 実装 |
 | --- | --- | --- | --- | --- | --- |
-| W1 | 引数で、キーが認証情報・個人情報を指すもの（I3・I4 と同じ語彙）とその下の値 | `redacted` | `redacted` | 規則（一覧にある語）。一覧に無い同義語はできる限り | ② |
+| W1 | 引数で、キーが認証情報・個人情報を指すもの（I3・I4 と同じ語彙）とその下の値 | `redacted` | `redacted` | 規則（一覧にある語）。一覧に無い同義語はできる限り（既知の漏れ: `api_key`・`authorization`。語の追加は ④ で検討） | ② |
 | W2 | 引数の文字列 | `length` | `kept`（200 字） | 構造（commercial）・できる限り（standard） | ② |
 | W3 | 引数の数値 | `redacted`（number） | 絶対値が 100 万未満の有限の数は `kept`、ほかは `redacted`（number） | 構造 | ② |
 | W4 | 引数の真偽値・`null` | `kept` | `kept` | 構造 | ② |

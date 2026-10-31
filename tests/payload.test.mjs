@@ -525,3 +525,12 @@ test('checkCanonical finds an argument key that is not NFKC (E8; review R30)', (
   r.steps[4].args = { 'e\u0301': typed.redacted('arg', 'v') };
   assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'key not NFKC'));
 });
+
+test('a select holds a choice, never free text with its longer limit (I5, E2; review R31)', () => {
+  const r = clone(rec);
+  r.steps.forEach((s) => { s.env = 'standard'; });
+  r.steps[2] = { ...r.steps[2], type: 'select', value: typed.kept('text', 'x'.repeat(200)) };
+  assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'text value in select'));
+  r.steps[2].value = typed.kept('choice', '東京');
+  assert.ok(!P.checkPayload(regen(build(r))).some((p) => p.path === 'recording.steps[2].value'));
+});

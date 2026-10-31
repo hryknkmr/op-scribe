@@ -363,6 +363,10 @@
     if (step.type === 'upload' && step.value !== undefined && field !== 'file') problems.push({ path: `${path}.value`, problem: 'upload is not a file value' });
     if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
     if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
+    // The fields each kind of step can hold (I5): a select is a choice (or secret or personal by its names),
+    // never free text with the longer limit; an input is never a file (review R31).
+    const allowed = { select: ['choice', 'secret', 'pii'], input: ['text', 'search', 'choice', 'secret', 'pii'] }[step.type];
+    if (allowed && field !== undefined && !allowed.includes(field)) problems.push({ path: `${path}.value`, problem: `${field} value in ${step.type}` });
   }
 
   const SAFE_VALUE = /^[\w.-]{1,24}$/;

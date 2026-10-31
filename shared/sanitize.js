@@ -145,12 +145,21 @@
       });
     }
 
+    // Keywords only between the placeholders: a keyword such as "[[" must not break one
+    // the patterns just made into "[[masked]]email]]" (review R31).
     const keywords = keywordPattern(opts.keywords);
     if (keywords) {
-      text = text.replace(keywords, () => {
+      const mask = (part) => part.replace(keywords, () => {
         kinds.push('keyword');
         return mark('masked');
       });
+      let out = '';
+      let last = 0;
+      for (const m of text.matchAll(OWN_PLACEHOLDER)) {
+        out += mask(text.slice(last, m.index)) + m[0];
+        last = m.index + m[0].length;
+      }
+      text = out + mask(text.slice(last));
     }
 
     if (kept.length) text = text.replace(/\uE000([\uE100-\uF8FF])\uE001/g, (m, c) => kept[c.charCodeAt(0) - 0xE100] ?? '');
