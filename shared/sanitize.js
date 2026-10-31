@@ -45,6 +45,18 @@
 
   const defaults = () => ({ ...DEFAULT_SETTINGS, hostAllowlist: [], productionHosts: [], keywords: [] });
 
+  /** The check digit of a Japanese My Number (12 digits). */
+  function myNumber(digits) {
+    if (!/^\d{12}$/.test(digits)) return false;
+    let sum = 0;
+    for (let n = 1; n <= 11; n += 1) {
+      const p = Number(digits[11 - n]);
+      sum += p * (n <= 6 ? n + 1 : n - 5);
+    }
+    const r = sum % 11;
+    return Number(digits[11]) === (r <= 1 ? 0 : 11 - r);
+  }
+
   function luhn(digits) {
     let sum = 0;
     let double = false;
@@ -121,7 +133,8 @@
     // A domain literal: someone@[192.0.2.1], someone@[IPv6:2001:db8::1]. Before the IP rules take its inside apart.
     { kind: 'email', re: /[\p{L}\p{N}._%+-]+@\[(?:IPv6:)?[0-9A-Fa-f:.]+\]/gu, replace: (m) => `${[...m][0]}***@[***]` },
     // A quoted local part: "john doe"@example.com.
-    { kind: 'email', re: /"[^"\n@]{1,64}"@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
+    // Not one this filter already wrote ("j***"@e***.com).
+    { kind: 'email', re: /"(?![^"]*\*\*\*")[^"\n@]{1,64}"@(?![\p{L}\p{N}-]*\*)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
@@ -132,7 +145,11 @@
     { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
-    { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // Digits set apart by spaces, hyphens, dots, tabs or line breaks are still one card number.
+    { kind: 'card', re: /(?<!\d)\d(?:[ \t\n.-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // National ids by their form, whatever the field: a US social security number, a Japanese My Number (check digit).
+    { kind: 'secret', re: /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g },
+    { kind: 'secret', re: /(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}(?!\d)/g, accept: (m) => myNumber(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g, replace: partialPhone },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },

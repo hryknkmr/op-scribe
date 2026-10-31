@@ -16,6 +16,7 @@ import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { finalScan } = require('../shared/sanitize.js');
+const { STEP_FIELDS, TARGET_FIELDS } = require('../shared/describe.js');
 
 const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
@@ -36,6 +37,13 @@ function structureProblem(payload) {
     || extra(recording, ['id', 'startedAt', 'endedAt', 'startUrl', 'privacy', 'environment', 'steps', 'webmcpTools'])
     || extra(privacy, ['policy', 'coverage', 'commercialSteps', 'standardSteps', 'hostsAliased', 'redactions']);
   if (unknown) return `unknown field: ${unknown}`;
+  // And below them, every level buildPayload writes (docs/FORMAT.md).
+  const deeper = extra(recording.environment, ['browser', 'platform', 'language'])
+    || extra(payload.reproduction, ['generator', 'markdown', 'gherkin', 'summary'])
+    || (Array.isArray(recording.steps) && recording.steps.map((step) => extra(step, ['n', ...STEP_FIELDS, 'privacy', 'target'])
+      || extra(step?.target, TARGET_FIELDS) || extra(step?.privacy, ['profile'])).find(Boolean))
+    || (Array.isArray(recording.webmcpTools) && recording.webmcpTools.map((entry) => extra(entry, ['site', 'tools'])).find(Boolean));
+  if (deeper) return `unknown field: ${deeper}`;
   if (!Array.isArray(recording.steps)) return 'steps missing';
   if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';
   if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';

@@ -538,3 +538,24 @@ test('more credential and id names: auth and recovery keys, national ids, bank a
   assert.deepEqual(S.finalScan({ recording: { aliases: { 'https://private.internal.test': 'site-1.invalid' } } }, { hostAllowlist: [] })
     .map((f) => f.kinds), [['host']]);
 });
+
+test('card numbers with any separator, national ids by their form, and what the filter writes always passes the exit', () => {
+  for (const t of ['4111.1111.1111.1111', '4111\t1111\t1111\t1111']) assert.equal(S.scrubText(t).text, '[[card]]', JSON.stringify(t));
+  assert.equal(S.scrubText('123-45-6789').text, '[[secret]]');
+  // A My Number with a valid check digit is hidden whole; twelve digits without one are an id.
+  const base = '12345678901';
+  let sum = 0;
+  for (let n = 1; n <= 11; n += 1) sum += Number(base[11 - n]) * (n <= 6 ? n + 1 : n - 5);
+  const myNumber = `${base}${sum % 11 <= 1 ? 0 : 11 - (sum % 11)}`;
+  assert.equal(S.scrubText(myNumber).text, '[[secret]]');
+  assert.equal(S.scrubText('123456789012').text, '12******12');
+  for (const kept of ['2026-10-31']) assert.equal(S.scrubText(kept).text, kept);
+  // Idempotent at the exit: every rule's output passes finalScan.
+  for (const input of ['"john doe"@example.com', 'someone@[192.168.1.1]', 'alice@intranet', '太郎@例え.テスト', '名taro@example.com',
+    '090-1234-5678', '(03) 1234-5678', '415.555.2671', '192.168.1.1', 'fd00::1', '2001:db8::192.0.2.33', '4111 1111 1111 1111',
+    '123-45-6789', 'password=hunter2', `Authorization: ${BASIC}`, 'user@example.com', '12345678', '550e8400-e29b-41d4-a716-446655440000',
+    'otp=123456', myNumber]) {
+    const out = S.scrubText(input).text;
+    assert.deepEqual(S.finalScan({ out }), [], `${input} -> ${out}`);
+  }
+});

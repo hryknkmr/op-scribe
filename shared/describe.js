@@ -325,7 +325,7 @@
     };
   }
 
-  const api = { SCHEMA, humanize, describeStep, buildReproduction, toMarkdown, toGherkin, buildPayload };
+  const api = { SCHEMA, STEP_FIELDS, TARGET_FIELDS, humanize, describeStep, buildReproduction, toMarkdown, toGherkin, buildPayload };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
