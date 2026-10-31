@@ -419,7 +419,11 @@ test('single-label addresses in any letters, fragment routes, relative URLs at t
   assert.equal(S.scrubUrl('https://example.com/#/orders/123456;view=full', ctx).url, 'https://example.com/#/orders/12**56;view=full');
   for (const t of ['see /orders/123456 now', '?code=abc123']) assert.equal(S.finalScan({ t }).length, 1, t);
   for (const t of ['東京/大阪', '10/31', '/orders/12**56', '/search?q=shoes']) assert.deepEqual(S.finalScan({ t }), [], t);
-  assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'meeting_session' }).value, 'Morning');
+  assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'session' }).value, 'Morning');
+  // Only a list named "session" and nothing else: a session id chosen from a list is a credential.
+  for (const name of ['meeting_session', 'session_id', 'session_key', 'sid']) {
+    assert.equal(S.maskFieldValue('abc123', { tag: 'select', type: 'select', name }).value, '[[secret]]', name);
+  }
   assert.equal(S.maskFieldValue('x', { name: 'session' }).value, '[[secret]]');
 });
 
@@ -516,4 +520,12 @@ test('production query values must be plain whatever the key; contact and id fie
   assert.deepEqual(S.maskByKind('id', 'customer42', { trustHidden: true }), { value: 'cu******42', kinds: ['id'] });
   assert.deepEqual(S.finalScan({ steps: [{ valueClass: 'id', value: 'customer42', privacy: { profile: 'standard' } }, { valueClass: 'id', value: 'cu******42' }] })
     .map((f) => f.path), ['steps[0].value']);
+});
+
+test('relative URLs of any form at the exit, domain-literal addresses, and range and color as chosen values', () => {
+  for (const t of ['./callback?code=abc123', '../orders/123456', 'callback?code=abc123']) assert.equal(S.finalScan({ t }).length, 1, t);
+  for (const t of ['東京/大阪', '10/31', 'v1.2', 'file.txt', '/search?q=shoes']) assert.deepEqual(S.finalScan({ t }), [], t);
+  assert.equal(S.scrubText('someone@[192.168.1.1] other@[IPv6:2001:db8::1]').text, 's***@[***] o***@[***]');
+  assert.equal(S.maskFieldValue('50', { type: 'range' }, { strict: true }).value, '50');
+  assert.equal(S.maskFieldValue('#ff0000', { type: 'color' }, { strict: true }).value, '#ff0000');
 });

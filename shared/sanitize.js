@@ -118,6 +118,8 @@
         return `${key}${sep}${quote}${mark('secret')}${closed ? quote : ''}`;
       }
     },
+    // A domain literal: someone@[192.0.2.1], someone@[IPv6:2001:db8::1]. Before the IP rules take its inside apart.
+    { kind: 'email', re: /[\p{L}\p{N}._%+-]+@\[(?:IPv6:)?[0-9A-Fa-f:.]+\]/gu, replace: (m) => `${[...m][0]}***@[***]` },
     // A quoted local part: "john doe"@example.com.
     { kind: 'email', re: /"[^"\n@]{1,64}"@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
@@ -290,7 +292,6 @@
   // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
   // Japanese words that name the same thing as an English one, so the pairs below apply: PINコード, APIキー.
   const JA_WORDS = { コード: 'code', キー: 'key' };
-  const SESSION_WORDS = new Set(['session', 'sessionid', 'sid']);
   const CREDENTIAL_WORDS = new Set(['csrf', 'xsrf', 'pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
   // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
@@ -352,12 +353,13 @@
     if (type === 'hidden') return { kind: 'ignore' };
     // A chosen option is the page's own text (Japan from country_id, Morning from a "session" list): kept, except
     // when the name says card data or a credential (an expiry month, a one-time code chosen from a list).
-    const chosen = meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type);
+    const chosen = meta.tag === 'select' || /^(?:select|radio|checkbox|range|color)/.test(type);
     const found = new Set([meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel].map((h) => classifyKey(h)));
     if (/\bcc-/.test(autocomplete) || found.has('card')) return { kind: 'secret', label: 'card' };
     // For a chosen option, a name that only says "session" (a meeting's morning session) is not enough.
     const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel];
-    const strong = !chosen || hints.some((h) => classifyKey(wordsOf(h).filter((w) => !SESSION_WORDS.has(w)).join(' ')) === 'secret');
+    // Only a name that is "session" and nothing else: session_id, session_key and sid are credentials.
+    const strong = !chosen || hints.some((h) => classifyKey(h) === 'secret' && wordsOf(h).join(' ') !== 'session');
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || (found.has('secret') && strong)) return { kind: 'secret', label: 'secret' };
     if (chosen) return { kind: 'choice' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
@@ -683,10 +685,13 @@
           return;
         }
       }
-      // A path or a query written on its own (/orders/123456, ?code=abc123): read against a placeholder host.
-      const RELATIVE = /(?<![\w:/.@%-])\/(?!\/)[^\s"'<>「」『』（）()、。]*|(?<![\w/])\?[\w.-]+=[^\s"'<>「」『』（）()、。]*/g;
+      // A path or a query written on its own (/orders/123456, ./callback?code=abc, ../orders/1, callback?code=abc,
+      // ?code=abc): resolved against a placeholder base and read like any URL.
+      const RELATIVE = /(?<![\w:/.@%-])(?:\.{1,2}\/|\/(?!\/))[^\s"'<>「」『』（）()、。]*|(?<![\w/.%-])(?:[\w.-]+)?\?[\w.-]+=[^\s"'<>「」『』（）()、。]*/g;
       for (const match of String(text).replace(TEXT_URL, ' ').match(RELATIVE) || []) {
-        const kinds = scrubUrl(`https://relative.invalid${match.startsWith('?') ? '/' : ''}${match}`,
+        let resolved;
+        try { resolved = new URL(match, 'https://relative.invalid/base/').href; } catch { continue; }
+        const kinds = scrubUrl(resolved,
           { hostAllowlist: ['relative.invalid'], keywords: opts.keywords, trustHidden: true, strict: strictUrls }).kinds.filter((kind) => kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
