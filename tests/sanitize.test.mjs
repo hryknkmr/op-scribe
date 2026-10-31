@@ -41,7 +41,7 @@ test('truncation happens after masking and never splits a placeholder', () => {
 });
 
 test('addresses on a single-label domain are emails too (K3)', () => {
-  for (const address of ['alice@localhost', 'bob.k@intranet']) {
+  for (const address of ['alice@localhost', 'bob.k@intranet', '"alice"@example.com', '"a b"@example.com']) {
     const { text, kinds } = S.scrubText(`連絡先 ${address} まで`);
     assert.ok(!text.includes('@'), text);
     assert.deepEqual(kinds, ['email']);

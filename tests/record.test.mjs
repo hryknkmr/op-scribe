@@ -26,7 +26,7 @@ const META = {
   pii: { tag: 'input', type: 'email' }
 };
 const input = (value, extra = {}) => ({
-  type: 'input', pageUrl: PROD, target: { role: 'textbox', tag: 'input', name: '本文' }, value, field: META[value?.field] || META.text, ...extra
+  type: value?.field === 'choice' ? 'select' : 'input', pageUrl: PROD, target: { role: 'textbox', tag: 'input', name: '本文' }, value, field: META[value?.field] || META.text, ...extra
 });
 
 test('envOf: commercial when the top page or the frame is on a listed host', () => {
@@ -92,6 +92,27 @@ test('the field names are classified whole, never cut first (row I3; review R20)
   const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { type: 'text', name: `${'x'.repeat(200)}password` } }),
     newRec(), settings, { tabUrl: BETA });
   assert.equal(step, null);
+});
+
+test('a field gets only the step kind the content script gives it (rows I5, I7; review R21)', () => {
+  const at = { tabUrl: BETA };
+  // A file is an upload and a checkbox or radio a check: as an input they carry nothing.
+  assert.equal(R.cleanStep(input(typed.kept('text', 'customer-name.pdf'), { field: { tag: 'input', type: 'file' } }), newRec(), settings, at), null);
+  for (const type of ['checkbox', 'Radio']) {
+    assert.equal(R.cleanStep(input(typed.kept('choice', 'private-option'), { field: { tag: 'input', type } }), newRec(), settings, at), null, type);
+  }
+  // A select step is the select tag, and the select tag is a select step.
+  assert.equal(R.cleanStep({ ...input(typed.kept('choice', '東京'), { field: META.choice }), type: 'input' }, newRec(), settings, at), null);
+  assert.equal(R.cleanStep({ ...input(typed.kept('choice', '1'), { field: { tag: 'input', type: 'range' } }), type: 'select' }, newRec(), settings, at), null);
+  assert.deepEqual(R.cleanStep({ ...input(typed.kept('choice', '東京')), type: 'select' }, newRec(), settings, at).value, typed.kept('choice', '東京'));
+  assert.deepEqual(R.cleanStep(input(typed.kept('choice', '1'), { type: 'input', field: { tag: 'input', type: 'range' } }), newRec(), settings, at).value, typed.kept('choice', '1'));
+});
+
+test('a long selector is cut with the mark that says so, and the check accepts exactly that (row T3; review R21)', () => {
+  const selector = `[data-testid="${'x'.repeat(200)}"]`;
+  const step = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', selector } }, newRec(), settings, { tabUrl: BETA });
+  assert.equal([...step.target.selector].length, 161);
+  assert.ok(step.target.selector.endsWith('…'));
 });
 
 test('a search box or a choice keeps only its own limit (rows I5, I6; review R20)', () => {

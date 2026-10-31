@@ -125,6 +125,7 @@
   }
 
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
+  const NO_VALUE_TYPES = new Set(['file', 'checkbox', 'radio']);
   const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role'];
 
   /**
@@ -142,6 +143,11 @@
     if (!meta || typeof meta !== 'object') return null;
     const names = { inSearch: meta.inSearch === true };
     for (const k of META_NAMES) if (typeof meta[k] === 'string') names[k] = meta[k];
+    // The step kind the content script gives each field (review R21): a select is
+    // the select tag and nothing else, a file is an upload (I7) and a checkbox or
+    // radio is a check with no value (I5). Anything else claims a value it has none of.
+    const type = String(names.type || '').toLowerCase();
+    if ((raw.type === 'select') !== (names.tag === 'select') || NO_VALUE_TYPES.has(type)) return null;
     const cls = classifyField(names);
     if (cls.kind === 'ignore') return null;
     const field = FIELD_OF[cls.kind];
@@ -187,7 +193,9 @@
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
-        if (!r.kinds.length) step.target.selector = [...r.text].slice(0, LIMITS.selector).join('');
+        // Cut like any kept text, with the "…" that says so (T3; review R21).
+        const chars = [...r.text];
+        if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : r.text;
       }
       if (t.href) step.target.href = url(t.href);
     }

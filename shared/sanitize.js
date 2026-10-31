@@ -71,8 +71,8 @@
       re: /\b(token|api[_-]?key|secret|password|passwd|pwd)(\s*[:=]\s*)[^\s"'&]{4,}/gi,
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
-    // The dot in the domain is optional: alice@localhost is an address too.
-    { kind: 'email', re: /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*/g },
+    // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
+    { kind: 'email', re: /(?:"[^"\r\n]{1,64}"|[\w.%+-]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },

@@ -40,7 +40,7 @@
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       name: opt(cutStr('T2', LIMITS.name)),
-      selector: opt(str('T3', LIMITS.selector)),
+      selector: opt(cutStr('T3', LIMITS.selector)),
       href: opt(URL_VALUE)
     }
   };

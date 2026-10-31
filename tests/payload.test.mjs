@@ -392,3 +392,11 @@ test('the environment is masked before it is cut, and a raw one too long is refu
   assert.equal(raw.recording.environment.browser, browser, 'buildPayload never cuts');
   assert.ok(P.checkPayload(raw).some((p) => p.path === 'recording.environment.browser'));
 });
+
+test('a selector longer than its limit passes only with the cut mark (row T3; review R21)', () => {
+  const r = clone(rec);
+  r.steps[1].target.selector = `#${'a'.repeat(160)}`;
+  assert.ok(P.checkPayload(regen(build(r))).some((p) => p.path.endsWith('.target.selector')));
+  r.steps[1].target.selector = `#${'a'.repeat(159)}…`;
+  assert.deepEqual(P.checkPayload(regen(build(r))), []);
+});

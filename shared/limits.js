@@ -97,7 +97,7 @@
    * as \u0000 (6 characters) and a quote or backslash as 2; a Gherkin table
    * cell doubles backslashes and pipes once more.
    */
-  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + LIMITS.selector + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
+  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + cut(LIMITS.selector) + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
   // The arguments as JSON with their typed wrappers ({"treatment":"kept","field":"arg","text":...}).
   const ARGS_JSON = LIMITS.argLeaves * (6 * cut(LIMITS.argKey) + 6 * cut(LIMITS.kept.arg) + 64) + 64;
   const STEP = Object.freeze({

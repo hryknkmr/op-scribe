@@ -99,7 +99,8 @@ test('every payload built from generated page input passes the independent check
       const from = type === 'note' && g.r() < 0.5 ? {} : { tabUrl };
       const step = R.cleanStep(raw, rec, settings, from);
       // What the content script makes for a field, the worker never drops (rows I1-I8; review R20).
-      if ((type === 'input' || type === 'select') && masked) assert.ok(step, `seed ${seed}: ${JSON.stringify(meta)}`);
+      const routed = (type === 'select') === (meta.tag === 'select') && !['file', 'checkbox', 'radio'].includes(String(meta.type).toLowerCase());
+      if ((type === 'input' || type === 'select') && masked && routed) assert.ok(step, `seed ${seed}: ${JSON.stringify(meta)}`);
       if (step) rec.steps.push(step);
     }
     // Deleting steps (including the first) must not break the payload either.
