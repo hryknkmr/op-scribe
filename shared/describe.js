@@ -222,10 +222,10 @@
     const steps = rec?.steps || [];
     const out = [
       '# op-scribe: Gherkin + attributes',
-      `# recording: ${rec?.id || 'unknown'} / privacy: ${rec?.privacyLevel || 'strict'}`,
+      `# recording: ${rec?.id || 'unknown'} / privacy: ${rec?.privacyLevel || 'partial'}`,
       '# ‹…› and [[…]] are masked values: supply test values, never guess the original.',
       '# site-N.invalid is an alias for a host that is not disclosed.',
-      `@op-scribe @privacy-${rec?.privacyLevel || 'strict'}`,
+      `@op-scribe @privacy-${rec?.privacyLevel || 'partial'}`,
       'Feature: 記録された操作の再現',
       ''
     ];

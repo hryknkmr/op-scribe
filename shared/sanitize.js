@@ -28,7 +28,7 @@
   const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|file:\d+|url:[a-z-]+)\]\]/g;
 
   const DEFAULT_SETTINGS = Object.freeze({
-    privacyLevel: 'strict',
+    privacyLevel: 'partial',
     // Hosts that may appear as-is. Every other host becomes site-N.invalid.
     hostAllowlist: [],
     // Words that must never leave the browser (company, product, people).
@@ -233,7 +233,8 @@
 
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
   const CARD_HINT = /card.?(number|no|num)|cc.?(num|number)|cvc|cvv|security.?code|expir|有効期限|カード番号|セキュリティコード/i;
-  const SECRET_HINT = /pass|pwd|secret|token|otp|\bpin\b|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
+  // pin_code and verification-code too: _ and - are word characters for \b, so letters are looked at instead.
+  const SECRET_HINT = /pass|pwd|secret|token|otp|totp|2fa|mfa|(?<![a-z])pin(?![a-z])|(?:verif\w*|confirm\w*|auth\w*|access|login|sms|one.?time)[\s_-]?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
   const EMAIL_HINT = /mail|メール/i;
   const PHONE_HINT = /phone|\btel\b|mobile|fax|電話|携帯/i;
 
@@ -268,9 +269,13 @@
     if (!text) return { value: '', kinds: [] };
     if (cls.kind === 'secret') return { value: mark(cls.label), kinds: [cls.label] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: 200 });
-    // A contact field the patterns did not recognize (e.g. a partial address) is still partially hidden.
-    if ((cls.kind === 'email' || cls.kind === 'phone') && !r.kinds.length) {
-      return { value: partialId(r.text, 1, cls.kind === 'phone' ? 4 : 1), kinds: [cls.kind] };
+    // A contact field keeps its value only when the whole of it was recognized as one address or number;
+    // anything else in it (alice@localhost, a partial address) is partially hidden as a whole.
+    if (cls.kind === 'email' || cls.kind === 'phone') {
+      const whole = cls.kind === 'email' ? /^[^\s@]*\*{3}@[^\s@]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
+      if (!whole.test(r.text.trim())) {
+        return { value: partialId(text.trim(), 1, cls.kind === 'phone' ? 4 : 1), kinds: [cls.kind] };
+      }
     }
     return { value: r.text, kinds: r.kinds };
   }
@@ -321,7 +326,7 @@
   }
 
   const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36})$/i;
-  const SECRET_PARAM = /token|code|key|secret|sig|session|auth|pass|nonce|ticket|state|otp/i;
+  const SECRET_PARAM = /token|code|key|secret|sig|session|auth|pass|nonce|ticket|state|otp|(?<![a-z])pin(?![a-z])/i;
 
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
@@ -345,6 +350,25 @@
     if (!r.kinds.length) return segment;
     kinds.push(...r.kinds);
     return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
+  }
+
+  /** Query parameters under the policy: credential keys hidden, other values masked like text. */
+  function scrubParams(entries, ctx, kinds) {
+    const params = [];
+    for (const [k, v] of entries) {
+      const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
+      let value = '';
+      if (v && SECRET_PARAM.test(k)) {
+        value = mark('secret');
+        kinds.push('secret');
+      } else if (v) {
+        const r = scrubText(v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+        kinds.push(...r.kinds);
+        value = encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
+      }
+      params.push(`${encodeURIComponent(key)}=${value}`);
+    }
+    return params;
   }
 
   /**
@@ -376,24 +400,19 @@
 
     const path = url.pathname.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
 
-    const params = [];
-    for (const [k, v] of url.searchParams) {
-      const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
-      let value = '';
-      if (v && SECRET_PARAM.test(k)) {
-        value = mark('secret');
-        kinds.push('secret');
-      } else if (v) {
-        const r = scrubText(v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
-        kinds.push(...r.kinds);
-        value = encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
-      }
-      params.push(`${encodeURIComponent(key)}=${value}`);
-    }
+    const params = scrubParams(url.searchParams, ctx, kinds);
 
     // Fragments are kept like paths: SPA routes (#/settings) stay readable, ids and listed words are masked.
+    // Parameters in a fragment (#access_token=..., #/route?code=...) follow the query rules.
     let hash = '';
-    if (url.hash.includes('://')) {
+    const fragment = url.hash.slice(1);
+    const [route, query] = fragment.includes('?') ? [fragment.slice(0, fragment.indexOf('?')), fragment.slice(fragment.indexOf('?') + 1)]
+      : fragment.includes('=') ? ['', fragment] : [fragment, null];
+    if (query !== null) {
+      const routed = route.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
+      const fragmentParams = scrubParams(new URLSearchParams(query), ctx, kinds);
+      hash = `#${routed}${route || fragment.includes('?') ? '?' : ''}${fragmentParams.join('&')}`;
+    } else if (url.hash.includes('://')) {
       // A URL inside the fragment (#/redirect/https://...): read as text, so its host follows the policy.
       let decoded = url.hash.slice(1);
       try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
@@ -417,7 +436,8 @@
   function finalScan(value, opts = {}) {
     const findings = [];
     const check = (text, path) => {
-      const { kinds } = scrubText(String(text).replace(PLACEHOLDER, ' '), { keywords: opts.keywords });
+      // Also with the placeholders taken out: text a page wrapped around one (Ac[[secret]]me) reads as a whole.
+      const kinds = [' ', ''].flatMap((gap) => scrubText(String(text).replace(PLACEHOLDER, gap), { keywords: opts.keywords }).kinds);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {

@@ -16,10 +16,10 @@
 
 ```gherkin
 # op-scribe: Gherkin + attributes
-# recording: rec-mgx0abcd-1a2b3c / privacy: strict
+# recording: rec-mgx0abcd-1a2b3c / privacy: partial
 # ‹…› and [[…]] are masked values: supply test values, never guess the original.
 # site-N.invalid is an alias for a host that is not disclosed.
-@op-scribe @privacy-strict
+@op-scribe @privacy-partial
 Feature: 記録された操作の再現
 
   Background:
@@ -115,7 +115,7 @@ Feature: 記録された操作の再現
     "startedAt": "2026-10-29T01:00:00.000Z",
     "endedAt": "…",
     "startUrl": "https://site-1.invalid/",
-    "privacy": { "level": "strict", "hostsAliased": 1, "redactions": { "text": 2, "email": 1 } },
+    "privacy": { "level": "partial", "hostsAliased": 1, "redactions": { "secret": 1, "email": 1 } },
     "environment": { "browser": "Google Chrome 141", "platform": "macOS", "language": "ja" },
     "steps": [
       { "n": 1, "type": "navigate", "t": 0, "url": "https://site-1.invalid/", "source": "user" },
@@ -132,6 +132,9 @@ Feature: 記録された操作の再現
   "sentAt": "…"
 }
 ```
+
+`privacy.level` は `partial` です（認証情報は完全に、連絡先と ID は一部だけ伏せ、ほかの入力はそのまま残す方針。[PRIVACY.md](PRIVACY.md)）。
+入力の文字そのものが残るので、受け取る側は「入力は文字数だけ」という以前の `strict` と同じ扱いにしないでください。
 
 `t` は記録開始からの経過ミリ秒です。ペイロードはフィールドを許可リスト方式で組み立てるため、
 タブ ID や実ホスト名との対応表など、ブラウザ内専用の状態は構造上含まれません。

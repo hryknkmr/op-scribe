@@ -456,7 +456,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   // Ask for the endpoint now, while we still hold the click.
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }) : Promise.resolve(true);
   const next = {
-    privacyLevel: 'strict',
+    privacyLevel: 'partial',
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),
     keywords: [...new Set(lines(form.keywords.value))],
     endpoint,

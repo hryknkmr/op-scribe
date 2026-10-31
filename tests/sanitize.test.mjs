@@ -183,3 +183,31 @@ test('a host with non-ASCII letters is aliased and scanned in both its Punycode 
   const keywords = S.aliasedHosts(hosts.aliases).map(([host]) => host);
   assert.deepEqual(S.finalScan({ v: 'münich.example' }, { keywords }).map((f) => f.kinds), [['keyword']]);
 });
+
+test('verification and PIN code fields are credentials, in any spelling', () => {
+  for (const meta of [{ name: 'verification_code' }, { name: 'pin_code' }, { label: 'Verification code' }, { name: 'sms-code' }, { id: 'totp' }]) {
+    assert.equal(S.maskFieldValue('123456', meta).value, '[[secret]]', JSON.stringify(meta));
+  }
+  assert.equal(S.maskFieldValue('90210', { name: 'zip_code' }).value, '90210');
+  assert.equal(S.maskFieldValue('shoes', { name: 'shipping' }).value, 'shoes');
+});
+
+test('a contact field is kept only when its whole value is one recognized address or number', () => {
+  assert.equal(S.maskFieldValue('alice@localhost ref 1234567', { type: 'email' }).value, 'a******7');
+  assert.equal(S.maskFieldValue('user@example.com', { type: 'email' }).value, 'u***@e***.com');
+  assert.equal(S.maskFieldValue('090-1234-5678', { type: 'tel' }).value, '***-****-5678');
+});
+
+test('credential parameters are hidden in the query and in the fragment', () => {
+  const url = (raw) => S.scrubUrl(raw, { hostAllowlist: ['example.com'] }).url;
+  assert.equal(url('https://example.com/a?pin=1234&q=x'), 'https://example.com/a?pin=[[secret]]&q=x');
+  assert.equal(url('https://example.com/#code=123456'), 'https://example.com/#code=[[secret]]');
+  assert.equal(url('https://example.com/#access_token=abcd1234&x=1'), 'https://example.com/#access_token=[[secret]]&x=1');
+  assert.equal(url('https://example.com/#/route?code=9&tab=a'), 'https://example.com/#/route?code=[[secret]]&tab=a');
+  assert.equal(url('https://example.com/#/settings'), 'https://example.com/#/settings');
+});
+
+test('finalScan reads text around a placeholder as a whole', () => {
+  const findings = S.finalScan({ a: 'Ac[[secret]]me', b: 'user[[secret]]@example.com', c: 'password=[[secret]]' }, { keywords: ['Acme'] });
+  assert.deepEqual(findings.map((f) => f.path), ['a', 'b']);
+});

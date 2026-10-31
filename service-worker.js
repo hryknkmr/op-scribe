@@ -194,7 +194,7 @@ async function start({ tabId, url }) {
       tabId,
       startedAt: Date.now(),
       endedAt: null,
-      privacyLevel: 'strict',
+      privacyLevel: 'partial',
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},

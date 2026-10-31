@@ -13,7 +13,7 @@ const rec = {
   startedAt: Date.UTC(2026, 9, 29, 1, 0, 0),
   endedAt: Date.UTC(2026, 9, 29, 1, 2, 0),
   startUrl: 'https://site-1.invalid/',
-  privacyLevel: 'strict',
+  privacyLevel: 'partial',
   aliases: { 'https://intranet.corp.invalid': 'site-1.invalid' },
   grantedPatterns: ['https://intranet.corp.invalid/*'],
   redactions: { text: 1, secret: 1 },
@@ -60,7 +60,7 @@ test('buildPayload carries no local-only state and passes the final scan', () =>
 
 test('toGherkin renders Given/When/Then with an attribute table per step', () => {
   const feature = D.toGherkin(rec);
-  assert.match(feature, /^@op-scribe @privacy-strict$/m);
+  assert.match(feature, /^@op-scribe @privacy-partial$/m);
   assert.match(feature, /^ {2}Background:\n {4}Given "https:\/\/site-1\.invalid\/" を開いている$/m);
   assert.match(feature, /^ {4}When 「ログイン」リンクをクリックする\n {6}\| action +\| click +\|\n {6}\| url +\| https:\/\/site-1\.invalid\/ \|\n {6}\| role +\| link +\|/m);
   assert.match(feature, /^ {4}Then "https:\/\/site-1\.invalid\/login" に遷移する$/m);
