@@ -15,7 +15,7 @@
 #   scan-range <base> <tip>
 #                          base..tip のコミット内容 + identity を走査（pre-push 用）
 #
-# 終了コード: 0=クリーン / 1=違反検出 / 2=使用方法エラー
+# 終了コード: 0=クリーン / 1=違反検出 / 2=使用方法エラー・git の失敗（検出なしとは区別する）
 #
 # ローカルでの一時バイパス（hooks のみ。CI は不可）: 環境変数 PII_GUARD_SKIP=1
 # =============================================================================
@@ -30,9 +30,8 @@ LOCAL_PATTERNS_FILE="${GUARD_DIR}/pii-guard.patterns.local.txt"
 # author/committer に許可する email（GitHub noreply のみ）
 ALLOWED_EMAIL_RE='@users\.noreply\.github\.com$|^noreply@github\.com$'
 
-# 走査から除外するパス（denylist 語・パターン例を正当に含むファイル）
-# 注: scan-secrets.ts は除外しない（盲点を作らない）。同ファイルのパターン定義は正規表現メタを
-# 含むため自己マッチせず、selftest の fake secret は連結で組み立てるため contiguous な literal を残さない。
+# 走査から除外するパス（denylist 語・パターン例を正当に含むファイル）。
+# テスト（tests/pii-guard.test.mjs）は除外しない（盲点を作らない）。fake secret は連結で組み立てる。
 EXCLUDE_PATHS=(
   "scripts/pii-guard.patterns.txt"
   "scripts/pii-guard.patterns.local.txt"
@@ -60,10 +59,13 @@ grep -vE '^[[:space:]]*(#|$)' "$PATTERNS_FILE" > "$CLEAN_PATTERNS" || true
 if [[ -f "$LOCAL_PATTERNS_FILE" ]]; then
   grep -vE '^[[:space:]]*(#|$)' "$LOCAL_PATTERNS_FILE" >> "$CLEAN_PATTERNS" || true
 fi
+# shared/sanitize.js の secret 規則と同じ形を揃える（片方だけが検出する食い違いを作らない）。
+# 照合は大文字小文字を区別しないので、短い接頭辞は直前が英数字でないことを条件にする。
 cat >> "$CLEAN_PATTERNS" <<'EOF'
-ghp_[A-Za-z0-9]{20,}
+(^|[^A-Za-z0-9])gh[opsur]_[A-Za-z0-9]{20,}
 github_pat_[A-Za-z0-9_]{20,}
-gho_[A-Za-z0-9]{20,}
+(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}
+(^|[^A-Za-z0-9])AIza[0-9A-Za-z_-]{30,}
 AKIA[0-9A-Z]{16}
 -----BEGIN [A-Z ]*PRIVATE KEY-----
 xox[baprs]-[A-Za-z0-9-]{10,}
@@ -85,16 +87,25 @@ grep_text() {
 }
 
 scan_staged() {
-  local found=0 f out
+  local found=0 f content out names
+  # R も含める（リネームと同時に足した内容を見逃さない）。-z で core.quotepath に関係なく実名で受け取る。
+  if ! names="$(git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n')"; then
+    echo "pii-guard: staged のファイル一覧を取得できません" >&2
+    return 2
+  fi
   while IFS= read -r f; do
     [[ -z "$f" ]] && continue
     is_excluded "$f" && continue
-    out="$(git show ":$f" 2>/dev/null | grep_text)"
+    if ! content="$(git show ":$f")"; then
+      echo "pii-guard: staged の内容を読めません: $f" >&2
+      return 2
+    fi
+    out="$(printf '%s\n' "$content" | grep_text)"
     if [[ -n "$out" ]]; then
       echo "  ✗ $f"; echo "$out" | sed 's/^/      /'
       found=1
     fi
-  done < <(git diff --cached --name-only --diff-filter=ACM)
+  done <<< "$names"
   return $found
 }
 
@@ -151,9 +162,13 @@ scan_range() {
   # 内容（範囲の差分追加行を走査）。除外パスは self-match を避けるため diff から外す。
   local exargs=() p
   for p in "${EXCLUDE_PATHS[@]}"; do exargs+=(":(exclude)$p"); done
-  local out
-  out="$(git diff "${base}" "${tip}" -- . "${exargs[@]}" 2>/dev/null \
-        | grep -E '^\+' | grep -vE '^\+\+\+' | grep_text)"
+  local diff out
+  # git diff の失敗は「検出なし」と区別して止める。追加行が 0 件（削除だけ）は正常。
+  if ! diff="$(git diff "${base}" "${tip}" -- . "${exargs[@]}")"; then
+    echo "pii-guard: ${base}..${tip} の差分を取得できません" >&2
+    return 2
+  fi
+  out="$(printf '%s\n' "$diff" | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+' || true; } | grep_text)"
   if [[ -n "$out" ]]; then
     echo "  ✗ push 範囲の追加内容に痕跡:"; echo "$out" | sed 's/^/      /'
     rc=1
