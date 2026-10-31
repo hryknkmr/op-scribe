@@ -44,9 +44,9 @@ EXCLUDE_PATHS=(
 )
 
 # 実在しうるメールアドレスの混入検出。予約ドメイン（RFC 2606 / 6761）と noreply のみ許可。
-# 照合する行は「行番号:アドレス」の形。共著者行のアドレスは AGENTS.md の例外どおり完全一致に限る。
+# AGENTS.md の例外（AI ツールの共著者行）は、アドレスではなく共著者行の形で許可する（strip_coauthor）。
 EMAIL_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
-EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$|:noreply@anthropic\.com$'
+EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$'
 
 if [[ ! -f "$PATTERNS_FILE" ]]; then
   echo "pii-guard: patterns file not found: $PATTERNS_FILE" >&2
@@ -58,11 +58,19 @@ fi
 # （第三者 action に依存せず secret 流入も同じ経路で遮断するため）。
 CLEAN_PATTERNS="$(mktemp)"
 trap 'rm -f "$CLEAN_PATTERNS"' EXIT
-grep -vE '^[[:space:]]*(#|$)' "$PATTERNS_FILE" > "$CLEAN_PATTERNS" || true
+load_patterns() {
+  local rc=0
+  grep -vE '^[[:space:]]*(#|$)' "$1" >> "$CLEAN_PATTERNS" || rc=$?
+  if (( rc > 1 )); then
+    echo "pii-guard: パターンを読めません: $1" >&2
+    exit 2
+  fi
+}
+load_patterns "$PATTERNS_FILE"
 # プロジェクト固有 denylist（gitignore 対象・存在すれば追加）。公開 repo には無いため
 # CI では汎用パターンのみ、ローカル/移行作業中は識別情報も照合する。
 if [[ -f "$LOCAL_PATTERNS_FILE" ]]; then
-  grep -vE '^[[:space:]]*(#|$)' "$LOCAL_PATTERNS_FILE" >> "$CLEAN_PATTERNS" || true
+  load_patterns "$LOCAL_PATTERNS_FILE"
 fi
 # shared/sanitize.js の secret 規則と同じ形を揃える（片方だけが検出する食い違いを作らない）。
 # 照合は大文字小文字を区別しないので、短い接頭辞は直前が英数字でないことを条件にする。
@@ -76,6 +84,14 @@ AKIA[0-9A-Z]{16}
 xox[baprs]-[A-Za-z0-9-]{10,}
 EOF
 
+# 壊れた正規表現で grep が失敗すると、どのファイルでも「検出なし」に見える。走査の前に止める。
+pattern_check=0
+grep -Ei -f "$CLEAN_PATTERNS" </dev/null >/dev/null || pattern_check=$?
+if (( pattern_check > 1 )); then
+  echo "pii-guard: パターンに誤りがあります" >&2
+  exit 2
+fi
+
 is_excluded() {
   local f="$1" p
   for p in "${EXCLUDE_PATHS[@]}"; do
@@ -84,11 +100,29 @@ is_excluded() {
   return 1
 }
 
-# stdin のテキストを走査。マッチを表示し、見つかれば 1 を返す。
+# 共著者行の形をした箇所だけを消す。名前に @ を許すと、別のアドレスを一緒に消してしまう。
+strip_coauthor() {
+  sed -E 's/[Cc]o-[Aa]uthored-[Bb]y:[^<>@]*<noreply@anthropic\.com>//g'
+}
+
+# stdin のテキストから許可外のアドレスを表示する。grep の失敗は 2 を返す（検出なしと区別する）。
+grep_emails() {
+  local rc=0 emails
+  emails="$(strip_coauthor | grep -noE "$EMAIL_RE")" || rc=$?
+  if (( rc > 1 )); then return 2; fi
+  [[ -z "$emails" ]] && return 0
+  rc=0
+  printf '%s\n' "$emails" | grep -viE "$EMAIL_ALLOW_RE" || rc=$?
+  if (( rc > 1 )); then return 2; fi
+  return 0
+}
+
+# stdin のテキストを走査してマッチを表示する。grep の失敗は 2 を返す。
 grep_text() {
-  local input; input="$(cat)"
-  printf '%s\n' "$input" | grep -inEi -f "$CLEAN_PATTERNS" || true
-  printf '%s\n' "$input" | grep -noE "$EMAIL_RE" | grep -viE "$EMAIL_ALLOW_RE" || true
+  local input rc=0; input="$(cat)"
+  printf '%s\n' "$input" | grep -inEi -f "$CLEAN_PATTERNS" || rc=$?
+  if (( rc > 1 )); then return 2; fi
+  printf '%s\n' "$input" | grep_emails
 }
 
 scan_staged() {
@@ -129,14 +163,36 @@ scan_message() {
 scan_tree() {
   local args=() p
   for p in "${EXCLUDE_PATHS[@]}"; do args+=(":(exclude)$p"); done
-  local rc=0
-  if git grep -inEi -f "$CLEAN_PATTERNS" -- . "${args[@]}" 2>/dev/null; then rc=1; fi
-  if git grep -noE "$EMAIL_RE" -- . "${args[@]}" 2>/dev/null | grep -viE "$EMAIL_ALLOW_RE"; then rc=1; fi
+  local rc=0 status=0 files f out line
+  git grep -inEi -f "$CLEAN_PATTERNS" -- . "${args[@]}" || status=$?
+  case "$status" in
+    0) rc=1 ;;
+    1) ;;
+    *) echo "pii-guard: tracked ファイルを走査できません" >&2; return 2 ;;
+  esac
+  status=0
+  files="$(git grep -lzE "$EMAIL_RE" -- . "${args[@]}" | tr '\0' '\n')" || status=$?
+  if (( status > 1 )); then
+    echo "pii-guard: tracked ファイルを走査できません" >&2
+    return 2
+  fi
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    out="$(grep_emails < "$f")"
+    [[ -z "$out" ]] && continue
+    while IFS= read -r line; do echo "$f:$line"; done <<< "$out"
+    rc=1
+  done <<< "$files"
   return $rc
 }
 
 check_identities() {
-  local range="$1" bad=0 ae ce h
+  local range="$1" bad=0 ae ce h log
+  # プロセス置換にすると git log の失敗が見えず、範囲が不正でも通ってしまう。
+  if ! log="$(git log --format='%ae|%ce|%h' "$range")"; then
+    echo "pii-guard: コミットの一覧を取得できません: $range" >&2
+    return 2
+  fi
   while IFS='|' read -r ae ce h; do
     [[ -z "$h" ]] && continue
     if ! printf '%s' "$ae" | grep -qE "$ALLOWED_EMAIL_RE"; then
@@ -145,7 +201,7 @@ check_identities() {
     if ! printf '%s' "$ce" | grep -qE "$ALLOWED_EMAIL_RE"; then
       echo "  ✗ $h: committer email not allowed: $ce"; bad=1
     fi
-  done < <(git log --format='%ae|%ce|%h' "$range" 2>/dev/null)
+  done <<< "$log"
   return $bad
 }
 
@@ -161,9 +217,16 @@ check_config() {
 }
 
 scan_range() {
-  local base="$1" tip="$2" rc=0
+  local base="$1" tip="$2" rc=0 status=0
   # identity
-  if ! check_identities "${base}..${tip}"; then rc=1; fi
+  # pre-push は root からの push で base に空ツリーを渡す。ツリーは範囲の始点にできない。
+  if [[ "$(git cat-file -t "$base" 2>/dev/null)" == "tree" ]]; then
+    check_identities "$tip" || status=$?
+  else
+    check_identities "${base}..${tip}" || status=$?
+  fi
+  if (( status > 1 )); then return 2; fi
+  if (( status == 1 )); then rc=1; fi
   # 内容（範囲の差分追加行を走査）。除外パスは self-match を避けるため diff から外す。
   local exargs=() p
   for p in "${EXCLUDE_PATHS[@]}"; do exargs+=(":(exclude)$p"); done

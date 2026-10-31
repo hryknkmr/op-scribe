@@ -128,15 +128,55 @@ test('the root commit is scanned when the whole history is given', () => {
   assert.equal(guard('scan-commits', 'no-such-ref').status, 2);
 });
 
-test('only the exact co-author address is allowed on that domain', () => {
+test('the co-author exception covers the trailer form, not the address', () => {
   const domain = ['anthropic', 'com'].join('.');
+  const trailer = `Co-Authored-By: Claude <noreply@${domain}>`;
   const { git, guard, write } = repo();
-  write('ok.txt', `Co-Authored-By: Claude <noreply@${domain}>\n`);
+  write('ok.txt', `${trailer}\n`);
   git('add', '-A');
   assert.equal(guard('scan-staged').status, 0);
-  for (const local of ['someone', 'x.noreply']) {
-    write('ok.txt', `${local}@${domain}\n`);
+  assert.equal(guard('scan-tree').status, 0);
+  git('commit', '-q', '--allow-empty', '-m', `message\n\n${trailer}`);
+  assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 0);
+  const lines = [
+    `noreply@${domain}`,
+    `someone@${domain}`,
+    `Co-Authored-By: Claude <x.noreply@${domain}>`,
+    `Co-Authored-By: ${address()} <noreply@${domain}>`,
+    `${trailer} ${address()}`
+  ];
+  for (const line of lines) {
+    write('ok.txt', `${line}\n`);
     git('add', '-A');
-    assert.equal(guard('scan-staged').status, 1, local);
+    assert.equal(guard('scan-staged').status, 1, line);
+    assert.equal(guard('scan-tree').status, 1, line);
+  }
+});
+
+test('a range git cannot read is an error for identity and push checks', () => {
+  const { guard } = repo();
+  assert.equal(guard('check-identities', 'no-such-ref..HEAD').status, 2);
+  assert.equal(guard('scan-range', 'no-such-ref', 'HEAD').status, 2);
+});
+
+test('a push from the root compares with the empty tree, as pre-push does', () => {
+  const { git, guard } = repo();
+  const empty = git('hash-object', '-t', 'tree', '/dev/null').trim();
+  const r = guard('scan-range', empty, 'HEAD');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  git('config', 'user.email', address());
+  git('commit', '-q', '--allow-empty', '-m', 'bad identity');
+  assert.equal(guard('scan-range', empty, 'HEAD').status, 1);
+});
+
+test('a malformed pattern stops every scan instead of finding nothing', () => {
+  const { dir, git, guard, write } = repo();
+  write('t.txt', `${address()}\n`);
+  git('add', '-A');
+  writeFileSync(join(dir, 'scripts', 'pii-guard.patterns.local.txt'), '(\n');
+  for (const args of [['scan-tree'], ['scan-staged'], ['scan-commits', 'HEAD']]) {
+    const r = guard(...args);
+    assert.equal(r.status, 2, args[0]);
+    assert.match(r.stderr, /パターンに誤り/);
   }
 });
