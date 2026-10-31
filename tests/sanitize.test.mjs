@@ -311,7 +311,10 @@ test('only counts within the limits are this extension\'s placeholders (K3, E4, 
   assert.equal(S.finalScan({ m: '[[file:1234567]]' }).length, 1);
 });
 
-test('a non-finite number marked by the page script is redacted as a number (row W3; review R14)', () => {
-  const NON_FINITE = '\u0000op-scribe:non-finite';
-  assert.deepEqual(S.maskArgs({ n: NON_FINITE }, { env: 'standard' }), { n: { treatment: 'redacted', field: 'arg', kind: 'number' } });
+test('non-finite numbers are redacted as numbers, and no string poses as one (rows W2, W3; review R15)', () => {
+  assert.deepEqual(S.maskArgs({ a: NaN, b: Infinity }, { env: 'standard' }), {
+    a: { treatment: 'redacted', field: 'arg', kind: 'number' },
+    b: { treatment: 'redacted', field: 'arg', kind: 'number' }
+  });
+  assert.deepEqual(S.maskArgs({ s: '\u0000op-scribe:non-finite' }, { env: 'standard' }).s.treatment, 'kept');
 });

@@ -15,16 +15,13 @@
 
   const { primaryRole } = root.OpScribeLimits || require('./limits.js');
 
-  const INTERACTIVE = [
-    // No <label>: one without a control is page text, and one with a control is
-    // recorded through the control it forwards the click to.
-    'a[href]', 'button', 'input', 'select', 'textarea', 'summary',
-    // ARIA widget roles: elements a person operates, whatever their tag.
-    ...['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox', 'radio',
-      'switch', 'option', 'combobox', 'treeitem', 'slider', 'spinbutton', 'listbox', 'searchbox',
-      'textbox', 'gridcell', 'scrollbar'].map((role) => `[role~="${role}"]`),
-    '[contenteditable=""]', '[contenteditable="true"]'
-  ].join(',');
+  // Elements a person operates by their tag. No <label>: one without a control is page
+  // text, and one with a control is recorded through the control it forwards the click to.
+  const NATIVE = 'a[href], button, input, select, textarea, summary, [contenteditable=""], [contenteditable="true"]';
+  // ARIA widget roles: elements a person operates, whatever their tag.
+  const WIDGET_ROLES = new Set(['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox',
+    'radio', 'switch', 'option', 'combobox', 'treeitem', 'slider', 'spinbutton', 'listbox', 'searchbox', 'textbox',
+    'gridcell', 'scrollbar']);
   const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'password', 'number',
     'date', 'datetime-local', 'month', 'week', 'time']);
 
@@ -35,8 +32,24 @@
     || el.tagName === 'TEXTAREA' || el.isContentEditable
     || ['textbox', 'searchbox'].includes(primaryRole(el.getAttribute('role')));
 
+  /**
+   * Whether a person operates this element: by its tag, or by the role it
+   * actually takes - the first real token of role, never a later one
+   * ("img button" is an image) (row T2).
+   */
+  const isOperated = (el) => el.matches(NATIVE) || WIDGET_ROLES.has(primaryRole(el.getAttribute('role')));
+
   /** The element a person operated, or null when the event hit page content. */
-  const operated = (el) => (el ? el.closest(INTERACTIVE) : null);
+  const operated = (el) => {
+    for (let node = el; node; node = node.parentElement) if (isOperated(node)) return node;
+    return null;
+  };
+
+  /** Whether the element is inside a search landmark, judged by each ancestor's actual role (row I6). */
+  const inSearch = (el) => {
+    for (let node = el; node; node = node.parentElement) if (primaryRole(node.getAttribute('role')) === 'search') return true;
+    return false;
+  };
 
   function implicitRole(el) {
     const explicit = el.getAttribute('role');
@@ -81,7 +94,7 @@
     }
     if (el.tagName === 'IMG') return oneLine(el.alt);
     const declared = oneLine(el.getAttribute('title'));
-    if (!el.matches(INTERACTIVE)) return declared;
+    if (!isOperated(el)) return declared;
     if (el.labels?.length) {
       const text = [...el.labels].map(textOf).join(' ');
       if (text) return text;
@@ -93,7 +106,7 @@
     return textOf(el) || oneLine(el.querySelector('img[alt]')?.alt) || declared;
   }
 
-  const api = { INTERACTIVE, isTextField, operated, implicitRole, accessibleName };
+  const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName };
   root.OpScribeTarget = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

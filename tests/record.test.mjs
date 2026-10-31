@@ -187,3 +187,14 @@ test('a trailing dot does not take a host out of production (rows U4, I8; review
   assert.equal(step.env, 'commercial');
   assert.equal(step.value.treatment, 'redacted');
 });
+
+test('the worker does not keep as a search box what its names say is free text (rows I6, I8; review R15)', () => {
+  const rec = newRec();
+  const search = typed.kept('search', 'alpha beta');
+  const prod = R.cleanStep({ ...input(search), field: { type: 'text', role: 'region search', inSearch: false } }, rec, settings, { tabUrl: PROD });
+  assert.equal(prod.value.treatment, 'redacted');
+  const beta = R.cleanStep({ ...input(search), pageUrl: BETA, field: { type: 'text', inSearch: false } }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(beta.value, typed.kept('text', 'alpha beta'));
+  const real = R.cleanStep({ ...input(search), field: { type: 'text', inSearch: true } }, rec, settings, { tabUrl: PROD });
+  assert.deepEqual(real.value, search);
+});

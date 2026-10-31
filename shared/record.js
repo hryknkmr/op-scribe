@@ -118,12 +118,16 @@
    */
   function reclassify(value, meta, env) {
     if (!meta || typeof meta !== 'object' || !value) return value;
-    const bounded = {};
+    const bounded = { inSearch: meta.inSearch === true };
     for (const k of ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role']) {
       if (typeof meta[k] === 'string') bounded[k] = meta[k].slice(0, 200);
     }
     const cls = classifyField(bounded);
     if (cls.kind === 'secret') return typed.redacted('secret', cls.label);
+    // Kept as a search box or a choice, but the names say free text: free text it is (I5, I6, I8).
+    if (cls.kind === 'free' && value.treatment === 'kept' && (value.field === 'search' || value.field === 'choice')) {
+      return env === 'commercial' ? typed.redacted('text', 'v') : { ...value, field: 'text' };
+    }
     if (cls.kind !== 'pii' || value.field === 'pii') return value;
     if (env === 'commercial' && value.treatment === 'length') return { ...value, field: 'pii', kind: cls.label };
     return typed.redacted('pii', cls.label);

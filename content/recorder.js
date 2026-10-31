@@ -118,7 +118,7 @@
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
       role: el.getAttribute('role'),
-      inSearch: Boolean(el.closest('[role~="search"]')),
+      inSearch: T.inSearch(el),
       contentEditable: el.isContentEditable
     };
   }
@@ -149,7 +149,7 @@
     emit(el.tagName === 'SELECT' ? 'select' : 'input', {
       target: describe(el),
       // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
-      field: { ...meta, contentEditable: undefined, inSearch: undefined },
+      field: { ...meta, contentEditable: undefined },
       value: masked.value,
       valueKinds: masked.kinds
     });
@@ -173,7 +173,7 @@
       // Fields and toggles are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
       // A label with a control: the browser forwards the click to the control, which records itself.
-      if (!el.matches(T.INTERACTIVE) && el.closest('label')?.control) return;
+      if (!T.isOperated(el) && el.closest('label')?.control) return;
       emit('click', { target: describe(el) });
     },
 

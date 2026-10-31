@@ -36,13 +36,27 @@
   }
 
   /** Arguments must survive structured cloning; anything exotic is dropped. */
-  // JSON would turn NaN and Infinity into null; mark them so the recorder redacts them as
-  // numbers (ADR 0003, W3). The same string is NON_FINITE in shared/sanitize.js.
-  const NON_FINITE = '\u0000op-scribe:non-finite';
-
-  function cloneable(value) {
-    const keep = (key, v) => (typeof v === 'number' && !Number.isFinite(v) ? NON_FINITE : v);
-    try { return JSON.parse(JSON.stringify(value ?? {}, keep)); } catch { return {}; }
+  /**
+   * A copy postMessage can carry: plain values, arrays and objects, without
+   * functions or other things it cannot clone. Not a JSON round trip, which
+   * turns NaN and Infinity into null; the recorder must see them as numbers
+   * to redact them (ADR 0003, W3). Deeper than the recorder looks is cut.
+   */
+  function cloneable(value, depth = 0) {
+    if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+    if (typeof value !== 'object' || depth > 8) return undefined;
+    try {
+      if (typeof value.toJSON === 'function') return cloneable(value.toJSON(), depth + 1);
+      if (Array.isArray(value)) return value.slice(0, 100).map((v) => cloneable(v, depth + 1) ?? null);
+      const out = {};
+      for (const [k, v] of Object.entries(value).slice(0, 100)) {
+        const c = cloneable(v, depth + 1);
+        if (c !== undefined) Object.defineProperty(out, k, { value: c, enumerable: true, writable: true, configurable: true });
+      }
+      return out;
+    } catch {
+      return undefined;
+    }
   }
 
   // ------------------------------------------------- request/response channel
@@ -94,7 +108,7 @@
             ok = true;
             return result;
           } finally {
-            post('TOOL_CALL', { name: tool.name, args: cloneable(normalizeArgs(args)), ok });
+            post('TOOL_CALL', { name: tool.name, args: cloneable(normalizeArgs(args)) ?? {}, ok });
           }
         }
       });

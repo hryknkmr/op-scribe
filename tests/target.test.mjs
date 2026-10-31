@@ -105,3 +105,15 @@ test('implicitRole takes the first real role, not the first token (row T4; revie
   assert.equal(T.implicitRole(el('div', { role: 'unknown searchbox' })), 'searchbox');
   assert.equal(T.implicitRole(el('button', { role: 'nonsense' })), 'button');
 });
+
+test('only the actual role counts, never a later token (rows I6, T2; review R15)', () => {
+  const image = el('div', { role: 'img button' }, '本文の画像説明');
+  assert.equal(T.operated(image), null);
+  assert.equal(T.accessibleName(image), '');
+  const field = el('input', { type: 'text' });
+  el('div', { role: 'region search' }, '', [field]);
+  assert.equal(T.inSearch(field), false);
+  const inner = el('input', { type: 'text' });
+  el('form', { role: 'search region' }, '', [inner]);
+  assert.equal(T.inSearch(inner), true);
+});
