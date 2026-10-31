@@ -137,6 +137,25 @@ test('WebMCP arguments under a credential or personal key are redacted, whatever
   assert.deepEqual(step.args.q, typed.kept('arg', 'shoes'));
 });
 
+test('names, tool names and notes are masked before they are cut, so no keyword is left half (K2; review R19)', () => {
+  const rec = newRec();
+  const across = (limit) => `${'あ'.repeat(limit - 2)}Acme の続き`;
+  const click = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: across(80) } }, rec, settings, { tabUrl: BETA });
+  const tool = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: across(80) }, rec, settings, { tabUrl: BETA });
+  const note = R.cleanStep({ type: 'note', note: `${'あ'.repeat(296)} alice@example.com` }, rec, settings);
+  for (const text of [click.target.name, tool.tool, note.note]) {
+    assert.ok(!/Ac|@/.test(text), text);
+    assert.ok(text.endsWith('…'), text);
+  }
+});
+
+test('placeholders kept inside WebMCP arguments are counted (row M1; review R19)', () => {
+  const rec = newRec();
+  const args = { q: typed.kept('arg', 'to [[email]] and [[masked]]'), r: typed.kept('arg', 'Acme') };
+  R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', args }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(rec.redactions, { email: 1, keyword: 2 });
+});
+
 test('steps without what they must carry are not recorded (row T6; review R1)', () => {
   const rec = newRec();
   assert.equal(R.cleanStep({ type: 'input', pageUrl: BETA }, rec, settings, { tabUrl: BETA }), null);

@@ -26,6 +26,12 @@
   // so "[[text:09012345678]]" written by hand is scanned like any other text.
   const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
+  /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
+  const placeholderKinds = (text) => [...String(text).matchAll(OWN_PLACEHOLDER)].map(([m]) => {
+    const word = m.slice(2, -2).split(':')[0];
+    return word === 'masked' ? 'keyword' : word;
+  });
+
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
     commercialHosts: [],
@@ -459,6 +465,7 @@
     mark,
     PLACEHOLDER,
     scrubText,
+    placeholderKinds,
     usableKeyword,
     typed,
     classifyField,

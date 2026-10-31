@@ -175,7 +175,8 @@
         + 'do not include personal data (it is masked anyway).',
       inputSchema: expectationSchema,
       annotations: { readOnlyHint: false },
-      execute: (raw) => request('expect', { text: String(normalizeArgs(raw).text || '').slice(0, 300) })
+      // Not cut here: the worker masks first and then cuts (K2).
+      execute: (raw) => request('expect', { text: String(normalizeArgs(raw).text || '') })
     }
   ];
 

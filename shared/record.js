@@ -14,7 +14,7 @@
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
   const { LIMITS, STEP_RULES, REDACTION_KINDS } = root.OpScribeLimits || require('./limits.js');
-  const { scrubText, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
+  const { scrubText, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
@@ -83,7 +83,9 @@
         if (env === 'commercial' && (f === 'text' || f === 'arg')) return fail(f);
         // Already escaped by the content script: keep its own placeholders.
         const r = scrubText(text, { keywords: settings.keywords, maxLength: KEPT_LIMIT[f], escape: false });
-        kinds.push(...r.kinds);
+        // The content script sends no kinds for arguments: count every placeholder the text holds,
+        // the ones masked there and here alike (M1). Field values come with their kinds (valueKinds).
+        kinds.push(...(f === 'arg' ? placeholderKinds(r.text) : r.kinds));
         return typed.kept(f, r.text);
       }
       default:

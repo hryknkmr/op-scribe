@@ -99,7 +99,8 @@
     if (!el) return undefined;
     const target = {
       role: implicitRole(el),
-      name: accessibleName(el).slice(0, 200),
+      // Whole: the worker masks first and then cuts, so a keyword across the limit is never left half (K2).
+      name: accessibleName(el),
       tag: el.tagName.toLowerCase(),
       selector: selectorFor(el)
     };
@@ -244,7 +245,7 @@
     }
     if (data.type === 'TOOL_CALL') {
       // Arguments come from an agent or the page; mask them like typed input.
-      emit('tool', { tool: String(data.name).slice(0, 80), args: S.maskArgs(data.args, maskOptions()), ok: data.ok !== false });
+      emit('tool', { tool: String(data.name), args: S.maskArgs(data.args, maskOptions()), ok: data.ok !== false });
     }
   });
 
