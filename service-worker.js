@@ -235,7 +235,7 @@ const stop = () => mutate(async (rec) => {
 function scanFor(rec, settings) {
   const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
   const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
-  return (value) => finalScan(value, { keywords });
+  return (value) => finalScan(value, { keywords, hostAllowlist: settings.hostAllowlist });
 }
 
 const addPattern = (url) => mutate(async (rec) => {

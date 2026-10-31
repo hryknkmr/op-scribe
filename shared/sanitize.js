@@ -27,6 +27,9 @@
    */
   const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|file:\d+|url:[a-z-]+)\]\]/g;
 
+  /** Exactly one placeholder this filter writes. A [[...]] of any other kind is the page's text and is read as such. */
+  const isPlaceholder = (value) => new RegExp(`^${PLACEHOLDER.source}$`).test(String(value));
+
   const DEFAULT_SETTINGS = Object.freeze({
     privacyLevel: 'partial',
     // Hosts that may appear as-is. Every other host becomes site-N.invalid.
@@ -100,7 +103,7 @@
       re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"?|'[^']*'?|[^\s"'&,}]+)/gu,
       accept: (match) => {
         const [, key, , value] = match.match(/^(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
-        return ['secret', 'card'].includes(classifyKey(key)) && !/^["']?\[\[/.test(value);
+        return ['secret', 'card'].includes(classifyKey(key)) && !isPlaceholder(value.replace(/^["']|["']$/g, ''));
       },
       replace: (match, key, sep, value) => {
         // An unclosed quote (password="hunter) takes the rest of the text: it is all the value as far as can be told.
@@ -339,14 +342,14 @@
    * A value this filter already hid: a placeholder, or the shape a partial mask leaves (ab**23, s***@e***.com,
    * ***-****-5678). Kept as it is, so that a recording passed through again (the worker, the final scan) is stable.
    */
-  const alreadyHidden = (value) => /^\[\[[^\]]+\]\]$/.test(value) || /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(value)
+  const alreadyHidden = (value) => isPlaceholder(value) || /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(value)
     || /^[^\s@*]?\*{3}@[^\s@*]?\*{3}(?:\.[^\s@*]+)?$/.test(value) || /^[+\s()*-]*\*[+\d\s()*-]*$/.test(value);
 
   function maskByKind(kind, text, opts = {}) {
     // A credential is replaced whatever it looks like (ab**cd may be a password); only this filter's own
     // placeholder passes again unchanged.
     if (kind === 'secret' || kind === 'card') {
-      return new RegExp(`^${PLACEHOLDER.source}$`).test(String(text).trim()) ? { value: text, kinds: [] } : { value: mark(kind), kinds: [kind] };
+      return isPlaceholder(String(text).trim()) ? { value: text, kinds: [] } : { value: mark(kind), kinds: [kind] };
     }
     if (kind && alreadyHidden(String(text).trim())) return { value: text, kinds: [] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: opts.maxLength, hosts: opts.hosts });
@@ -539,8 +542,10 @@
     const findings = [];
     const check = (text, path) => {
       // Also with the placeholders taken out: text a page wrapped around one (Ac[[secret]]me) reads as a whole.
-      // And with any [[...]] taken out, known or not: an unknown one (Ac[[foo]]me) must not split a word either.
-      const kinds = [String(text).replace(PLACEHOLDER, ' '), String(text).replace(PLACEHOLDER, ''), String(text).replace(/\[\[[^\]]*\]\]/g, '')]
+      // Any other [[...]] is the page's text: read without its brackets (password=[[hunter2]]), and also taken out
+      // (Ac[[foo]]me), so it can neither hide its content nor split a word.
+      const opened = String(text).replace(/\[\[([^\]]*)\]\]/g, (m, inner) => (isPlaceholder(m) ? m : inner));
+      const kinds = [opened.replace(PLACEHOLDER, ' '), opened.replace(PLACEHOLDER, ''), String(text).replace(/\[\[[^\]]*\]\]/g, '')]
         .flatMap((t) => scrubText(t, { keywords: opts.keywords }).kinds);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
@@ -550,8 +555,14 @@
     const urlParams = (text, path) => {
       for (const match of String(text).match(TEXT_URL) || []) {
         const relative = match.startsWith('//');
-        const kinds = scrubUrl(relative ? `https:${match}` : match, { hostAllowlist: [], keywords: opts.keywords }).kinds
-          .filter((kind) => kind !== 'host');
+        const raw = relative ? `https:${match}` : match;
+        const kinds = scrubUrl(raw, { hostAllowlist: [], keywords: opts.keywords }).kinds.filter((kind) => kind !== 'host');
+        // A host neither allowed nor an alias this filter wrote (site-N.invalid), when the caller knows the allowlist.
+        if (Array.isArray(opts.hostAllowlist)) {
+          let host = '';
+          try { host = new URL(raw).hostname.replace(/\.+$/, ''); } catch { /* unparsed: scrubUrl said so */ }
+          if (host && !hostAllowed(host, opts.hostAllowlist) && !/^site-\d+\.invalid$/.test(host)) kinds.push('host');
+        }
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
           return;
@@ -566,6 +577,12 @@
           && Object.values(v).every((n) => Number.isInteger(n))) return undefined;
       const inArgs = args || key === 'args';
       const kind = under || (key && credential(key, { protocol: args }) ? classifyKey(key, { protocol: args }) : null);
+      // In WebMCP arguments, a contact or id key's value must be one this filter already hid (a***@e***.com, ab**23).
+      const named = args && key ? classifyKey(key, { protocol: true }) : null;
+      if (!kind && ['email', 'phone', 'id'].includes(named) && (typeof v === 'number' || typeof v === 'string')
+          && String(v).trim() && !alreadyHidden(String(v).trim())) {
+        findings.push({ path: path || '(root)', kinds: [named] });
+      }
       // A value under a key naming a credential is one, unless it is only a placeholder of this filter.
       if (kind && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
         findings.push({ path: path || '(root)', kinds: [kind] });

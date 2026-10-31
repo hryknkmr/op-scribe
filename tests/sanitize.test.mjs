@@ -375,3 +375,14 @@ test('an address with a non-ASCII local part is one address, and a host with the
   assert.equal(S.scrubUrl('https://private.internal.test./a', ctx).url, 'https://site-1.invalid/a');
   assert.equal(S.scrubText('host private.internal.test here', { hosts: ctx }).text, 'host site-1.invalid here');
 });
+
+test('only the filter\'s own placeholders are trusted; hosts and contact keys of arguments are checked at the exit', () => {
+  assert.equal(S.scrubText('password=[[hunter2]]').text, 'password=[[secret]]');
+  assert.equal(S.finalScan({ a: 'password=[[hunter2]]' }).length, 1);
+  assert.deepEqual(S.finalScan({ a: 'password=[[secret]]' }), []);
+  assert.deepEqual(S.finalScan({ m: 'see https://private.internal.test/ and https://site-1.invalid/a and https://example.com/' }, { hostAllowlist: ['example.com'] })
+    .map((f) => f.kinds), [['host']]);
+  assert.deepEqual(S.finalScan({ args: { email: 'alice', phone: '1234', user_id: 'abc123', ok: 'a***@e***.com', uid: 'ab**23' } }).map((f) => f.path),
+    ['args.email', 'args.phone', 'args.user_id']);
+  assert.deepEqual(S.finalScan({ recording: { id: 'rec-abc', steps: [{ id: 's12', key: 'Enter' }] } }), []);
+});
