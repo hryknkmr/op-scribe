@@ -92,10 +92,19 @@
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
     { kind: 'secret', re: /\b(?:Bearer|Basic)\s+[\w.~+/-]{8,}=*/gi },
     {
-      // A credential written as key and value in text or JSON: otp=123456, "pin": "1234", backup code: ABCDEF.
+      // A credential written as key and value in text or JSON (client_secret=abc, "pin": "1234", backup code: ABC,
+      // password="hunter 2"): the key is judged by classifyKey, like every other key; a quoted value is taken whole.
+      // An unquoted value is taken up to the next space.
       kind: 'secret',
-      re: /\b(token|api[_-]?key|secret|password|passwd|pwd|passcode|otp|pin|cvc|cvv|session|authorization|credentials?|(?:backup|recovery|verification|auth|one[_-]?time)[ _-]?code)(["']?\s*[:=]\s*["']?)(?!\[\[)[^\s"'&,}]+/gi,
-      replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
+      re: /(?<![\w.-])([A-Za-z][\w.-]*(?:[ _-][A-Za-z][\w.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"'&,}]+)/g,
+      accept: (match) => {
+        const [, key, , value] = match.match(/^([A-Za-z][\w.-]*(?:[ _-][A-Za-z][\w.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/);
+        return ['secret', 'card'].includes(classifyKey(key)) && !/^["']?\[\[/.test(value);
+      },
+      replace: (match, key, sep, value) => {
+        const quote = /^["']/.test(value) ? value[0] : '';
+        return `${key}${sep}${quote}${mark('secret')}${quote}`;
+      }
     },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
@@ -253,8 +262,10 @@
     .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
 
   // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
-  const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
-  const CREDENTIAL_PARTS = /password|passwd|passphrase|secret|token|credential|authorization|apikey|accesskey|privatekey/;
+  const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
+  // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
+  // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
+  const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)/;
   const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session'];
   const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
     'sms', 'backup', 'recovery', 'time', 'otp', 'mfa', 'pin'];
@@ -310,6 +321,8 @@
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
     if (/\b(?:username|nickname)\b/.test(autocomplete)) return { kind: 'id' };
     const kind = RANK.find((k) => found.has(k));
+    // A chosen option is the page's own text (Japan from country_id), not an id typed by the person.
+    if (kind === 'id' && (meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type))) return { kind: 'text' };
     return { kind: kind || 'text' };
   }
 

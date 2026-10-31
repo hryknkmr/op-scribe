@@ -316,3 +316,15 @@ test('opaque mixed ids in a path, phone numbers in common notations, and only th
   assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { secret: 2 } } }, steps: [{ args: { redactions: { token: 'abc' } } }] })
     .map((f) => f.path), ['steps[0].args.redactions.token']);
 });
+
+test('key and value in text are judged by the same key classifier, quoted values whole', () => {
+  for (const [input, output] of [['client_secret=abc', 'client_secret=[[secret]]'], ['access_token=abc', 'access_token=[[secret]]'],
+    ['password="hunter 2"', 'password="[[secret]]"'], ['x=1&token=abc', 'x=1&token=[[secret]]']]) {
+    assert.equal(S.scrubText(input).text, output);
+    assert.equal(S.finalScan({ t: input }).length, 1, input);
+  }
+  for (const kept of ['note: hello world', 'state=open', 'secretary: Ms. A']) assert.equal(S.scrubText(kept).text, kept);
+  assert.equal(S.maskFieldValue('x', { name: 'secretary' }).value, 'x');
+  assert.equal(S.maskFieldValue('x', { name: 'tokenizer' }).value, 'x');
+  assert.equal(S.maskFieldValue('Japan', { name: 'country_id', tag: 'select', type: 'select-one' }).value, 'Japan');
+});
