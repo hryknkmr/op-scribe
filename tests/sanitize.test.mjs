@@ -197,7 +197,7 @@ test('a contact field is kept only when its whole value is one recognized addres
   // A stronger rule is never weakened by the contact field: credentials, cards and listed words stay hidden.
   assert.equal(S.maskFieldValue('password=hunter22', { type: 'email' }).value, '[[masked]]');
   assert.equal(S.maskFieldValue('4111 1111 1111 1111', { type: 'tel' }).value, '[[masked]]');
-  assert.equal(S.maskFieldValue('Acme@example.com', { type: 'email' }, { keywords: ['Acme'] }).value, '[[masked]]');
+  assert.equal(S.maskFieldValue('Acme@example.com', { type: 'email' }, { keywords: ['Acme'] }).value, 'A***@e***.com');
   // A postal address is not an email field.
   assert.equal(S.maskFieldValue('123 Main Street', { label: 'Mailing address' }).value, '123 Main Street');
   assert.equal(S.maskFieldValue('a@example.com', { name: 'mailaddress' }).value, 'a***@e***.com');
@@ -363,7 +363,9 @@ test('compound credential names, unclosed quotes, and URLs in text checked at th
 
 test('a credential is replaced whatever it looks like, and a chosen option is kept unless it is card data', () => {
   for (const value of ['ab**cd', '[[hunter2]]']) assert.equal(S.maskFieldValue(value, { type: 'password' }).value, '[[secret]]', value);
-  assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'session' }).value, 'Morning');
+  assert.equal(S.maskFieldValue('Japan', { tag: 'select', type: 'select', name: 'country_id' }).value, 'Japan');
+  // A credential name beats the chosen option: a one-time code chosen from a list is still a credential.
+  assert.equal(S.maskFieldValue('123456', { tag: 'select', type: 'select', name: 'otp' }).value, '[[secret]]');
   assert.equal(S.maskFieldValue('Work', { tag: 'select', type: 'select', name: 'email' }).value, 'Work');
   assert.equal(S.maskFieldValue('12', { tag: 'select', type: 'select', name: 'exp_month' }).value, '[[card]]');
 });
@@ -394,4 +396,13 @@ test('nested URLs encoded more than once, userinfo in scheme-relative URLs, and 
   assert.equal(S.scrubText('see //user:pass@private.internal.test/path', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'see //site-1.invalid/path');
   assert.equal(S.maskFieldValue('****123456', { type: 'tel' }).value, '******3456');
   for (const value of ['[[masked]]', '[[card]]']) assert.equal(S.maskFieldValue(value, { type: 'password' }).value, '[[secret]]');
+});
+
+test('an address is read before listed words and opaque strings can cut it apart; short Basic values and phone digits', () => {
+  assert.equal(S.scrubText('alice@Acme.example.com', { keywords: ['Acme'] }).text, 'a***@A***.com');
+  assert.equal(S.scrubText(`${'a1'.repeat(17)}@internal.test`).text, 'a***@i***.test');
+  assert.equal(S.scrubText('Authorization: Basic YTpi').text, 'Authorization: [[secret]]');
+  assert.equal(S.scrubText('Basic auth を使う').text, 'Basic auth を使う');
+  assert.equal(S.maskFieldValue('4155552671', { type: 'tel' }).value, '******2671');
+  assert.equal(S.maskFieldValue('4111 1111 1111 1111', { type: 'tel' }).value, '[[masked]]');
 });

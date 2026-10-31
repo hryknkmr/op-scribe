@@ -88,7 +88,8 @@
   // IPv6: the first group only (fd00::1 -> fd00:*:*).
   const partialIp6 = (ip) => ip.split(':').map((part, i) => (i < 1 ? part : '*')).join(':');
 
-  // Order matters: credentials first, then contact details, then generic ids.
+  // Order matters: credentials first, then contact details, then generic ids. Listed words come after all of these
+  // (scrubText), so that none of them is cut apart by a word inside it (alice@Acme.example.com).
   const RULES = [
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
@@ -100,7 +101,7 @@
       // An unquoted value is taken up to the next space.
       kind: 'secret',
       // Keys in any letters: 認証コード: 123456.
-      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"?|'[^']*'?|[^\s"'&,}]+)/gu,
+      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)((?:Basic|Bearer)\s+[^\s"'&,}]+|"[^"]*"?|'[^']*'?|[^\s"'&,}]+)/giu,
       accept: (match) => {
         const [, key, , value] = match.match(/^(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
         return ['secret', 'card'].includes(classifyKey(key)) && !isPlaceholder(value.replace(/^["']|["']$/g, ''));
@@ -112,9 +113,7 @@
         return `${key}${sep}${quote}${mark('secret')}${closed ? quote : ''}`;
       }
     },
-    // Long opaque strings mixing letters and digits are session ids or signed parameters.
-    { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
-    { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
     // An address on a single-label (internal) domain: alice@intranet.
@@ -122,6 +121,9 @@
     // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.
     // Words written right before such an address are taken with it: over-matching only hides more.
     { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
+    // Long opaque strings mixing letters and digits are session ids or signed parameters.
+    { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
+    { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g, replace: partialPhone },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
@@ -230,15 +232,6 @@
       }
     }
 
-    const keywords = keywordPattern(opts.keywords);
-    if (keywords) {
-      // Placeholders this filter wrote are left whole: a listed word "secret" must not break [[secret]].
-      text = text.split(new RegExp(`(${PLACEHOLDER.source})`)).map((part, i) => (i % 2 ? part : part.replace(keywords, () => {
-        kinds.push('keyword');
-        return mark('masked');
-      }))).join('');
-    }
-
     for (const rule of RULES) {
       text = text.replace(rule.re, (...args) => {
         const match = args[0];
@@ -246,6 +239,15 @@
         kinds.push(rule.kind);
         return rule.replace ? rule.replace(...args) : mark(rule.kind);
       });
+    }
+
+    const keywords = keywordPattern(opts.keywords);
+    if (keywords) {
+      // Placeholders this filter wrote are left whole: a listed word "secret" must not break [[secret]].
+      text = text.split(new RegExp(`(${PLACEHOLDER.source})`)).map((part, i) => (i % 2 ? part : part.replace(keywords, () => {
+        kinds.push('keyword');
+        return mark('masked');
+      }))).join('');
     }
 
     if (opts.maxLength && text.length > opts.maxLength) {
@@ -323,13 +325,13 @@
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     if (type === 'hidden') return { kind: 'ignore' };
-    // A chosen option is the page's own text (Japan from country_id, Morning from session): kept, except card data
-    // (an expiry month chosen from a list).
+    // A chosen option is the page's own text (Japan from country_id, Morning from a "session" list): kept, except
+    // when the name says card data or a credential (an expiry month, a one-time code chosen from a list).
     const chosen = meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type);
     const found = new Set([meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel].map((h) => classifyKey(h)));
     if (/\bcc-/.test(autocomplete) || found.has('card')) return { kind: 'secret', label: 'card' };
-    if (chosen) return { kind: 'text' };
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || found.has('secret')) return { kind: 'secret', label: 'secret' };
+    if (chosen) return { kind: 'text' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
     if (/\b(?:username|nickname)\b/.test(autocomplete)) return { kind: 'id' };
@@ -357,6 +359,11 @@
     // A contact field keeps its value only when the whole of it was recognized as one address or number
     // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
     // recognized in it (alice@localhost next to an id, words around a credential): hidden entirely.
+    // A phone field holding only digits and separators keeps its last four digits, as a phone number does
+    // (unless a stronger rule, a card number, found it).
+    if (kind === 'phone' && /^[+\d\s().-]+$/.test(text.trim()) && /\d/.test(text) && r.kinds.every((k) => k === 'phone' || k === 'id')) {
+      return { value: partialPhone(text.trim()), kinds: ['phone'] };
+    }
     if (kind === 'email' || kind === 'phone') {
       if (!r.kinds.length) return { value: partialId(r.text, 1, kind === 'phone' ? 4 : 1), kinds: [kind] };
       const whole = kind === 'email' ? /^[^\s@[\]]*\*{3}@[^\s@[\]]*$/ : /^[+\d\s()*-]*\*[+\d\s()*-]*$/;
