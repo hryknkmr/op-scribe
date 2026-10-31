@@ -51,7 +51,8 @@
   /** WebMCP arguments with each typed leaf rendered: kept numbers stay numbers. */
   function displayArgs(node) {
     if (node === null || typeof node !== 'object') return node;
-    if (isTyped(node)) return node.treatment === 'kept' && typeof node.number === 'number' ? node.number : display(node);
+    // Each string is one line before JSON.stringify, which would write a line break as "\n" (E7).
+    if (isTyped(node)) return node.treatment === 'kept' && typeof node.number === 'number' ? node.number : line(display(node));
     if (Array.isArray(node)) return node.map(displayArgs);
     return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, displayArgs(v)]));
   }

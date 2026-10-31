@@ -14,7 +14,7 @@
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
   const { LIMITS, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
-  const { scrubText, scrubUrl, hostAllowed, typed, classifyField, walkArgs } = S;
+  const { scrubText, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
@@ -35,7 +35,7 @@
   }
 
   const hostOf = (url) => {
-    try { return new URL(url).hostname.toLowerCase(); } catch { return ''; }
+    try { return parsedHost(new URL(url).hostname); } catch { return ''; }
   };
 
   /** 'commercial' when any of the URLs (top page, frame) is on a listed production host. */

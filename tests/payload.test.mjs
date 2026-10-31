@@ -325,3 +325,21 @@ test('a panel note takes its environment from the recording when the payload is 
   stale.privacy.coverage = 'mixed';
   assert.ok(P.checkPayload(regen(stale)).some((p) => p.problem === 'panel note environment'));
 });
+
+test('a value longer than its limit passes only with the "…" the cut appends (row E2; review R13)', () => {
+  const standardRec = clone(rec);
+  for (const step of standardRec.steps) step.env = 'standard';
+  const cases = [
+    (p) => { p.recording.steps[2].value = { treatment: 'kept', field: 'search', text: 'a'.repeat(121) }; },
+    (p) => { p.recording.steps[1].target.name = 'n'.repeat(81); },
+    (p) => { p.recording.steps[5].note = 'm'.repeat(301); }
+  ];
+  for (const change of cases) {
+    const payload = clone(build(standardRec));
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
+  }
+  const ok = clone(build(standardRec));
+  ok.recording.steps[2].value = { treatment: 'kept', field: 'search', text: `${'a'.repeat(120)}…` };
+  assert.deepEqual(P.checkPayload(regen(ok)), []);
+});

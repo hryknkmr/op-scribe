@@ -180,3 +180,10 @@ test('a listed IDN production host matches the Punycode host a URL yields (rows 
   assert.equal(R.envOf(['https://www.ドメイン.invalid/'], policy), 'commercial');
   assert.equal(R.envOf(['https://例.invalid/'], policy), 'standard');
 });
+
+test('a trailing dot does not take a host out of production (rows U4, I8; review R13)', () => {
+  const rec = newRec();
+  const step = R.cleanStep(input(typed.kept('text', 'x')), rec, settings, { tabUrl: 'https://shop.example.com./cart' });
+  assert.equal(step.env, 'commercial');
+  assert.equal(step.value.treatment, 'redacted');
+});

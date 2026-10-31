@@ -153,7 +153,7 @@
 
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
   const PII_AUTOCOMPLETE = /\b(?:email|tel[a-z-]*|name|given-name|family-name|additional-name|honorific-[a-z]+|nickname|username|street-address|address-line\d|address-level\d|postal-code|bday[a-z-]*|sex|organization|organization-title)\b/;
-  const SECRET_HINT = /pass|pwd|secret|token|otp|pin\b|cvc|cvv|security.?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
+  const SECRET_HINT = /pass|pwd|secret|token|otp|pin(?![a-z])|cvc|cvv|security.?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
   const PII_HINT = /mail|phone|tel|mobile|fax|name|kana|furigana|address|addr|street|city|zip|postal|birth|bday|gender|card|account|iban|ssn|my.?number|氏名|名前|姓|フリガナ|ふりがな|住所|郵便|電話|携帯|メール|生年月日|誕生日|口座|カード|性別|勤務先|会社名|マイナンバー/i;
 
   function piiLabel(hints, type) {
@@ -307,7 +307,10 @@
    */
   function parsedHost(host) {
     const h = String(host).trim().toLowerCase();
-    try { return new URL(`http://${h}/`).hostname; } catch { return h; }
+    let parsed = h;
+    try { parsed = new URL(`http://${h}/`).hostname; } catch { /* keep as written */ }
+    // "shop.example.com." is the same host as "shop.example.com".
+    return parsed.replace(/\.+$/, '');
   }
 
   function hostAllowed(host, list) {
@@ -350,7 +353,7 @@
       return { url: mark(`url:${url.protocol.replace(':', '').slice(0, LIMITS.scheme)}`), kinds: ['url'] };
     }
 
-    const host = url.hostname.toLowerCase();
+    const host = parsedHost(url.hostname);
     const commercial = ctx.env === 'commercial' || hostAllowed(host, ctx.commercialHosts);
     let origin;
     if (hostAllowed(host, ctx.hostAllowlist)) {
@@ -415,7 +418,7 @@
    * x in "box" is not.
    */
   function hostPattern(hosts) {
-    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase()).filter(Boolean)
+    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean)
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
@@ -461,6 +464,7 @@
     maskArgs,
     scrubUrl,
     hostAllowed,
+    parsedHost,
     finalScan
   };
 

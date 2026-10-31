@@ -296,3 +296,10 @@ test('masking text again never rewrites inside its own placeholders (review R12)
   // Private-use characters from the page cannot pose as a set-aside placeholder.
   assert.equal(S.scrubText('ab [[id]]', { escape: false }).text, 'ab [[id]]');
 });
+
+test('pin_code is a credential field (row I3; review R13)', () => {
+  for (const name of ['pin_code', 'pin-code', 'PIN', 'card_pin']) {
+    assert.equal(S.classifyField({ name }).kind, 'secret', name);
+  }
+  assert.equal(S.classifyField({ name: 'pinterest' }).kind, 'free');
+});

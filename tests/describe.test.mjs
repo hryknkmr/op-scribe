@@ -115,3 +115,8 @@ test('a deleted first navigation does not come back as the start (#16; review R1
   assert.ok(!D.toGherkin(deleted).includes('secret-page'));
   assert.equal(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), '[[url:none]]');
 });
+
+test('argument strings are one line before they become JSON (row E7; review R13)', () => {
+  const sentence = D.describeStep({ type: 'tool', tool: 't', args: { q: typed.kept('arg', 'a\nb\u0000c') } });
+  assert.equal(sentence, 'WebMCP ツール「t」を実行する（引数: {"q":"a b c"}）');
+});

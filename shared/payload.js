@@ -27,6 +27,9 @@
   // ------------------------------------------------------------------- shape
 
   const str = (row, max, re) => ({ type: 'string', row, max, re });
+  // A text the masking cuts at n: longer than n only with the "…" the cut appends.
+  const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
+  const overCut = (text, n) => [...text].length > n && !text.endsWith('…');
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   const URL_VALUE = str('U1', LIMITS.url);
   const opt = (node) => ({ ...node, optional: true });
@@ -36,7 +39,7 @@
     fields: {
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
-      name: opt(str('T2', cut(LIMITS.name))),
+      name: opt(cutStr('T2', LIMITS.name)),
       selector: opt(str('T3', LIMITS.selector)),
       href: opt(URL_VALUE)
     }
@@ -55,10 +58,10 @@
       value: opt({ type: 'typed', row: 'I1-I8' }),
       checked: opt({ type: 'bool', row: 'T6' }),
       key: opt(str('T5', 32, /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/)),
-      tool: opt(str('W6', cut(LIMITS.tool))),
+      tool: opt(cutStr('W6', LIMITS.tool)),
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
-      note: opt(str('T1', cut(LIMITS.note)))
+      note: opt(cutStr('T1', LIMITS.note))
     }
   };
 
@@ -98,7 +101,7 @@
               type: 'object',
               fields: {
                 site: URL_VALUE,
-                tools: { type: 'array', max: LIMITS.toolList, of: str('W6', cut(LIMITS.tool)) }
+                tools: { type: 'array', max: LIMITS.toolList, of: cutStr('W6', LIMITS.tool) }
               }
             }
           }
@@ -127,9 +130,10 @@
 
   // ------------------------------------------------------------------- build
 
-  const STEP_FIELDS = ['type', 't', 'env', 'source', 'url', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note'];
-  const TARGET_FIELDS = ['role', 'name', 'tag', 'selector', 'href'];
-  const ENV_FIELDS = ['browser', 'platform', 'language'];
+  // Copied fields come from SHAPE itself, so the builder cannot carry a field the definition lacks.
+  const STEP_FIELDS = Object.keys(STEP.fields).filter((f) => f !== 'n' && f !== 'target');
+  const TARGET_FIELDS = Object.keys(TARGET.fields);
+  const ENV_FIELDS = Object.keys(SHAPE.fields.recording.fields.environment.fields);
 
   const pick = (obj, fields) => {
     const out = {};
@@ -202,7 +206,7 @@
       if (v.field === 'secret' || v.field === 'pii' || v.field === 'file') return bad(`${v.field} kept`);
       if (v.text === '') return env === 'commercial' && (v.field === 'text' || v.field === 'arg') ? bad('commercial free text kept') : undefined;
       if (env === 'commercial' && (v.field === 'text' || v.field === 'arg')) return bad('commercial free text kept');
-      if ([...v.text].length > KEPT_MAX[v.field]) return bad('too long');
+      if ([...v.text].length > KEPT_MAX[v.field] || overCut(v.text, LIMITS.kept[v.field])) return bad('too long');
       return undefined;
     }
     if (!KIND.test(String(v.kind))) return bad('bad kind');
@@ -248,7 +252,7 @@
       const entries = Object.entries(node);
       if (entries.length > LIMITS.argKeys) problems.push({ path, problem: 'too many keys' });
       for (const [k, v] of entries) {
-        if ([...k].length > cut(LIMITS.argKey)) problems.push({ path, problem: 'key too long' });
+        if ([...k].length > cut(LIMITS.argKey) || (overCut(k, LIMITS.argKey) && !/-\d+$/.test(k))) problems.push({ path, problem: 'key too long' });
         checkArgs(v, env, `${path}.${k}`, problems, depth + 1);
       }
       return;
@@ -290,7 +294,7 @@
       case 'string':
         if (value === null && node.nullable) return undefined;
         if (typeof value !== 'string') return bad('not a string');
-        if ([...value].length > node.max) return bad('too long');
+        if ([...value].length > node.max || (node.cutAt && overCut(value, node.cutAt))) return bad('too long');
         if (node.re && !node.re.test(value)) return bad('unexpected form');
         // A date must exist, not only have the right digits (row M2).
         if (node.re === ISO) {
