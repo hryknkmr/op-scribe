@@ -304,3 +304,24 @@ test('the largest recording the limits allow still passes the check and fits the
   assert.deepEqual(P.checkPayload(payload), []);
   assert.ok(Buffer.byteLength(JSON.stringify(payload)) <= TOTALS.payloadBytes);
 });
+
+test('a panel note takes its environment from the recording when the payload is built (M1, E2; review R12)', () => {
+  const note = { type: 'note', t: 1, env: 'standard', source: 'user', note: 'メモ' };
+  const r = { ...clone(rec), steps: [
+    { type: 'navigate', t: 0, env: 'standard', source: 'user', url: 'https://site-2.invalid/' },
+    note,
+    { type: 'navigate', t: 2, env: 'commercial', source: 'user', url: 'https://site-1.invalid/' }
+  ] };
+  const payload = build(r);
+  assert.equal(payload.recording.steps[1].env, 'commercial');
+  assert.deepEqual(P.checkPayload(payload), []);
+  // With the standard step deleted, the recording is commercial only.
+  const onlyCommercial = build({ ...r, steps: r.steps.slice(1) });
+  assert.equal(onlyCommercial.privacy.coverage, 'commercial');
+  assert.deepEqual(P.checkPayload(onlyCommercial), []);
+  // A note left standard in a commercial recording is refused.
+  const stale = clone(payload);
+  stale.recording.steps[1].env = 'standard';
+  stale.privacy.coverage = 'mixed';
+  assert.ok(P.checkPayload(regen(stale)).some((p) => p.problem === 'panel note environment'));
+});

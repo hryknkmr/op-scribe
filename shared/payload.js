@@ -154,6 +154,7 @@
         .map(([k, v]) => [k, [...String(v)].slice(0, LIMITS.environment).join('')])),
       steps: (rec.steps || []).map((step, i) => {
         const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
+        if (D.isPanelNote(step)) out.env = D.panelNoteEnv(rec.steps);
         if (step.target) out.target = pick(step.target, TARGET_FIELDS);
         return out;
       }),
@@ -378,6 +379,7 @@
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });
+      if (D.isPanelNote(step) && step.env !== D.panelNoteEnv(steps)) problems.push({ path: `${path}.env`, problem: 'panel note environment' });
       checkStepKind(step, path, problems);
       if (step.url !== undefined) checkUrl(step.url, step.env, `${path}.url`, problems);
       if (step.target?.href !== undefined) checkUrl(step.target.href, step.env, `${path}.target.href`, problems);

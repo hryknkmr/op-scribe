@@ -80,6 +80,17 @@
     return steps.find((s) => s.url)?.url || '[[url:none]]';
   }
 
+  /**
+   * A note written in the side panel has no URL and no page to belong to. It is
+   * commercial while the recording has any commercial step (ADR 0001), decided
+   * again whenever the payload is built, since steps come and go after it.
+   */
+  const isPanelNote = (step) => step.type === 'note' && !step.url && step.source !== 'agent';
+
+  function panelNoteEnv(steps) {
+    return (steps || []).some((s) => !isPanelNote(s) && s.env === 'commercial') ? 'commercial' : 'standard';
+  }
+
   /** commercial | standard | mixed | none, from the environment of each step. */
   function coverageOf(steps) {
     const envs = new Set((steps || []).map((s) => s.env));
@@ -339,7 +350,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const api = { display, displayArgs, coverageOf, startUrlOf, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

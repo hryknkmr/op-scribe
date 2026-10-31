@@ -278,3 +278,8 @@ test('one call keeps at most 100 argument values (row W5)', () => {
 test('the count in [[text:N]] is not a number to find (review R11)', () => {
   assert.deepEqual(S.finalScan({ m: '[[text:1000000]] と [[file:999]]' }), []);
 });
+
+test('the element takes the first real role in the list (row I6; review R12)', () => {
+  assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'unknown searchbox' }, commercial).value.field, 'search');
+  assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'unknown' }, commercial).value.field, 'text');
+});

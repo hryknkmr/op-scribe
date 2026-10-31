@@ -100,3 +100,8 @@ test('role is a list of tokens (rows I6, T2; review new R4)', () => {
   assert.equal(T.operated(node), node);
   assert.equal(T.accessibleName(node), '保存');
 });
+
+test('implicitRole takes the first real role, not the first token (row T4; review R12)', () => {
+  assert.equal(T.implicitRole(el('div', { role: 'unknown searchbox' })), 'searchbox');
+  assert.equal(T.implicitRole(el('button', { role: 'nonsense' })), 'button');
+});

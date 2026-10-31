@@ -17,7 +17,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, cut } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, cut, primaryRole } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
@@ -164,8 +164,8 @@
       return { kind: 'choice' };
     }
     // Markup only: a field that merely looks like a search box is free text.
-    // role is a list of tokens; the first one is the element's role ("searchbox textbox").
-    const role = String(meta.role || '').trim().split(/\s+/)[0];
+    // role is a list of tokens; the element takes the first real role in it.
+    const role = primaryRole(meta.role);
     if (type === 'search' || role === 'searchbox' || meta.inSearch) return { kind: 'search' };
     return { kind: 'free' };
   }

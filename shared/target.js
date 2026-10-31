@@ -13,6 +13,8 @@
 (function (root) {
   'use strict';
 
+  const { primaryRole } = root.OpScribeLimits || require('./limits.js');
+
   const INTERACTIVE = [
     // No <label>: one without a control is page text, and one with a control is
     // recorded through the control it forwards the click to.
@@ -31,14 +33,15 @@
 
   const isTextField = (el) => (el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has(el.type))
     || el.tagName === 'TEXTAREA' || el.isContentEditable
-    || ['textbox', 'searchbox'].includes(String(el.getAttribute('role') || '').trim().split(/\s+/)[0]);
+    || ['textbox', 'searchbox'].includes(primaryRole(el.getAttribute('role')));
 
   /** The element a person operated, or null when the event hit page content. */
   const operated = (el) => (el ? el.closest(INTERACTIVE) : null);
 
   function implicitRole(el) {
     const explicit = el.getAttribute('role');
-    if (explicit) return explicit.split(/\s+/)[0];
+    const role = primaryRole(explicit);
+    if (role) return role;
     const tag = el.tagName.toLowerCase();
     switch (tag) {
       case 'a': return el.hasAttribute('href') ? 'link' : 'generic';

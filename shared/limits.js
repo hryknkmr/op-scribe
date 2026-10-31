@@ -72,7 +72,19 @@
     payloadBytes: 6 * (RECORDING_CHARS + 3 * RECORDING_CHARS + 2 * RECORDING_CHARS)
   });
 
-  const api = { LIMITS, TOTALS, cut, STEP_RULES };
+  /** WAI-ARIA 1.2 roles that are not abstract: the ones an element can take. */
+  const ARIA_ROLES = new Set(('alert alertdialog application article banner blockquote button caption cell checkbox code '
+    + 'columnheader combobox comment complementary contentinfo definition deletion dialog document emphasis feed figure '
+    + 'form generic grid gridcell group heading img insertion link list listbox listitem log main mark marquee math menu '
+    + 'menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar '
+    + 'radio radiogroup region row rowgroup rowheader scrollbar search searchbox separator slider spinbutton status '
+    + 'strong subscript superscript switch tab table tablist tabpanel term textbox time timer toolbar tooltip tree treegrid '
+    + 'treeitem').split(' '));
+
+  /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
+  const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
+
+  const api = { LIMITS, TOTALS, cut, STEP_RULES, ARIA_ROLES, primaryRole };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
