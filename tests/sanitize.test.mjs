@@ -487,3 +487,13 @@ test('csrf keys, dotted phone numbers and quoted local parts', () => {
   assert.equal(S.scrubText('415.555.2671 +1.415.555.2671 192.168.1.1 "john doe"@example.com').text,
     '***.***.2671 +*.***.***.2671 192.168.*.* "j***"@e***.com');
 });
+
+test('a card number or a token in a path is hidden whole; production arguments are all length only', () => {
+  const ctx = { hostAllowlist: ['example.com'] };
+  assert.equal(S.scrubUrl('https://example.com/cards/4111111111111111', ctx).url, 'https://example.com/cards/[[card]]');
+  assert.equal(S.scrubUrl(`https://example.com/t/${'a1'.repeat(16)}`, ctx).url, 'https://example.com/t/[[secret]]');
+  assert.deepEqual(S.maskArgs({ email: 'a@example.com', user_id: 'cu123', items: ['Taro Yamada'], otp: '1', n: 3 }, { strict: true }),
+    { email: '[[text:13]]', user_id: '[[text:5]]', items: ['[[text:11]]'], otp: '[[secret]]', n: 3 });
+  assert.deepEqual(S.finalScan({ steps: [{ privacy: { profile: 'commercial' }, args: { items: ['Taro Yamada'], email: 'a***@e***.com', ok: '[[text:3]]' } }] })
+    .map((f) => f.path), ['steps[0].args.items[0]', 'steps[0].args.email']);
+});

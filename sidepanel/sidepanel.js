@@ -97,7 +97,8 @@ function scanKeywords(rec) {
 }
 
 const scanWith = (rec) => (value) => S.finalScan(value, {
-  keywords: scanKeywords(rec), hostAllowlist: settings.hostAllowlist, aliases: Object.values(rec?.aliases || {})
+  // The host list the recording started with (docs/adr/0001), not the one in the settings now.
+  keywords: scanKeywords(rec), hostAllowlist: rec?.policy?.hostAllowlist ?? settings.hostAllowlist, aliases: Object.values(rec?.aliases || {})
 });
 
 function describeFindings(findings) {

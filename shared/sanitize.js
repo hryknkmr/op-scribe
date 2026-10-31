@@ -428,8 +428,8 @@
     if (value == null || typeof value === 'boolean') return value;
     if (typeof value === 'number' || typeof value === 'string') {
       if (typeof value === 'number' && !Number.isFinite(value)) return mark('value');
-      // On a production host a text argument is kept as its length only, unless its key names a search.
-      if (opts.strict && !meaning && typeof value === 'string' && !(opts.trustHidden && isPlaceholder(value))) {
+      // On a production host every text argument is kept as its length only: contact details and ids too.
+      if (opts.strict && typeof value === 'string' && !(opts.trustHidden && isPlaceholder(value))) {
         return mark(`text:${[...value].length}`);
       }
       const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200, trustHidden: opts.trustHidden });
@@ -499,6 +499,12 @@
     if (overEncoded(segment)) {
       kinds.push('path');
       return mark('v');
+    }
+    // A card number or a token in a path is hidden whole, before the partial rule for ids could keep part of it.
+    const strong = scrubText(decoded, { keywords: ctx.keywords }).kinds.filter((k) => k === 'secret' || k === 'card');
+    if (strong.length) {
+      kinds.push(...strong);
+      return mark(strong.includes('card') ? 'card' : 'secret');
     }
     if (decoded.startsWith('@') && decoded.length > 1) {
       kinds.push('id');
@@ -695,7 +701,8 @@
         findings.push({ path: path || '(root)', kinds: [kind] });
       }
       // On production a text argument is only its length: anything else left in WebMCP arguments is a value.
-      if (commercial && inArgs && key && typeof v === 'string' && v && !isPlaceholder(v) && !alreadyHidden(v.trim())) {
+      // (array items too, which have no key of their own).
+      if (commercial && inArgs && key !== 'args' && typeof v === 'string' && v && !isPlaceholder(v)) {
         findings.push({ path: path || '(root)', kinds: ['text'] });
       }
       if (typeof v === 'string') {
