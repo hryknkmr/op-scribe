@@ -362,7 +362,9 @@
       if (step === start) { previous = step; continue; }
       if (step.type === 'note' && step.kind) {
         out.push(`    # [${NOTE_KIND_LABELS[step.kind]}] ${line(humanize(step.note))}`);
-      } else if (step.type === 'note') {
+        continue;
+      }
+      if (step.type === 'note') {
         push('Then', line(humanize(step.note)), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;

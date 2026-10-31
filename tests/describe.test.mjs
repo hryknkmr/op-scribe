@@ -148,3 +148,18 @@ test('a note with a kind cannot add a line to the Gherkin', () => {
   assert.doesNotMatch(feature, /^ *Then 偽の手順/m);
 });
 
+test('a note with a kind does not change how the next steps read', () => {
+  const steps = [
+    { type: 'click', t: 0, env: 'standard', source: 'user', target: { role: 'link', name: '次へ' } },
+    { type: 'navigate', t: 500, env: 'standard', source: 'user', url: 'https://example.com/next' }
+  ];
+  const note = { type: 'note', t: 100, env: 'standard', source: 'user', note: '遅い', kind: 'idea' };
+  const without = (text) => text.split('\n').filter((l) => !l.includes('[気づき]')).join('\n');
+  const body = (text) => text.split('\n').filter((l) => !l.startsWith('# recording')).join('\n');
+  const plain = D.toGherkin({ id: 'x', steps });
+  const marked = D.toGherkin({ id: 'x', steps: [steps[0], note, steps[1]] });
+  assert.match(marked, /Then "https:\/\/example\.com\/next" に遷移する/);
+  assert.equal(without(body(marked)), body(plain));
+  assert.deepEqual(D.buildReproduction({ id: 'x', steps: [steps[0], note, steps[1]] }).steps, D.buildReproduction({ id: 'x', steps }).steps);
+});
+
