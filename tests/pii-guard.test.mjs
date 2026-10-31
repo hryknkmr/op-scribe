@@ -127,3 +127,16 @@ test('the root commit is scanned when the whole history is given', () => {
   assert.equal(guard('scan-commits', 'HEAD').status, 1);
   assert.equal(guard('scan-commits', 'no-such-ref').status, 2);
 });
+
+test('only the exact co-author address is allowed on that domain', () => {
+  const domain = ['anthropic', 'com'].join('.');
+  const { git, guard, write } = repo();
+  write('ok.txt', `Co-Authored-By: Claude <noreply@${domain}>\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 0);
+  for (const local of ['someone', 'x.noreply']) {
+    write('ok.txt', `${local}@${domain}\n`);
+    git('add', '-A');
+    assert.equal(guard('scan-staged').status, 1, local);
+  }
+});

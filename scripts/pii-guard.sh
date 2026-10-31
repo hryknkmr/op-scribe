@@ -44,8 +44,9 @@ EXCLUDE_PATHS=(
 )
 
 # 実在しうるメールアドレスの混入検出。予約ドメイン（RFC 2606 / 6761）と noreply のみ許可。
+# 照合する行は「行番号:アドレス」の形。共著者行のアドレスは AGENTS.md の例外どおり完全一致に限る。
 EMAIL_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
-EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com|anthropic\.com)$' 
+EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$|:noreply@anthropic\.com$'
 
 if [[ ! -f "$PATTERNS_FILE" ]]; then
   echo "pii-guard: patterns file not found: $PATTERNS_FILE" >&2
