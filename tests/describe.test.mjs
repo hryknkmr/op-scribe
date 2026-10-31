@@ -99,3 +99,8 @@ test('Markdown asks for test values in place of partly hidden ones', () => {
   const md = D.toMarkdown(D.buildReproduction({ steps: [{ type: 'input', t: 1, url: 'https://site-1.invalid/', value: 's***@e***.com', target: { role: 'textbox', name: 'メール' } }] }));
   assert.match(md, /\* で一部を伏せた値（例: s\*\*\*@e\*\*\*\.com）は、そのまま入力せず、テスト用の値に置き換えること/);
 });
+
+test('the partial-mask note also covers arguments and IP addresses', () => {
+  const md = D.toMarkdown(D.buildReproduction({ steps: [{ type: 'tool', t: 1, url: 'https://site-1.invalid/', tool: 't', args: { ip: '192.168.*.*' } }] }));
+  assert.match(md, /一部を伏せた値/);
+});

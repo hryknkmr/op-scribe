@@ -26,7 +26,10 @@
    * person editing the text) is scanned like ordinary text.
    */
   // url:… names only schemes from this list (URL_SCHEMES): a page's own scheme name never becomes trusted text.
-  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|text:\d+|file:\d+|url:(?:data|javascript|vbscript|mailto|tel|file|ftp|ws|wss|blob|invalid|other))\]\]/g;
+  // The kinds the filter counts in a recording's privacy.redactions (the only keys the final scan skips there).
+  const REDACTION_KINDS = new Set(['secret', 'card', 'email', 'phone', 'id', 'ip', 'host', 'keyword', 'url', 'query', 'path',
+    'text', 'masked', 'hash', 'user', 'postal', 'number', 'personal']);
+  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|text:\d{1,4}|file:\d{1,3}|url:(?:data|javascript|vbscript|mailto|tel|file|ftp|ws|wss|blob|invalid|other))\]\]/g;
   const URL_SCHEMES = new Set(['data', 'javascript', 'vbscript', 'mailto', 'tel', 'file', 'ftp', 'ws', 'wss', 'blob']);
 
   /** Exactly one placeholder this filter writes. A [[...]] of any other kind is the page's text and is read as such. */
@@ -235,6 +238,18 @@
   // Zero-width and bidi controls can hide content from the human reviewer, and split a word (o\u200btp).
   // Every format character (zero-width, bidi embeddings and isolates, U+061C, tags) and variation selectors.
   const invisible = (value) => String(value).replace(/[\p{Cf}\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu, '');
+  /**
+   * Decimal digits of other scripts as ASCII. NFKC leaves Arabic-Indic, Devanagari and the like as they are;
+   * each script's digits are ten consecutive code points, so a digit's value is how far it is from its zero.
+   */
+  const asciiDigits = (value) => value.replace(/[^\x00-\x7f]/gu, (ch) => {
+    if (!/\p{Nd}/u.test(ch)) return ch;
+    const cp = ch.codePointAt(0);
+    let k = 0;
+    while (k < 9 && /\p{Nd}/u.test(String.fromCodePoint(cp - k - 1))) k += 1;
+    return String(k);
+  });
+
   /** A name or a word as it is compared: NFKC, without invisible controls. */
   const plain = (value) => invisible(String(value ?? '').normalize('NFKC'));
 
@@ -260,6 +275,8 @@
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
     text = invisible(text);
+    // Digits of any script (٠١٢, ०१२) are read as ASCII digits, so a number in them is found like any other.
+    text = asciiDigits(text);
 
     // URLs written in the text follow the URL policy (hosts not allowed under their alias, ids partly
     // hidden) when the caller knows the recording's hosts: opts.hosts = { hostAllowlist, aliases }.
@@ -458,7 +475,7 @@
     if (!text) return { value: '', kinds: [] };
     // On a production host (opts.strict) every typed value but a search box's and a chosen option's is kept as its
     // length only: contact details and ids too (credentials and card data are replaced whole as everywhere).
-    if (opts.strict && !['search', 'choice', 'secret'].includes(cls.kind)) return { value: mark(`text:${[...text].length}`), kinds: ['text'] };
+    if (opts.strict && !['search', 'choice', 'secret'].includes(cls.kind)) return { value: mark(`text:${Math.min([...text].length, 9999)}`), kinds: ['text'] };
     const kind = cls.kind === 'secret' ? cls.label : ['search', 'choice', 'text'].includes(cls.kind) ? null : cls.kind;
     return maskByKind(kind, text, { keywords: opts.keywords, maxLength: 200 });
   }
@@ -475,7 +492,7 @@
       if (typeof value === 'number' && !Number.isFinite(value)) return mark('value');
       // On a production host every text argument is kept as its length only: contact details and ids too.
       if (opts.strict && typeof value === 'string' && !(opts.trustHidden && isPlaceholder(value))) {
-        return mark(`text:${[...value].length}`);
+        return mark(`text:${Math.min([...value].length, 9999)}`);
       }
       const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200, trustHidden: opts.trustHidden });
       return typeof value === 'number' && r.value === String(value) ? value : r.value;
@@ -766,7 +783,7 @@
     const walk = (v, path, key = '', under = null, args = false, namedUnder = null, commercial = false) => {
       // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only the recording's own, only numbers.
       if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object' && !Array.isArray(v)
-          && Object.entries(v).every(([k, n]) => /^[a-z]{1,16}$/.test(k) && Number.isInteger(n) && n >= 0 && n < 1e6)) return undefined;
+          && Object.entries(v).every(([k, n]) => REDACTION_KINDS.has(k) && Number.isInteger(n) && n >= 0 && n < 1e6)) return undefined;
       const inArgs = args || key === 'args';
       const kind = under || (key && credential(key, { protocol: args }) ? classifyKey(key, { protocol: args }) : null);
       // In WebMCP arguments, a contact or id key's value must be one this filter already hid (a***@e***.com, ab**23).
@@ -836,6 +853,7 @@
     scrubUrl,
     hostAllowed,
     isPlaceholder,
+    REDACTION_KINDS,
     aliasedHosts,
     finalScan
   };

@@ -146,7 +146,8 @@
       preconditions.push('‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること');
     }
     // Partly hidden values (s***@e***.com, ***-****-5678, 12****78) are not to be typed as they are.
-    if (steps.some((s) => typeof s.value === 'string' && /\*{2,}/.test(s.value))) {
+    // Anywhere in a step: its value, its arguments, an IP address (192.168.*.*).
+    if (steps.some((s) => /\*{2,}|\.\*(?:[.:\s"]|$)|:\*(?:[:\s"]|$)/.test(JSON.stringify({ value: s.value, args: s.args, note: s.note })))) {
       preconditions.push('* で一部を伏せた値（例: s***@e***.com）は、そのまま入力せず、テスト用の値に置き換えること');
     }
     if (steps.some((s) => /\[\[text:/.test(JSON.stringify(s)))) {

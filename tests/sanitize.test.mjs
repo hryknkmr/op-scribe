@@ -633,3 +633,11 @@ test('Basic in any case, and http URLs written without // or with backslashes, a
   for (const t of ['https:private.internal.test/a', 'see //internal_host.test/help']) assert.equal(S.finalScan({ t }, { hostAllowlist: [] }).length, 1, t);
   assert.equal(S.scrubText('時間: 10:30', { hosts: hosts() }).text, '時間: 10:30');
 });
+
+test('a text placeholder carries a length, not a number; digits of any script; only the filter\'s redaction kinds are skipped', () => {
+  assert.deepEqual(S.finalScan({ a: '[[text:4111111111111111]]', b: '[[text:09012345678]]', c: '[[text:12]]' }).map((f) => f.path), ['a', 'b']);
+  assert.equal(S.scrubText('٠٩٠١٢٣٤٥٦٧٨ ०९०१२३४५६७८').text, '*******5678 *******5678');
+  assert.equal(S.finalScan({ a: '०९०१२३४५६७८' }).length, 1);
+  assert.equal(S.finalScan({ recording: { privacy: { redactions: { otp: 123456 } } } }).length, 1);
+  assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { secret: 2 } } } }), []);
+});

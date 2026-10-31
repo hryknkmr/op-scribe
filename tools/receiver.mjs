@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { finalScan, hostAllowed, isPlaceholder } = require('../shared/sanitize.js');
+const { finalScan, hostAllowed, isPlaceholder, REDACTION_KINDS } = require('../shared/sanitize.js');
 const { STEP_FIELDS, TARGET_FIELDS } = require('../shared/describe.js');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -60,6 +60,14 @@ function structureProblem(payload) {
     || (step.target && Object.values(step.target).some((v) => typeof v !== 'string'))
     || (step.args !== undefined && (typeof step.args !== 'object' || step.args === null)));
   if (badType) return 'a step field of the wrong type';
+  // Numbers and flags where buildPayload writes them, and redaction counts only of the filter's kinds.
+  const count = (n) => Number.isInteger(n) && n >= 0 && n < 1e6;
+  if (recording.steps.some((step) => !count(step.n) || !count(step.t)
+      || (step.checked !== undefined && typeof step.checked !== 'boolean') || (step.ok !== undefined && typeof step.ok !== 'boolean'))) {
+    return 'a step number or flag of the wrong type';
+  }
+  if (!count(privacy.hostsAliased) || typeof privacy.redactions !== 'object' || privacy.redactions === null
+      || Object.entries(privacy.redactions).some(([k, n]) => !REDACTION_KINDS.has(k) || !count(n))) return 'privacy counts malformed';
   // Every URL field holds an http(s) URL on an allowed host or an alias (site-N.invalid), or a placeholder; a bare host
   // name or another scheme is not accepted. A site is an origin.
   const urlProblem = (value, originOnly = false) => {
