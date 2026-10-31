@@ -96,9 +96,10 @@
       // password="hunter 2"): the key is judged by classifyKey, like every other key; a quoted value is taken whole.
       // An unquoted value is taken up to the next space.
       kind: 'secret',
-      re: /(?<![\w.-])([A-Za-z][\w.-]*(?:[ _-][A-Za-z][\w.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"'&,}]+)/g,
+      // Keys in any letters: 認証コード: 123456.
+      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"'&,}]+)/gu,
       accept: (match) => {
-        const [, key, , value] = match.match(/^([A-Za-z][\w.-]*(?:[ _-][A-Za-z][\w.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/);
+        const [, key, , value] = match.match(/^(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
         return ['secret', 'card'].includes(classifyKey(key)) && !/^["']?\[\[/.test(value);
       },
       replace: (match, key, sep, value) => {
@@ -273,7 +274,9 @@
   // place or a promotion code, and is kept.
   const PROTOCOL_WORDS = new Set(['auth', 'key', 'code', 'state', 'session', 'sid', 'sig', 'signature', 'nonce', 'ticket', 'pass', 'saml', 'assertion']);
   const JA_CARD = /有効期限|カード番号|セキュリティコード/;
-  const JA_SECRET = /暗証|パスワード|認証コード|確認コード|ワンタイム/;
+  const JA_SECRET = /暗証|パスワード|認証コード|確認コード|ワンタイム|トークン|秘密鍵|シークレット|(?:API|アクセス|プライベート)キー/i;
+  // ユーザーID, ログインID, 会員番号: an id named in Japanese (after NFKC, ＩＤ is ID).
+  const JA_ID = /[^\x00-\x7f]ID$|(?:会員|顧客|注文|ユーザー|アカウント|管理)番号$/i;
   const JA_EMAIL = /メール/;
   const JA_PHONE = /電話|携帯/;
   const PHONE_WORDS = new Set(['phone', 'tel', 'telephone', 'mobile', 'fax', 'cell']);
@@ -297,7 +300,7 @@
         || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
     if (JA_EMAIL.test(text) || words.some((w) => w.includes('email') || /^mail(?:add?ress|addr)?$/.test(w)) || pair(['e'], 'mail')) return 'email';
     if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w) || w.endsWith('phone'))) return 'phone';
-    if (ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
+    if (JA_ID.test(text.trim()) || ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
     return null;
   }
 
@@ -417,10 +420,18 @@
       kinds.push('id');
       return partialId(decoded);
     }
-    const r = scrubText(decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
-    if (!r.kinds.length) return segment;
+    // An id inside a segment (order-123456, 123456.json, 123456;view=full): the run of digits or hex is partly hidden.
+    let changed = false;
+    const text = decoded.replace(/(?<![0-9a-z])(?:\d{3,}|[0-9a-f]{12,})(?![0-9a-z])/gi, (id) => {
+      changed = true;
+      return partialId(id);
+    });
+    if (changed) kinds.push('id');
+    const r = scrubText(text, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+    if (!changed && !r.kinds.length) return segment;
     kinds.push(...r.kinds);
-    return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
+    return encodeURIComponent(r.text).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*')
+      .replace(/%3B/gi, ';').replace(/%3D/gi, '=');
   }
 
   /** Query parameters under the policy: credential keys hidden, id keys partly hidden, other values masked like text. */
@@ -530,11 +541,13 @@
       }
     };
     // under: the credential kind of a key above, which covers everything nested in it.
-    const walk = (v, path, key = '', under = null) => {
-      // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only there, and only numbers.
-      if (/(?:^|\.)privacy\.redactions$/.test(path) && v && typeof v === 'object'
+    // args: inside WebMCP arguments, where keys are protocol keys (code, state) as in maskArgs.
+    const walk = (v, path, key = '', under = null, args = false) => {
+      // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only the recording's own, only numbers.
+      if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object'
           && Object.values(v).every((n) => Number.isInteger(n))) return undefined;
-      const kind = under || (key && credential(key) ? classifyKey(key) : null);
+      const inArgs = args || key === 'args';
+      const kind = under || (key && credential(key, { protocol: args }) ? classifyKey(key, { protocol: args }) : null);
       // A value under a key naming a credential is one, unless it is only a placeholder of this filter.
       if (kind && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
         findings.push({ path: path || '(root)', kinds: [kind] });
@@ -543,11 +556,11 @@
         urlParams(v, path);
         return check(v, path);
       }
-      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind));
+      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind, inArgs));
       if (v && typeof v === 'object') {
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k, k, kind);
+          walk(item, path ? `${path}.${k}` : k, k, kind, inArgs);
         }
       }
       return undefined;

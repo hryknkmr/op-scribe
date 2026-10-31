@@ -328,3 +328,21 @@ test('key and value in text are judged by the same key classifier, quoted values
   assert.equal(S.maskFieldValue('x', { name: 'tokenizer' }).value, 'x');
   assert.equal(S.maskFieldValue('Japan', { name: 'country_id', tag: 'select', type: 'select-one' }).value, 'Japan');
 });
+
+test('names in Japanese: credentials, ids, and key and value in a Japanese sentence', () => {
+  for (const label of ['APIキー', 'トークン', '秘密鍵']) assert.equal(S.maskFieldValue('short123', { label }).value, '[[secret]]', label);
+  for (const label of ['ユーザーID', 'ログインID', '会員番号']) assert.equal(S.maskFieldValue('abc123', { label }).value, 'ab**23', label);
+  assert.equal(S.maskFieldValue('shoes', { label: 'キーワード' }).value, 'shoes');
+  assert.equal(S.scrubText('ログイン後の認証コード: 123456').text, 'ログイン後の認証コード: [[secret]]');
+  assert.equal(S.scrubText('注意: これは例です').text, '注意: これは例です');
+});
+
+test('an id inside a path segment is partly hidden, and WebMCP argument keys are protocol keys at the exit', () => {
+  const url = (path) => S.scrubUrl(`https://example.com${path}`, { hostAllowlist: ['example.com'] }).url;
+  assert.equal(url('/orders/123456.json'), 'https://example.com/orders/12**56.json');
+  assert.equal(url('/orders/order-123456'), 'https://example.com/orders/order-12**56');
+  assert.equal(url('/orders/123456;view=full'), 'https://example.com/orders/12**56;view=full');
+  assert.equal(url('/blog/v1.2/intro'), 'https://example.com/blog/v1.2/intro');
+  const findings = S.finalScan({ steps: [{ key: 'Enter', args: { code: 'abc123', privacy: { redactions: { otp: 'x' } } } }], recording: { privacy: { redactions: { secret: 1 } } } });
+  assert.deepEqual(findings.map((f) => f.path), ['steps[0].args.code', 'steps[0].args.privacy.redactions.otp']);
+});
