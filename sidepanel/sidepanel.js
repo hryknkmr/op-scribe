@@ -6,14 +6,14 @@
  * call in the click handler (no await before it), which is why the active
  * tab and the settings are cached here instead of being read on click.
  */
-import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
-
 const S = globalThis.OpScribeSanitize;
 const D = globalThis.OpScribeDescribe;
+const N = globalThis.OpScribeNarrate;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const DRAFT_KEY = 'opsDraft';
+const NARRATION_KEY = 'opsNarration';
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -56,8 +56,18 @@ let activeTab = null;
 let recording = null;
 /** Who produced the Markdown currently in the textarea (it may have been edited since). */
 let generator = 'none';
+// The user changed the generated text by hand: it is theirs and is never rebuilt over.
+let edited = false;
+// Edits so far, to tell whether the user typed while the model was writing.
+let edits = 0;
+// The verbalization's summary, sent with the Markdown it belongs to while that is unedited.
+let summary = '';
+// The recording (id and revision) the text in the editors was made from, or last confirmed against.
+let source = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
+// The recording (id and revision) the preview was built from: a later change means the preview is stale.
+let previewedFrom = null;
 
 const KIND_LABELS = {
   text: '自由入力', secret: '秘匿値', email: 'メール', phone: '電話', card: 'カード', personal: '個人情報',
@@ -169,7 +179,9 @@ function render() {
     remove.className = 'icon';
     remove.title = 'この操作を削除';
     remove.textContent = '×';
-    remove.addEventListener('click', () => send('DELETE_STEP', { index }));
+    remove.addEventListener('click', async () => {
+      if ((await send('DELETE_STEP', { index }))?.ok) await afterDelete();
+    });
     li.append(text, remove);
     ui.steps.append(li);
   });
@@ -204,6 +216,9 @@ ui.start.addEventListener('click', () => {
     ui.repro.value = '';
     ui.gherkin.value = '';
     generator = 'none';
+    edited = false;
+    summary = '';
+    source = null;
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
@@ -231,6 +246,9 @@ ui.clear.addEventListener('click', async () => {
   ui.repro.value = '';
   ui.gherkin.value = '';
   generator = 'none';
+  edited = false;
+  summary = '';
+  source = null;
   await chrome.storage.session.remove(DRAFT_KEY);
   await refresh();
 });
@@ -246,15 +264,37 @@ ui.noteForm.addEventListener('submit', async (event) => {
 // ------------------------------------------------------------ reproduction
 
 const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator }
+  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator, edited, summary, source }
 });
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording. */
-async function setRepro(rec, markdown, by) {
+async function setRepro(rec, markdown, by, about = '') {
   ui.repro.value = markdown;
   ui.gherkin.value = D.toGherkin(rec);
   generator = by;
+  edited = false;
+  summary = about;
+  source = { recordingId: rec.id, revision: rec.revision };
   await saveDraft();
+}
+
+/** The text in the editors may quote a deleted step: rebuild what was generated, flag what the user wrote. */
+async function afterDelete() {
+  if (!ui.repro.value.trim() && !ui.gherkin.value.trim()) return;
+  if (edited) {
+    ui.genStatus.textContent = '操作を削除しました。手順の文に削除した操作が残っていないか確認してください';
+    return;
+  }
+  const rec = await loadRecording();
+  if (!rec?.steps?.length) {
+    ui.repro.value = '';
+    ui.gherkin.value = '';
+    generator = 'none';
+    summary = '';
+    await saveDraft();
+    return;
+  }
+  await generateTemplate('操作を削除したため');
 }
 
 async function generateTemplate(reason = '') {
@@ -267,57 +307,124 @@ async function generateTemplate(reason = '') {
   ui.genStatus.textContent = reason ? `テンプレートで生成しました（${reason}）` : 'テンプレートで生成しました';
 }
 
+/**
+ * Same path as the automatic verbalization when recording stops: the worker
+ * runs the built-in AI, validates it and stores the result on the recording.
+ */
+/**
+ * Chrome downloads the model only when a person asks for it: start the download here, in the click,
+ * so that the worker finds the model available. Returns false if it could not be had.
+ */
+async function ensureModel() {
+  const LM = globalThis.LanguageModel;
+  const state = await N.availability(LM);
+  if (state !== 'downloadable' && state !== 'downloading') return true;
+  ui.genStatus.textContent = 'Built-in AI のモデルをダウンロードしています…';
+  try {
+    const session = await LM.create({
+      ...N.LANGUAGES,
+      monitor(m) {
+        m.addEventListener('downloadprogress', (e) => {
+          ui.genStatus.textContent = `Built-in AI のモデルをダウンロードしています（${Math.round(e.loaded * 100)}%）`;
+        });
+      }
+    });
+    session.destroy();
+    return true;
+  } catch (error) {
+    ui.genStatus.textContent = `Built-in AI のモデルをダウンロードできませんでした（${error?.name || error}）`;
+    return false;
+  }
+}
+
 async function generateAi() {
   const rec = await loadRecording();
   if (!rec?.steps?.length) {
     ui.genStatus.textContent = 'まだ操作が記録されていません';
     return;
   }
-  const base = D.buildReproduction(rec);
-  if (base.steps.length > MAX_AI_STEPS) {
-    await generateTemplate(`${MAX_AI_STEPS} ステップを超えるため AI は使いません`);
-    return;
-  }
   ui.genAi.disabled = true;
+  const editsBefore = edits;
   try {
-    const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
-    const { output, input: prompt } = await rewrite(input, rec.startUrl, (text) => { ui.genStatus.textContent = text; });
-    const problems = validate(output, prompt, scanWith(rec));
-    if (problems.length) {
-      await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
+    if (!(await ensureModel())) return;
+    const result = await send('NARRATE');
+    if (result?.error === 'RECORDING_CHANGED') {
+      ui.genStatus.textContent = '言語化の途中で記録が変わったため、結果を使いませんでした。もう一度実行してください';
       return;
     }
-    const merged = {
-      title: output.title,
-      preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
-      steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])]
-    };
-    await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
-    ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';
-  } catch (error) {
-    await generateTemplate(`AI を使えません: ${error.message}`);
+    // A newer run (stop's automatic one, or another click) is kept instead; it shows itself when done.
+    if (result?.error === 'SUPERSEDED') return;
+    // Text typed while the model was writing is the user's: it is not replaced.
+    if (edits !== editsBefore) {
+      ui.genStatus.textContent = '言語化の間に手順の文が編集されたため、欄は書き換えませんでした。置き換えるには、もう一度押してください';
+      return;
+    }
+    await showNarration(await loadRecording(), true);
   } finally {
     ui.genAi.disabled = false;
   }
 }
 
+const GENERATOR_LABELS = { 'built-in-ai': 'Built-in AI で言語化しました。内容を確認してください。', template: 'テンプレートで生成しました' };
+
+/** The verbalization, if it was made from the recording as it is now (not before a step was deleted). */
+async function loadNarration(rec) {
+  const narration = (await chrome.storage.session.get(NARRATION_KEY))[NARRATION_KEY];
+  return narration && rec && narration.recordingId === rec.id && narration.sourceRevision === rec.revision ? narration : null;
+}
+
+/** Shows the stored verbalization unless the user already has text of their own in the editor. */
+async function showNarration(rec, force = false) {
+  const narration = await loadNarration(rec);
+  if (!narration) return;
+  if (narration.generator === 'pending') {
+    ui.genStatus.textContent = 'Built-in AI で言語化しています…';
+    return;
+  }
+  // Hand-edited text (in either field) is never replaced unasked; nor is text already generated.
+  if (!force && (edited || (ui.repro.value.trim() && generator !== 'none'))) return;
+  await setRepro(rec, narration.markdown, narration.generator, narration.summary);
+  ui.genStatus.textContent = narration.reason
+    ? `${GENERATOR_LABELS[narration.generator]}（${narration.reason}）`
+    : GENERATOR_LABELS[narration.generator] || '';
+}
+
 ui.genAi.addEventListener('click', generateAi);
 ui.genTemplate.addEventListener('click', () => generateTemplate());
-ui.repro.addEventListener('input', saveDraft);
-ui.gherkin.addEventListener('input', saveDraft);
+const onEdit = () => {
+  edited = true;
+  edits += 1;
+  return saveDraft();
+};
+ui.repro.addEventListener('input', onEdit);
+ui.gherkin.addEventListener('input', onEdit);
 
 // ------------------------------------------------------------------ output
 
-/** Builds the payload and runs the final gate. Every exit (send, copy, save) goes through here. */
+const STALE_MESSAGE = '手順の文を確認してから、もう一度実行してください';
+
+/** Text made before the recording changed may still quote a deleted step: it leaves only once confirmed. */
+async function confirmFresh(rec) {
+  const stale = (ui.repro.value.trim() || ui.gherkin.value.trim())
+    && (source?.recordingId !== rec.id || source?.revision !== rec.revision);
+  if (!stale) return true;
+  if (!confirm('手順の文は、操作の追加・削除の前に作ったか書いたものです。削除した操作の内容が残っていないことを確認しましたか？')) return false;
+  source = { recordingId: rec.id, revision: rec.revision };
+  await saveDraft();
+  return true;
+}
+
+/** Builds the payload and runs the final gate. Send and save go through here; copy has the same gates in copyText. */
 async function preparePayload() {
   const rec = await loadRecording();
   if (!rec) return { error: '記録がありません' };
+  if (!(await confirmFresh(rec))) return { error: STALE_MESSAGE };
   const reproduction = {
     generator: ui.repro.value.trim() ? (generator === 'none' ? 'manual' : generator) : 'none',
     markdown: ui.repro.value,
     // Empty means "not generated yet": buildPayload then renders it from the recording.
-    gherkin: ui.gherkin.value
+    gherkin: ui.gherkin.value,
+    ...(summary && !edited ? { summary } : {})
   };
   const payload = D.buildPayload(rec, reproduction, environment());
   const findings = scanWith(rec)(payload);
@@ -335,6 +442,7 @@ ui.preview.addEventListener('click', async () => {
     return;
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
+  previewedFrom = { id: prepared.rec.id, revision: prepared.rec.revision };
   ui.payload.textContent = previewed;
   ui.findings.replaceChildren();
   for (const line of describeFindings(prepared.findings)) {
@@ -371,6 +479,11 @@ ui.send.addEventListener('click', () => {
       }
       // Re-check the exact bytes about to leave, not a rebuilt object.
       const rec = await loadRecording();
+      // Recorded on after the preview (the page is still being operated): what was shown is not what would go.
+      if (!rec || rec.id !== previewedFrom?.id || rec.revision !== previewedFrom?.revision) {
+        ui.sendStatus.textContent = 'プレビューの後で記録が変わりました。閉じて、もう一度プレビューしてから送信してください';
+        return;
+      }
       const findings = scanWith(rec)(JSON.parse(body));
       if (findings.length) {
         ui.sendStatus.textContent = blockedMessage(findings);
@@ -401,6 +514,10 @@ async function copyText(label, text) {
   const rec = await loadRecording();
   if (!text.trim()) {
     ui.outputStatus.textContent = '再現手順がまだありません（「再現手順」で生成してください）';
+    return;
+  }
+  if (!(await confirmFresh(rec))) {
+    ui.outputStatus.textContent = STALE_MESSAGE;
     return;
   }
   const findings = scanWith(rec)({ [label]: text });
@@ -475,7 +592,9 @@ ui.settingsForm.addEventListener('submit', (event) => {
 // ------------------------------------------------------------------ wiring
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.from === 'op-scribe/worker' && message.type === 'REC_CHANGED') refresh();
+  if (message?.from !== 'op-scribe/worker') return;
+  if (message.type === 'REC_CHANGED') refresh().then(() => showNarration(recording));
+  if (message.type === 'NARRATION_STATUS') ui.genStatus.textContent = message.text;
 });
 chrome.tabs.onActivated.addListener(refresh);
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -500,13 +619,17 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
       ui.repro.value = draft.markdown || '';
       ui.gherkin.value = draft.gherkin || '';
       generator = draft.generator;
+      edited = Boolean(draft.edited);
+      summary = draft.summary || '';
+      source = draft.source || null;
     }
     await refresh();
   } catch (error) {
     reportFatal('init failed', error);
   }
   // The panel must work even if the model never answers.
-  availability().then((state) => {
+  await showNarration(recording);
+  N.availability(globalThis.LanguageModel).then((state) => {
     ui.aiState.textContent = state === 'available' ? 'AI 利用可' : `AI: ${state}`;
   });
 })();

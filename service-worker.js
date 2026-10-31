@@ -9,13 +9,20 @@
  * Every step is sanitized again here, whatever the content script already
  * did: URLs are aliased, user keywords masked, and redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js');
+importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js', 'shared/units.js', 'shared/narrate.js');
 
 const { scrubText, scrubUrl, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
+const { narrate } = self.OpScribeNarrate;
 const { buildReproduction, toMarkdown, toGherkin, isPageRewrite } = self.OpScribeDescribe;
 const { classifyScreen, describeComponents } = self.OpScribeScreen;
 
 const REC_KEY = 'opsRecording';
+// Screen text read by the built-in AI. Kept apart from the recording: it is never
+// shown, persisted to disk or sent, and is dropped with the recording.
+const UNITS_KEY = 'opsUnits';
+// The verbalization: a document made from one revision of the recording, never written onto its
+// steps. It is used only while the recording is still at that revision.
+const NARRATION_KEY = 'opsNarration';
 const SETTINGS_KEY = 'opsSettings';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 const MAX_STEPS = 500;
@@ -52,8 +59,12 @@ function mutate(fn) {
   const run = queue.then(async () => {
     const rec = await getRecording();
     const result = await fn(rec);
-    if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
-    if (result?.remove) await chrome.storage.session.remove(REC_KEY);
+    if (result?.save) {
+      // Every change to the recording is a new revision: a verbalization of an older one is not used.
+      result.save.revision = (result.save.revision || 0) + 1;
+      await chrome.storage.session.set({ [REC_KEY]: result.save });
+    }
+    if (result?.remove) await chrome.storage.session.remove([REC_KEY, UNITS_KEY, NARRATION_KEY]);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
     return result?.reply;
   });
@@ -249,6 +260,36 @@ function appendScreen(rec, step) {
   return step.id;
 }
 
+// Units are up to 40,000 characters a screen; storage.session holds 10 MB in all.
+const MAX_UNIT_SCREENS = 40;
+
+/** Keeps the units of the steps still in the recording, the latest MAX_UNIT_SCREENS of them. */
+function pruneUnits(stored, rec) {
+  const ids = rec.steps.filter((s) => stored[s.id]).map((s) => s.id).slice(-MAX_UNIT_SCREENS);
+  return Object.fromEntries(ids.map((id) => [id, stored[id]]));
+}
+
+async function saveUnits(rec, id, units, settings) {
+  if (!Array.isArray(units) || !units.length) return;
+  // URLs in the text follow the URL policy; real hosts written without a URL are aliased too (scrubText).
+  const hosts = { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases };
+  const clean = units.slice(0, 200).map((u) => ({
+    kind: String(u.kind).slice(0, 16),
+    name: scrubText(u.name, { keywords: settings.keywords, maxLength: 60, hosts }).text,
+    text: scrubText(u.text, { keywords: settings.keywords, hosts }).text,
+    order: Number(u.order) || 0,
+    ...(Number.isFinite(u.count) ? { count: u.count } : {})
+  }));
+  const stored = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
+  stored[id] = clean;
+  // Only the built-in AI reads units: failing to keep them must not lose the step.
+  try {
+    await chrome.storage.session.set({ [UNITS_KEY]: pruneUnits(stored, rec) });
+  } catch (error) {
+    console.warn('[op-scribe] screen text not kept', error);
+  }
+}
+
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
 
 /** What appeared or disappeared right after an operation belongs to that operation. */
@@ -294,6 +335,7 @@ async function start({ tabId, url }) {
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
     // Persist before injecting: the injected script immediately asks whether it is being recorded.
+    await chrome.storage.session.remove([UNITS_KEY, NARRATION_KEY]);
     await chrome.storage.session.set({ [REC_KEY]: rec });
     await injectNow(tabId);
     await setBadge(true);
@@ -309,25 +351,86 @@ async function stopTab(rec) {
   } catch { /* tab gone or never injected */ }
 }
 
-const stop = () => mutate(async (rec) => {
-    if (!rec || rec.state !== 'recording') return { reply: { ok: true } };
+const stop = async () => {
+  const reply = await mutate(async (rec) => {
+    if (!rec || rec.state !== 'recording') return { reply: { ok: true, stopped: false } };
     // The last screen may not have been described yet (fast automated runs): ask for it now.
     try {
       const last = await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' });
       if (last?.pending) attachChange(rec, last.pending, await getSettings());
-      if (last?.screen) appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, await getSettings()));
+      if (last?.screen) {
+        const settings = await getSettings();
+        await saveUnits(rec, appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, settings)), last.units, settings);
+      }
     } catch { /* tab gone or not injected */ }
     await stopTab(rec);
     rec.state = 'stopped';
     rec.endedAt = Date.now();
-    return { save: rec, reply: { ok: true } };
-});
+    return { save: rec, reply: { ok: true, stopped: true } };
+  });
+  // Whoever operated - a person or an automated test - the recording is verbalized
+  // as soon as it ends, without waiting for anyone to open the side panel.
+  if (reply.stopped) verbalize();
+  return reply;
+};
+
+// ----------------------------------------------------------- verbalizing
 
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
 function scanFor(rec, settings) {
   const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
   const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
   return (value) => finalScan(value, { keywords });
+}
+
+/**
+ * The worker may be stopped after ~30s without extension events, and an
+ * on-device generation can take longer; a cheap API call every 20s keeps it alive.
+ */
+async function withKeepAlive(work) {
+  const timer = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
+  try {
+    return await work();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+// Stop's automatic run and the button can overlap: the run that started last is the one kept.
+// Counted before the first await, so the order is the order of the calls.
+let latestRun = 0;
+
+async function verbalize() {
+  const run = ++latestRun;
+  const rec = await getRecording();
+  if (!rec?.steps?.length) return { ok: false, error: 'NO_RECORDING' };
+  const settings = await getSettings();
+  const source = { recordingId: rec.id, sourceRevision: rec.revision };
+  // Through the queue as well, so it never lands after a newer run's result.
+  await mutate(async () => {
+    if (run === latestRun) await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator: 'pending', markdown: '' } });
+    return {};
+  });
+  await broadcast({ type: 'NARRATION_STATUS', text: 'Built-in AI で言語化しています…' });
+  const units = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY] || {};
+  const result = await withKeepAlive(() => narrate(rec, {
+    LM: self.LanguageModel,
+    scan: scanFor(rec, settings),
+    unitsOf: (step) => units[step.id] || null,
+    onStatus: (text) => broadcast({ type: 'NARRATION_STATUS', text })
+  }));
+  // Through the queue, so no change to the recording lands between the check and the write.
+  const kept = await mutate(async (latest) => {
+    // The recording changed while the model was reading: a deleted step may be quoted, an added one missing.
+    if (latest?.id !== source.recordingId || latest.revision !== source.sourceRevision) return { reply: 'RECORDING_CHANGED' };
+    if (run !== latestRun) return { reply: 'SUPERSEDED' };
+    const { generator, markdown, title, summary, reason } = result;
+    await chrome.storage.session.set({ [NARRATION_KEY]: { ...source, generator, markdown, title, summary, reason, at: Date.now() } });
+    await broadcast({ type: 'REC_CHANGED' });
+    return { reply: 'KEPT' };
+  });
+  if (kept !== 'KEPT') return { ok: false, error: kept };
+  return { ok: true, generator: result.generator, reason: result.reason };
 }
 
 const addPattern = (url) => mutate(async (rec) => {
@@ -385,6 +488,7 @@ async function handle(message, sender) {
     switch (type) {
       case 'START': return start(detail);
       case 'STOP': return stop();
+      case 'NARRATE': return verbalize();
       case 'ADD_ORIGIN': return addPattern(detail.url);
       case 'CLEAR': return mutate(async (rec) => {
         if (rec?.state === 'recording') await stopTab(rec);
@@ -393,6 +497,9 @@ async function handle(message, sender) {
       case 'DELETE_STEP': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false } };
         rec.steps.splice(Number(detail.index), 1);
+        // The new revision makes the verbalization, which may quote the deleted step, unusable.
+        const units = (await chrome.storage.session.get(UNITS_KEY))[UNITS_KEY];
+        if (units) await chrome.storage.session.set({ [UNITS_KEY]: pruneUnits(units, rec) });
         return { save: rec, reply: { ok: true } };
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
@@ -417,7 +524,7 @@ async function handle(message, sender) {
       const settings = await getSettings();
       if (type === 'STEP') {
         const step = cleanStep(detail, rec, settings);
-        if (step.type === 'screen') appendScreen(rec, step);
+        if (step.type === 'screen') await saveUnits(rec, appendScreen(rec, step), detail.units, settings);
         else appendStep(rec, step);
         return { save: rec, reply: { ok: true } };
       }

@@ -142,18 +142,18 @@ test('strict mode describes navigation and headings by count only', () => {
 });
 
 test('the same screen after operations keeps its own section; a plain refresh of it does not', () => {
-  const list = () => screen('https://example.com/tasks', 'タスク一覧', { summary: '一覧の閲覧の画面' });
+  const list = (ai) => ({ ...screen('https://example.com/tasks', 'タスク一覧', { summary: '一覧の閲覧の画面' }), ...(ai ? { screen: { title: 'タスク一覧', summary: '一覧の閲覧の画面', purposes: [], components: [], ai } } : {}) });
   const repro = D.buildReproduction({
     steps: [
       { type: 'navigate', t: 0, url: 'https://example.com/tasks' },
-      list(),
-      list(),  // captured again with nothing done: a refresh
+      list({ purpose: '7 件の一覧', summary: '' }),
+      list(null),  // captured again with nothing done: a refresh, the understanding is kept
       { type: 'click', t: 1000, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' },
         change: { appeared: ['6 件'], transient: ['タスクを削除しました'] } },
-      list()
+      list({ purpose: '6 件の一覧', summary: '' })
     ]
   });
-  assert.equal(repro.screens.length, 2);
+  assert.deepEqual(repro.screens.map((s) => s.ai?.purpose), ['7 件の一覧', '6 件の一覧']);
   assert.deepEqual(repro.steps[1].transient, ['タスクを削除しました']);
   const md = D.toMarkdown(repro);
   assert.match(md, /- 操作後に現れた文字: 「6 件」\n {3}- 操作後に一時的に表示された文字: 「タスクを削除しました」/);
@@ -202,4 +202,17 @@ test('a search box on the page itself still makes it a search screen', () => {
 test('a list of cards marked up as articles is a list, not a detail page', () => {
   const result = Screen.classifyScreen({ url: 'https://example.com/', article: true, repeated: { count: 24 }, textLength: 6000 });
   assert.deepEqual(kinds(result), ['list']);
+});
+
+test('Gherkin never carries the model\'s text, even from a recording that has it', () => {
+  const gherkin = D.toGherkin({
+    steps: [
+      { type: 'navigate', t: 0, url: 'https://example.com/tasks' },
+      { type: 'screen', t: 10, url: 'https://example.com/tasks',
+        screen: { title: 'タスク一覧', summary: '', purposes: [], components: [], ai: { purpose: 'AI-PURPOSE', summary: 'AI-SUMMARY' } } },
+      { type: 'click', t: 1000, url: 'https://example.com/tasks', target: { role: 'button', name: '削除する' },
+        ai: { meaning: 'AI-MEANING', result: 'AI-RESULT' } }
+    ]
+  });
+  assert.doesNotMatch(gherkin, /AI-|ai-/);
 });

@@ -4,7 +4,7 @@
 
 | 表現 | 読み手 | 生成方法 | 編集 |
 | --- | --- | --- | --- |
-| 簡易手順（Markdown） | 人 | テンプレート、またはオンデバイス AI で整形 | 可 |
+| 簡易手順（Markdown） | 人 | 記録から作り、Built-in AI が言い換えと概要を付ける | 可 |
 | Gherkin + 属性表 | AI エージェント・自動化 | 記録から機械的に生成（AI を通さない） | 可 |
 | steps（JSON） | プログラム | 記録そのもの | 不可（操作ログで削除のみ） |
 
@@ -183,7 +183,7 @@ Feature: 記録された操作の再現
     "webmcpTools": [{ "site": "https://site-1.invalid", "tools": ["search_catalog"] }]
   },
   "reproduction": {
-    "generator": "template | on-device-ai | manual | none",
+    "generator": "built-in-ai | template | manual | none",
     "markdown": "…",
     "gherkin": "…"
   },

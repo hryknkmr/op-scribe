@@ -188,7 +188,8 @@
       url: step.url,
       summary: step.screen?.summary || '',
       reasons: (step.screen?.purposes || []).flatMap((p) => p.reasons || []).slice(0, 4),
-      components: step.screen?.components || []
+      components: step.screen?.components || [],
+      ai: step.screen?.ai || null
     };
   }
 
@@ -218,7 +219,7 @@
         // The same screen captured again with nothing done in between is a refresh of it;
         // after operations it is a new state of the screen (e.g. a row deleted) and keeps its own section.
         if (current !== null && screens[current].url === info.url && !actedOnCurrent) {
-          screens[current] = info;
+          screens[current] = { ...info, ai: info.ai || screens[current].ai };
           continue;
         }
         screens.push(info);
@@ -261,6 +262,8 @@
       const item = { action: `${humanize(describeStep(step))}${by}`, screen: current };
       if (step.change?.appeared?.length) item.appeared = step.change.appeared.slice(0, 3);
       if (step.change?.transient?.length) item.transient = step.change.transient.slice(0, 3);
+      if (step.ai?.meaning) item.meaning = step.ai.meaning;
+      if (step.ai?.result) item.result = step.ai.result;
       out.push(item);
       lastAction = { type: step.type, t: step.t, item };
       actedOnCurrent = true;
@@ -295,8 +298,8 @@
         : titles.length ? `${titles[0]}での操作（${out.length} ステップ）` : `操作の再現手順（${out.length} ステップ）`,
       preconditions,
       screens,
-      steps: out.map(({ action, expected, screen, appeared, transient }) => ({
-        action, expected: expected?.join(' / ') || undefined, screen, appeared, transient
+      steps: out.map(({ action, expected, screen, appeared, transient, meaning, result }) => ({
+        action, expected: expected?.join(' / ') || undefined, screen, appeared, transient, meaning, result
       })),
       notes
     };
@@ -309,6 +312,8 @@
       lines.push(`- 画面の目的: ${screen.summary}${screen.reasons?.length ? `（根拠: ${screen.reasons.join('、')}）` : ''}`);
     }
     if (screen.components?.length) lines.push(`- 主な UI: ${screen.components.join(' / ')}`);
+    if (screen.ai?.purpose) lines.push(`- AI の理解（目的）: ${screen.ai.purpose}`);
+    if (screen.ai?.summary) lines.push(`- AI の理解（内容）: ${screen.ai.summary}`);
     return lines;
   }
 
@@ -333,9 +338,11 @@
         shown = step.screen;
       }
       lines.push(`${i + 1}. ${step.action}`);
+      if (step.meaning) lines.push(`   - 意味（AI）: ${step.meaning}`);
       if (step.appeared?.length) lines.push(`   - 操作後に現れた文字: ${step.appeared.map((t) => `「${t}」`).join(' ')}`);
       if (step.transient?.length) lines.push(`   - 操作後に一時的に表示された文字: ${step.transient.map((t) => `「${t}」`).join(' ')}`);
       if (step.expected) lines.push(`   - 期待結果: ${step.expected}`);
+      if (step.result) lines.push(`   - 結果（通知）: ${step.result}`);
     });
     // Screens reached by the last operations have no step of their own, but they are where it ended.
     if (grouped) {

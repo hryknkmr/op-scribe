@@ -273,7 +273,7 @@
     return !el.parentElement || reachable(el.parentElement, rect, memo);
   };
 
-  // Time for reading one screen's structure, so a large page is not held up for long.
+  // Time for reading one screen (its structure and its text), so a large page is not held up for long.
   const SCREEN_MS = 150;
   // Text nodes inside these are not screen text: code, a closed box's other choices, typed values.
   const NOT_TEXT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SELECT', 'DATALIST', 'TEXTAREA', 'OPTION']);
@@ -282,11 +282,13 @@
   /**
    * Reads only text that can be seen, one text node at a time: the characters' own boxes must all be
    * shown and reachable. Stops for good at the deadline (fail-closed: nothing after that point is read).
+   * claimed: text nodes already given to a unit, so each is read once, by the most specific unit.
    */
   function textReader({ ms = SCREEN_MS } = {}) {
     const deadline = performance.now() + ms;
     const memo = taskMemo();
     const verdict = new Map();
+    const claimed = new Set();
     const reader = { cut: false };
     /** Past the deadline: everything after this point is left out (fail-closed), also by other callers. */
     reader.late = () => {
@@ -329,7 +331,7 @@
       return ok;
     };
     /** The shown lines under a node (an element or a text node), in page order. */
-    reader.lines = (start) => {
+    reader.lines = (start, { claim = false } = {}) => {
       const lines = [];
       let line = '';
       let block = null;
@@ -339,11 +341,12 @@
         line = '';
       };
       const take = (node) => {
-        if (!node.textContent.trim()) return;
+        if (claimed.has(node) || !node.textContent.trim()) return;
         if (!shown(node)) return;
         const nodeBlock = blockOf(node.parentElement);
         if (nodeBlock !== block) { flush(); block = nodeBlock; }
         line += node.textContent;
+        if (claim) claimed.add(node);
       };
       if (reader.cut) return lines;
       if (start.nodeType === 3) {
@@ -535,6 +538,109 @@
       links: links.length,
       repeated: repeatedGroup(links)
     };
+  }
+
+  // ------------------------------------------------------------------ units
+
+  const MAX_UNIT_CHARS = 40000;  // a whole screen; infinite feeds are cut here
+  const MAX_LINE = 400;
+
+  /**
+   * Links laid out side by side with no text between them come out of innerText as one word
+   * ("タスクレポート設定ヘルプ"). A line that is exactly a run of such links is given back
+   * as the separate items, so the reader does not take it for one long link name.
+   */
+  function splitGluedLinks(el, lines) {
+    const items = [...el.querySelectorAll('a, button')].slice(0, 400).map(textOf).filter(Boolean);
+    if (items.length < 2) return lines;
+    return lines.map((line) => {
+      if (line.length > 200 || line.includes(' ')) return line;
+      for (let i = 0; i < items.length - 1; i += 1) {
+        let joined = '';
+        for (let j = i; j < items.length && joined.length < line.length; j += 1) {
+          joined += items[j];
+          if (joined === line && j > i) return items.slice(i, j + 1).join(' / ');
+        }
+      }
+      return line;
+    });
+  }
+
+  /**
+   * The screen as units (see shared/units.js): every visible line of text,
+   * each claimed by the first - most specific - unit that contains it.
+   * Only lines are read, never field values; credentials and partial ids are
+   * masked before anything leaves the page.
+   */
+  /** started: when reading this screen began; the units get what is left of the screen's time. */
+  function extractUnits(started = performance.now()) {
+    const units = [];
+    let order = 0;
+    let budget = MAX_UNIT_CHARS;
+    // Each text node goes to the first unit that reads it, so the same words in two places are both kept.
+    // No time left after the structure: no text is read (only the page title and path).
+    const reader = textReader({ ms: SCREEN_MS - (performance.now() - started) });
+    const memo = taskMemo();
+    const linesOf = (el) => splitGluedLinks(el, reader.lines(el, { claim: true }));
+    const push = (kind, name, el, extra = {}) => {
+      if (budget <= 0 || (kind !== 'page' && reader.late())) return;
+      const lines = Array.isArray(el) ? el : linesOf(el);
+      if (!lines.length) return;
+      const text = lines.map((l) => clip(l, MAX_LINE)).join('\n').slice(0, budget);
+      budget -= text.length;
+      units.push({ kind, name: clip(name, 60), text, order: order++, ...extra });
+    };
+    // The time limit covers looking for the units too: past it, nothing more is looked at.
+    const all = (selector) => (reader.late() ? [] : [...document.querySelectorAll(selector)].filter((el) => !reader.late() && visible(el, {}, memo)));
+
+    const h1 = all('h1')[0];
+    // Under the URL policy first (ids and @handles partly hidden, like every recorded URL),
+    // then decoded so the model can read it (/wiki/%E3%83%A1... -> /wiki/メインページ).
+    let path = '';
+    try { path = new URL(S.scrubUrl(location.href, { keywords: config?.keywords }).url).pathname; } catch { /* not a web page */ }
+    try { path = decodeURIComponent(path); } catch { /* malformed: keep as is */ }
+    push('page', '', [`タイトル: ${document.title}`, h1 ? `主見出し: ${textOf(h1)}` : '', `パス: ${path}`].filter(Boolean));
+    for (const el of all('[role="alert"], [role="status"], [aria-live="assertive"], [aria-live="polite"]')) push('feedback', '', el);
+    for (const el of all('dialog[open], [role="dialog"], [aria-modal="true"]')) push('dialog', regionName(el), el);
+    for (const form of all('form, [role="search"]')) {
+      // Labels, field types and choices - what the form asks for, not what was typed.
+      const fields = [...form.querySelectorAll('input, select, textarea')].slice(0, 50)
+        .filter((f) => f.type !== 'hidden' && visible(f, {}, memo))
+        .map((f) => {
+          // What is chosen, masked like any field value. The other choices are not read, also in a list box
+          // (size > 1, multiple) where some of them are on screen.
+          const chosen = f.tagName === 'SELECT'
+            ? [...f.selectedOptions].slice(0, 5).map((o) => S.maskFieldValue(o.text.trim(), fieldMeta(f), config)?.value).filter(Boolean) : [];
+          const options = chosen.length ? `（選択中: ${chosen.join(' / ')}）` : '';
+          return `${accessibleName(f) || '(無名)'} [${f.type || f.tagName.toLowerCase()}]${options}`;
+        });
+      push('form', regionName(form), [...fields, ...linesOf(form)]);
+    }
+    // Lists: groups of links rendered by the same component, read as one unit per group.
+    const groups = new Map();
+    for (const a of reader.late() ? [] : contentLinks(within(started + SCREEN_MS))) {
+      const key = linkSignature(a);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(a);
+    }
+    for (const links of groups.values()) {
+      const hrefs = new Set(links.map((a) => a.href));
+      if (hrefs.size < 5) continue;
+      const cards = unique(links.map((a) => a.closest('li, article') || a));
+      push('list', '', cards.flatMap(linesOf), { count: hrefs.size });
+    }
+    for (const heading of all('h2, h3, h4')) {
+      const container = heading.closest('section, article, [role="region"]') || heading.parentElement;
+      if (container) push('section', clip(textOf(heading), 40), container);
+    }
+    for (const [selector, name] of [['header, [role="banner"]', 'ヘッダー'], ['nav, [role="navigation"]', 'ナビゲーション'],
+      ['main, [role="main"]', 'メイン'], ['aside, [role="complementary"]', 'サイドバー'], ['footer, [role="contentinfo"]', 'フッター']]) {
+      for (const el of all(selector)) push('landmark', name, el);
+    }
+    push('landmark', '本文', document.body);
+    // Stopped at the time limit: what was not read is left out, and the model is told so.
+    if (reader.cut && units[0]?.kind === 'page') units[0].text += '\n（画面が大きいため、途中までだけ読みました）';
+    return units;
   }
 
   // ------------------------------------------------------------ what changed
@@ -755,7 +861,7 @@
     if (key === screenKey && !force) return;
     screenKey = key;
     const started = performance.now();
-    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(started) });
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(started), units: extractUnits(started) });
   }
 
   /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
@@ -974,7 +1080,7 @@
       // The last operation's change is handed over too: it would arrive after the recording stopped.
       const pending = finishChange?.(false) || null;
       const started = performance.now();
-      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(started), pending } : null);
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(started), units: extractUnits(started), pending } : null);
     }
     if (message.type === 'OPS_STOP') {
       config = null;
