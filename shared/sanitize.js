@@ -560,8 +560,9 @@
         let r;
         if (ctx.trustHidden && isPlaceholder(decoded)) r = { value: decoded, kinds: [] };
         else if (meaning === 'secret' || meaning === 'card') r = maskByKind(meaning, decoded, { trustHidden: ctx.trustHidden });
-        // Encoded more deeply than is read, or (on production) anything but a short plain value: hidden whole.
-        else if (overEncoded(v) || (ctx.strict && !meaning && !PLAIN.test(decoded))) r = { value: mark('v'), kinds: ['query'] };
+        // Encoded more deeply than is read, or (on production) anything but a short plain value, whatever its key
+        // says (an email address is not plain): hidden whole.
+        else if (overEncoded(v) || (ctx.strict && !PLAIN.test(decoded))) r = { value: mark('v'), kinds: ['query'] };
         else r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
         kinds.push(...r.kinds);
         value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
@@ -728,8 +729,12 @@
         // A step recorded on production: a typed value must be only its length unless it was a search box or a
         // chosen option (valueClass), or a contact or id field's partial mask.
         const onProduction = commercial || v.privacy?.profile === 'commercial';
-        // A value from a credential or card field is only ever a placeholder, on any host.
+        // A value from a credential or card field is only ever a placeholder, on any host; one from a contact or id
+        // field is a placeholder or a partial mask.
         if (['secret', 'card'].includes(v.valueClass) && typeof v.value === 'string' && v.value && !isPlaceholder(v.value)) {
+          findings.push({ path: path ? `${path}.value` : 'value', kinds: [v.valueClass] });
+        }
+        if (['email', 'phone', 'id'].includes(v.valueClass) && typeof v.value === 'string' && v.value.trim() && !alreadyHidden(v.value.trim())) {
           findings.push({ path: path ? `${path}.value` : 'value', kinds: [v.valueClass] });
         }
         if (v.privacy?.profile === 'commercial' && typeof v.value === 'string' && v.value
@@ -759,6 +764,7 @@
     classifyKey,
     classifyField,
     maskFieldValue,
+    maskByKind,
     maskArgs,
     scrubUrl,
     hostAllowed,

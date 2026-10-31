@@ -7,6 +7,9 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const S = require('../shared/sanitize.js');
 
+// Credential-shaped values are put together here, so the finished form never sits in the file (AGENTS.md).
+const BASIC = `Basic ${['dXNl', 'cjpw', 'YXNz'].join('')}`;
+
 // ------------------------------------------------------------ the policy
 
 test('credentials are replaced entirely', () => {
@@ -260,7 +263,7 @@ test('one key judge: the same name means the same in fields, URLs, WebMCP argume
   assert.equal(S.maskFieldValue('abc123', { name: 'user_id' }).value, 'ab**23');
   assert.equal(S.maskFieldValue('Tokyo', { name: 'state' }).value, 'Tokyo');
   assert.equal(S.maskFieldValue('SAVE10', { name: 'promo_code' }).value, 'SAVE10');
-  assert.deepEqual(S.maskArgs({ token: { value: 'abcd' }, authorization: 'Basic dXNlcjpwYXNz', user_id: 'abc123', nested: { order_id: { v: 'zz9' } } }),
+  assert.deepEqual(S.maskArgs({ token: { value: 'abcd' }, authorization: BASIC, user_id: 'abc123', nested: { order_id: { v: 'zz9' } } }),
     { token: '[[secret]]', authorization: '[[secret]]', user_id: 'ab**23', nested: { order_id: { v: 'z**' } } });
   assert.equal(S.scrubUrl('https://example.com/?authorization=Basic%20x&email=alice%40localhost&orderID=abc123', { hostAllowlist: ['example.com'] }).url,
     'https://example.com/?authorization=[[secret]]&email=a***%40l***&orderID=ab**23');
@@ -269,7 +272,7 @@ test('one key judge: the same name means the same in fields, URLs, WebMCP argume
 
 test('credentials written as key and value in text are hidden', () => {
   for (const [input, output] of [['otp=123456', 'otp=[[secret]]'], ['cvv=123', 'cvv=[[secret]]'], ['session=abcd', 'session=[[secret]]'],
-    ['Authorization: Basic dXNlcjpwYXNz', 'Authorization: [[secret]]'], ['backup code: ABCDEF', 'backup code: [[secret]]'], ['{"pin":"1234"}', '{"pin":"[[secret]]"}']]) {
+    [`Authorization: ${BASIC}`, 'Authorization: [[secret]]'], ['backup code: ABCDEF', 'backup code: [[secret]]'], ['{"pin":"1234"}', '{"pin":"[[secret]]"}']]) {
     assert.equal(S.scrubText(input).text, output);
   }
   assert.equal(S.scrubText('password=[[secret]]').text, 'password=[[secret]]');
@@ -401,7 +404,7 @@ test('nested URLs encoded more than once, userinfo in scheme-relative URLs, and 
 test('an address is read before listed words and opaque strings can cut it apart; short Basic values and phone digits', () => {
   assert.equal(S.scrubText('alice@Acme.example.com', { keywords: ['Acme'] }).text, 'a***@A***.com');
   assert.equal(S.scrubText(`${'a1'.repeat(17)}@internal.test`).text, 'a***@i***.test');
-  assert.equal(S.scrubText('Authorization: Basic YTpi').text, 'Authorization: [[secret]]');
+  assert.equal(S.scrubText(`Authorization: Basic ${'YT' + 'pi'}`).text, 'Authorization: [[secret]]');
   assert.equal(S.scrubText('Basic auth を使う').text, 'Basic auth を使う');
   assert.equal(S.maskFieldValue('4155552671', { type: 'tel' }).value, '******2671');
   assert.equal(S.maskFieldValue('4111 1111 1111 1111', { type: 'tel' }).value, '[[masked]]');
@@ -505,4 +508,12 @@ test('card verification names, host lists in any written form, and credential fi
   assert.equal(S.hostAllowed('www.example.com.', ['WWW.Example.com.']), true);
   assert.equal(S.hostAllowed('evil-example.com', ['*.example.com']), false);
   assert.deepEqual(S.finalScan({ steps: [{ valueClass: 'card', value: '123' }, { valueClass: 'card', value: '[[card]]' }] }).map((f) => f.path), ['steps[0].value']);
+});
+
+test('production query values must be plain whatever the key; contact and id field values are re-masked and checked', () => {
+  const ctx = { hostAllowlist: ['www.example.com'], productionHosts: ['www.example.com'], aliases: {} };
+  assert.equal(S.scrubUrl('https://www.example.com/?email=alice@example.com&uid=abc123', ctx).url, 'https://www.example.com/?email=[[v]]&uid=ab**23');
+  assert.deepEqual(S.maskByKind('id', 'customer42', { trustHidden: true }), { value: 'cu******42', kinds: ['id'] });
+  assert.deepEqual(S.finalScan({ steps: [{ valueClass: 'id', value: 'customer42', privacy: { profile: 'standard' } }, { valueClass: 'id', value: 'cu******42' }] })
+    .map((f) => f.path), ['steps[0].value']);
 });

@@ -11,7 +11,7 @@
  */
 importScripts('shared/sanitize.js', 'shared/describe.js');
 
-const { scrubText, scrubUrl, maskArgs, defaults, finalScan, aliasedHosts, hostAllowed, isPlaceholder } = self.OpScribeSanitize;
+const { scrubText, scrubUrl, maskArgs, maskByKind, defaults, finalScan, aliasedHosts, hostAllowed, isPlaceholder } = self.OpScribeSanitize;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 
 const REC_KEY = 'opsRecording';
@@ -188,7 +188,13 @@ function cleanStep(raw, rec, settings, origin = null) {
     step.valueClass = VALUE_CLASSES.has(raw.valueClass) ? raw.valueClass : 'text';
     const value = String(raw.value ?? '');
     // On production free text arrives as its length only ([[text:12]]); anything else is not kept.
-    step.value = commercial && step.valueClass === 'text' && value && !isPlaceholder(value) ? '[[v]]' : text(value, 200);
+    if (commercial && step.valueClass === 'text' && value && !isPlaceholder(value)) step.value = '[[v]]';
+    // A contact or id field's value is masked for its kind again here (the content script's partial mask is kept).
+    else if (['email', 'phone', 'id', 'secret', 'card'].includes(step.valueClass)) {
+      const r = maskByKind(step.valueClass, value, { keywords: settings.keywords, maxLength: 200, trustHidden: true });
+      kinds.push(...r.kinds);
+      step.value = r.value;
+    } else step.value = text(value, 200);
   }
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
