@@ -127,7 +127,7 @@
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
   const NO_VALUE_TYPES = new Set(['file', 'checkbox', 'radio']);
   const STRICTNESS = { kept: 0, length: 1, redacted: 2 };
-  const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role'];
+  const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'labelText', 'placeholder', 'ariaLabel', 'role'];
 
   /**
    * Rows I1-I8 again in the worker, before the value is looked at (review of

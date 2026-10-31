@@ -116,6 +116,9 @@
       id: el.id,
       autocomplete: el.getAttribute('autocomplete'),
       label: accessibleName(el),
+      // The text of every <label> of the field, apart from its accessible name: an aria-label
+      // must not hide a label that says "password" from the classification (I3, I4; review R38).
+      labelText: [...(el.labels || [])].map((l) => l.innerText || l.textContent || '').join(' '),
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
       role: el.getAttribute('role'),

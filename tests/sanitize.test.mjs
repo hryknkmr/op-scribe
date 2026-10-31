@@ -280,8 +280,23 @@ test('finalScan still scans what a placeholder carries (rows E4, E6; review new 
 test('one call keeps at most 20 argument values (row W5)', () => {
   const wide = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, Array.from({ length: 10 }, (_, j) => j)]));
   const out = S.maskArgs(wide, { env: 'standard' });
-  const leaves = Object.values(out).reduce((n, list) => n + list.length, 0);
-  assert.equal(leaves, 20);
+  // Each array is a value too (review R38): the arrays and their items add up to 20.
+  const values = Object.values(out).reduce((n, list) => n + 1 + list.length, 0);
+  assert.equal(values, 20);
+});
+
+test('nesting cannot hold more values than the budget: empty objects and arrays count (row W5; review R38)', () => {
+  const deep = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`,
+    Array.from({ length: 10 }, () => Object.fromEntries(Array.from({ length: 20 }, (_, j) => [`j${j}`, {}])))]));
+  const out = S.maskArgs(deep, { env: 'standard' });
+  const count = (node, depth = 0) => (node === null || typeof node !== 'object' || node.treatment ? 1
+    : (depth > 0 ? 1 : 0) + Object.values(node).reduce((n, c) => n + count(c, depth + 1), 0));
+  assert.ok(count(out) <= 20, String(count(out)));
+});
+
+test('a field labelled as a password is classified by its label, whatever its aria-label (rows I3, I4; review R38)', () => {
+  assert.equal(S.classifyField({ type: 'text', label: 'Comment', labelText: 'Password' }).kind, 'secret');
+  assert.equal(S.classifyField({ type: 'text', label: 'Comment', labelText: 'メールアドレス' }).kind, 'pii');
 });
 
 test('the count in [[text:N]] is not a number to find (review R11)', () => {

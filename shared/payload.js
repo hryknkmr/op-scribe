@@ -256,9 +256,10 @@
 
   /** Rows W1-W5: null, booleans and typed values, in arrays and objects up to depth 3. */
   /** Values (leaves) in an argument tree, counted only as deep as checkArgs accepts. */
-  function countLeaves(node, depth = 0) {
+  // Every value of the arguments, an object or array below the root included (W5; review R38).
+  function countValues(node, depth = 0) {
     if (node === null || typeof node !== 'object' || typeof node.treatment === 'string' || depth > LIMITS.argDepth) return 1;
-    return Object.values(node).reduce((n, child) => n + countLeaves(child, depth + 1), 0);
+    return (depth > 0 ? 1 : 0) + Object.values(node).reduce((n, child) => n + countValues(child, depth + 1), 0);
   }
 
   function checkArgs(node, env, path, problems, depth = 0) {
@@ -432,7 +433,7 @@
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
       if (step.args !== undefined) {
         checkArgs(step.args, step.env, `${path}.args`, problems);
-        if (countLeaves(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
+        if (countValues(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
       }
     });
     // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.

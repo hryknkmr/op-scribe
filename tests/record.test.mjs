@@ -335,3 +335,9 @@ test('every WebMCP answer goes through the final scan, the site and the counts t
   assert.equal(fine.ok, true);
   assert.equal(R.webmcpReply(rec, settings, 'https://site-1.invalid', 'expect'), null);
 });
+
+test('the worker classifies by the label text too (rows I3, I4; review R38)', () => {
+  const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { tag: 'input', type: 'text', label: 'Comment', labelText: 'Password' } }),
+    newRec(), settings, { tabUrl: BETA });
+  assert.equal(step, null);
+});

@@ -209,7 +209,7 @@
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
-    const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel]
+    const hints = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel]
       .filter(Boolean).join(' ').normalize('NFKC').replace(INVISIBLE, '');
 
     if (type === 'hidden') return { kind: 'ignore' };
@@ -298,6 +298,9 @@
     const spend = () => (budget.leaves -= 1) >= 0;
     if (isLeaf(node)) return spend() ? leaf(node) : DROP;
     if (depth >= LIMITS.argDepth) return spend() ? typed.redacted('arg', 'nested') : DROP;
+    // An object or array below the root is a value too, empty or not: counted, so nesting
+    // cannot hold thousands of keys past the argLeaves the totals are built on (W5; review R38).
+    if (depth > 0 && !spend()) return DROP;
     const walk = (child) => walkArgs(child, handlers, depth + 1, budget);
     if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk).filter((v) => v !== DROP);
     const out = {};
