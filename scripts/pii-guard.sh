@@ -44,7 +44,7 @@ EXCLUDE_PATHS=(
 # 実在しうるメールアドレスの混入検出。予約ドメイン（RFC 2606 / 6761）と noreply のみ許可。
 # AGENTS.md の例外（AI ツールの共著者行）は、アドレスではなく共著者行の形で許可する（strip_coauthor）。
 EMAIL_RE='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+'
-EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com|noreply\.github\.com)$'
+EMAIL_ALLOW_RE='@(example\.(com|org|net)|[A-Za-z0-9.-]+\.(invalid|test|example|localhost)|users\.noreply\.github\.com)$'
 
 if [[ ! -f "$PATTERNS_FILE" ]]; then
   echo "pii-guard: patterns file not found: $PATTERNS_FILE" >&2
@@ -103,14 +103,15 @@ is_excluded() {
 # AGENTS.md の例外を消す: AI ツールの共著者行が行全体のもの（差分の + は可）と、AGENTS.md の説明の表記。
 # 名前を限るのは、実在の人名を同じ形で通さないため。
 strip_coauthor() {
-  sed -E -e 's/^\+?[[:space:]]*[Cc]o-[Aa]uthored-[Bb]y: Claude( Code| (Fable|Opus|Sonnet|Haiku)( [0-9.]+)?)? <noreply@anthropic\.com>[[:space:]]*$//' \
+  # LC_ALL=C: バイナリの行で sed が不正な文字列として失敗しないよう、バイト列として扱う。
+  LC_ALL=C sed -E -e 's/^\+?[[:space:]]*[Cc]o-[Aa]uthored-[Bb]y: Claude( Code| (Fable|Opus|Sonnet|Haiku)( [0-9.]+)?)? <noreply@anthropic\.com>[[:space:]]*$//' \
     -e 's/`Co-Authored-By: … <noreply@anthropic\.com>`//g'
 }
 
 # stdin のテキストから許可外のアドレスを表示する。grep の失敗は 2 を返す（検出なしと区別する）。
 grep_emails() {
   local rc=0 emails
-  emails="$(strip_coauthor | grep -noE "$EMAIL_RE")" || rc=$?
+  emails="$(strip_coauthor | grep -anoE "$EMAIL_RE")" || rc=$?
   if (( rc > 1 )); then return 2; fi
   [[ -z "$emails" ]] && return 0
   rc=0
@@ -122,7 +123,7 @@ grep_emails() {
 # stdin のテキストを走査してマッチを表示する。grep の失敗は 2 を返す。
 grep_text() {
   local input rc=0; input="$(cat)"
-  printf '%s\n' "$input" | grep -inEi -f "$CLEAN_PATTERNS" || rc=$?
+  printf '%s\n' "$input" | grep -ainEi -f "$CLEAN_PATTERNS" || rc=$?
   if (( rc > 1 )); then return 2; fi
   printf '%s\n' "$input" | grep_emails
 }
@@ -134,13 +135,19 @@ scan_staged() {
     echo "pii-guard: staged のファイル一覧を取得できません" >&2
     return 2
   fi
+  # ファイル名も公開される。内容とは別に見る。
+  out="$(tr '\0' '\n' < "$PATH_LIST" | grep_text)" || return 2
+  if [[ -n "$out" ]]; then
+    echo "  ✗ staged のファイル名"; echo "$out" | sed 's/^/      /'
+    found=1
+  fi
   while IFS= read -r -d '' f; do
     is_excluded "$f" && continue
     if ! content="$(git show ":$f")"; then
       echo "pii-guard: staged の内容を読めません: $f" >&2
       return 2
     fi
-    out="$(printf '%s\n' "$content" | grep_text)"
+    out="$(printf '%s\n' "$content" | grep_text)" || return 2
     if [[ -n "$out" ]]; then
       echo "  ✗ $f"; echo "$out" | sed 's/^/      /'
       found=1
@@ -153,7 +160,7 @@ scan_message() {
   local file="$1" out
   [[ -f "$file" ]] || { echo "pii-guard: message file not found: $file" >&2; return 2; }
   # コメント行(#)を除いた本文を走査
-  out="$({ grep -vE '^[[:space:]]*#' "$file" || (( $? == 1 )); } | grep_text)"
+  out="$({ grep -vE '^[[:space:]]*#' "$file" || (( $? == 1 )); } | grep_text)" || return 2
   if [[ -n "$out" ]]; then
     echo "  ✗ commit message"; echo "$out" | sed 's/^/      /'
     return 1
@@ -171,6 +178,15 @@ scan_tree() {
     1) ;;
     *) echo "pii-guard: tracked ファイルを走査できません" >&2; return 2 ;;
   esac
+  if ! git ls-files -z > "$PATH_LIST"; then
+    echo "pii-guard: tracked ファイルの一覧を取得できません" >&2
+    return 2
+  fi
+  out="$(tr '\0' '\n' < "$PATH_LIST" | grep_text)" || return 2
+  if [[ -n "$out" ]]; then
+    echo "  ✗ tracked のファイル名"; echo "$out" | sed 's/^/      /'
+    rc=1
+  fi
   status=0
   git grep -lzE "$EMAIL_RE" -- . "${args[@]}" > "$PATH_LIST" || status=$?
   if (( status > 1 )); then
@@ -178,7 +194,7 @@ scan_tree() {
     return 2
   fi
   while IFS= read -r -d '' f; do
-    out="$(grep_emails < "$f")"
+    out="$(grep_emails < "$f")" || return 2
     [[ -z "$out" ]] && continue
     while IFS= read -r line; do echo "$f:$line"; done <<< "$out"
     rc=1
@@ -236,7 +252,7 @@ scan_range() {
 }
 
 scan_commits() {
-  local range="$1" rc=0 h exargs=() p list patch msg out
+  local range="$1" rc=0 h exargs=() p list patch names msg out
   for p in "${EXCLUDE_PATHS[@]}"; do exargs+=(":(exclude)$p"); done
   if ! list="$(git rev-list "$range")"; then
     echo "pii-guard: コミットの一覧を取得できません: $range" >&2
@@ -245,20 +261,31 @@ scan_commits() {
   while IFS= read -r h; do
     [[ -z "$h" ]] && continue
     # --root: root コミットも「空からの追加」として差分を出す。-m --first-parent: マージは取り込んだ側の変更として見る。
-    if ! patch="$(git show --root -m --first-parent --format= "$h" -- . "${exargs[@]}")"; then
+    # --text: バイナリも行として出す（後のコミットで消すと、最新のツリーでは見つからない）。
+    # 呼び出し元の || で errexit が効かないことがあるので、失敗はここで明示して返す。
+    if ! patch="$(git show --text --root -m --first-parent --format= "$h" -- . "${exargs[@]}")"; then
       echo "pii-guard: コミットの差分を取得できません: $h" >&2
       return 2
     fi
-    out="$(printf '%s\n' "$patch" | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+' || true; } | grep_text)"
+    out="$(printf '%s\n' "$patch" | { grep -aE '^\+' || true; } | { grep -avE '^\+\+\+' || true; } | grep_text)" || return 2
     if [[ -n "$out" ]]; then
       echo "  ✗ ${h:0:7} の追加内容:"; echo "$out" | sed 's/^/      /'
+      rc=1
+    fi
+    if ! names="$(git show --root -m --first-parent --format= --name-only --diff-filter=d -z "$h" | tr '\0' '\n')"; then
+      echo "pii-guard: コミットのファイル名を取得できません: $h" >&2
+      return 2
+    fi
+    out="$(printf '%s\n' "$names" | grep_text)" || return 2
+    if [[ -n "$out" ]]; then
+      echo "  ✗ ${h:0:7} のファイル名:"; echo "$out" | sed 's/^/      /'
       rc=1
     fi
     if ! msg="$(git log -1 --format=%B "$h")"; then
       echo "pii-guard: コミットメッセージを取得できません: $h" >&2
       return 2
     fi
-    out="$(printf '%s\n' "$msg" | grep_text)"
+    out="$(printf '%s\n' "$msg" | grep_text)" || return 2
     if [[ -n "$out" ]]; then
       echo "  ✗ ${h:0:7} のコミットメッセージ:"; echo "$out" | sed 's/^/      /'
       rc=1

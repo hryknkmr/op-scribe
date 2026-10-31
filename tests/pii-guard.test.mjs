@@ -242,3 +242,53 @@ test('pre-push scans a new branch that only another remote already has', () => {
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.equal(hook(dir, 'pre-push', ['other', 'https://example.com/r.git'], input).status, 0);
 });
+
+test('binary content added and then removed is found commit by commit', () => {
+  const { dir, git, guard } = repo();
+  writeFileSync(join(dir, 'b.bin'), Buffer.concat([Buffer.from([0, 1, 255, 254, 10]), Buffer.from(`${address()}\n`)]));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  git('rm', '-q', 'b.bin');
+  git('commit', '-q', '-m', 'remove');
+  assert.equal(guard('scan-tree').status, 0);
+  assert.equal(guard('scan-commits', 'HEAD~2..HEAD').status, 1);
+});
+
+test('file names are scanned at every stage', () => {
+  const name = `${address()}.txt`;
+  const { git, guard, write } = repo();
+  write(name, '');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+  git('commit', '-q', '-m', 'add');
+  git('rm', '-q', name);
+  git('commit', '-q', '-m', 'remove');
+  assert.equal(guard('scan-tree').status, 0);
+  assert.equal(guard('scan-commits', 'HEAD~2..HEAD').status, 1);
+});
+
+test('only users.noreply is allowed on the GitHub noreply domain', () => {
+  const domain = ['noreply', 'github', 'com'].join('.');
+  const { git, guard, write } = repo();
+  write('a.txt', `someone@${domain}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+});
+
+test('grep failing during a scan is an error, not a clean result', () => {
+  const { dir, git, guard, write } = repo();
+  write('a.txt', 'ok\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
+  const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "-anoE" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
+    if (args[0] === 'scan-staged') { write('a.txt', 'changed\n'); git('add', '-A'); }
+    const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
+    assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
+  }
+  assert.equal(guard('scan-staged').status, 0);
+});
