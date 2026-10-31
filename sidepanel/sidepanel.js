@@ -71,6 +71,8 @@ let basis = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
 let previewedBasis = null;
+/** Where the previewed body goes, as shown in the preview: sending uses exactly this. */
+let previewedTarget = null;
 
 const STALE = '記録が変わったため（ステップの削除・追加）、この再現手順は出力できません。作り直すか、手順の欄を空にしてください';
 /**
@@ -399,6 +401,7 @@ ui.preview.addEventListener('click', async () => {
     ui.findings.append(p);
   }
   const target = endpointPattern(settings.endpoint);
+  previewedTarget = { endpoint: settings.endpoint, authHeader: settings.authHeader };
   ui.sendTarget.textContent = target
     ? `送信先: ${settings.endpoint}${settings.authHeader ? '（Authorization ヘッダ付き。ヘッダはプレビューに含みません）' : ''}`
     : '送信先が未設定です（「プライバシーと送信先」で設定）';
@@ -408,7 +411,8 @@ ui.preview.addEventListener('click', async () => {
 });
 
 ui.send.addEventListener('click', () => {
-  const pattern = endpointPattern(settings.endpoint);
+  const target = previewedTarget;
+  const pattern = target && endpointPattern(target.endpoint);
   if (!pattern || !previewed) return;
   const granted = chrome.permissions.request({ origins: [pattern] });
   const body = previewed;
@@ -426,14 +430,19 @@ ui.send.addEventListener('click', () => {
         ui.sendStatus.textContent = 'プレビューの後に記録が変わりました。もう一度プレビューしてください';
         return;
       }
+      // The destination shown in the preview, or nothing: settings changed in another window are not used silently.
+      if (settings.endpoint !== target.endpoint || settings.authHeader !== target.authHeader) {
+        ui.sendStatus.textContent = 'プレビューの後に送信先の設定が変わりました。もう一度プレビューしてください';
+        return;
+      }
       const findings = exitFindings(rec, JSON.parse(body));
       if (findings.length) {
         ui.sendStatus.textContent = blockedMessage(findings);
         return;
       }
       const headers = { 'Content-Type': 'application/json' };
-      if (settings.authHeader) headers.Authorization = settings.authHeader;
-      const response = await fetch(settings.endpoint, {
+      if (target.authHeader) headers.Authorization = target.authHeader;
+      const response = await fetch(target.endpoint, {
         method: 'POST',
         headers,
         body,

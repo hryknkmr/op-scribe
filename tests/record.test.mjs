@@ -204,3 +204,16 @@ test('the worker counts only the known redaction kinds (row M1; review R16)', ()
   R.cleanStep({ ...input(typed.kept('text', 'x')), pageUrl: BETA, valueKinds: ['email', 'made-up', 'zzz'] }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(Object.keys(rec.redactions), ['email']);
 });
+
+test('redacted and length-only WebMCP arguments are counted (row M1; review R17)', () => {
+  const rec = newRec();
+  const args = S.maskArgs({ password: 'x', q: 'shoes', n: 5 }, { env: 'commercial' });
+  R.cleanStep({ type: 'tool', pageUrl: PROD, tool: 't', args }, rec, settings, { tabUrl: PROD });
+  assert.deepEqual(rec.redactions, { secret: 1, text: 1, number: 1 });
+});
+
+test('an argument the worker had to redact is counted once (row M1)', () => {
+  const rec = newRec();
+  R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 't', args: { a: 'raw', b: { treatment: 'other' } } }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(rec.redactions, { v: 2 });
+});

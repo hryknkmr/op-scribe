@@ -102,12 +102,29 @@
       isLeaf: (n) => n === null || typeof n !== 'object' || typeof n.treatment === 'string',
       leaf: (n) => {
         if (n === null || typeof n === 'boolean') return n;
-        if (n && typeof n === 'object') return cleanValue(n, env, settings, kinds, 'arg');
+        // Redacted and length-only values are counted once, by countArgs; here only what
+        // masking found inside kept text.
+        if (n && typeof n === 'object') {
+          const found = [];
+          const value = cleanValue(n, env, settings, found, 'arg');
+          if (value.treatment === 'kept') kinds.push(...found);
+          return value;
+        }
         // A raw string or number never comes from maskArgs.
-        kinds.push('v');
         return typed.redacted('arg', 'v');
       }
     });
+  }
+
+  /** The redaction kinds in a cleaned argument tree: each redacted or length-only value once. */
+  function countArgs(node, kinds) {
+    if (!node || typeof node !== 'object') return;
+    if (typeof node.treatment === 'string') {
+      if (node.treatment === 'redacted') kinds.push(node.kind);
+      if (node.treatment === 'length') kinds.push(node.kind);
+      return;
+    }
+    Object.values(node).forEach((child) => countArgs(child, kinds));
   }
 
   /**
@@ -180,7 +197,11 @@
       step.tool = text(raw.tool, LIMITS.tool);
       step.ok = raw.ok !== false;
       step.source = 'agent';
-      if (raw.args !== undefined) step.args = cleanArgs(raw.args, env, settings, kinds);
+      if (raw.args !== undefined) {
+        step.args = cleanArgs(raw.args, env, settings, kinds);
+        // The content script sends no kinds for arguments: count what the arguments hold now (M1).
+        countArgs(step.args, kinds);
+      }
     }
     if (type === 'note') step.note = text(raw.note, LIMITS.note);
     // Only what this kind of step may carry, and nothing without what it must (row T6).
