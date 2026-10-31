@@ -14,6 +14,10 @@
 #   check-config           現在の git user.email が allowlist に合致するか
 #   scan-range <base> <tip>
 #                          base..tip のコミット内容 + identity を走査（pre-push 用）
+#   scan-commits <rev-range>
+#                          範囲の各コミットについて、追加行とコミットメッセージを 1 件ずつ走査（CI 用）。
+#                          途中で足して後で消した内容も、差分の合計では消えて見えるため 1 件ずつ見る。
+#                          範囲に 1 つのリビジョン（例: HEAD）を渡すと root コミットまで含む。
 #
 # 終了コード: 0=クリーン / 1=違反検出 / 2=使用方法エラー・git の失敗（検出なしとは区別する）
 #
@@ -176,6 +180,38 @@ scan_range() {
   return $rc
 }
 
+scan_commits() {
+  local range="$1" rc=0 h exargs=() p list patch msg out
+  for p in "${EXCLUDE_PATHS[@]}"; do exargs+=(":(exclude)$p"); done
+  if ! list="$(git rev-list "$range")"; then
+    echo "pii-guard: コミットの一覧を取得できません: $range" >&2
+    return 2
+  fi
+  while IFS= read -r h; do
+    [[ -z "$h" ]] && continue
+    # --root: root コミットも「空からの追加」として差分を出す。-m --first-parent: マージは取り込んだ側の変更として見る。
+    if ! patch="$(git show --root -m --first-parent --format= "$h" -- . "${exargs[@]}")"; then
+      echo "pii-guard: コミットの差分を取得できません: $h" >&2
+      return 2
+    fi
+    out="$(printf '%s\n' "$patch" | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+' || true; } | grep_text)"
+    if [[ -n "$out" ]]; then
+      echo "  ✗ ${h:0:7} の追加内容:"; echo "$out" | sed 's/^/      /'
+      rc=1
+    fi
+    if ! msg="$(git log -1 --format=%B "$h")"; then
+      echo "pii-guard: コミットメッセージを取得できません: $h" >&2
+      return 2
+    fi
+    out="$(printf '%s\n' "$msg" | grep_text)"
+    if [[ -n "$out" ]]; then
+      echo "  ✗ ${h:0:7} のコミットメッセージ:"; echo "$out" | sed 's/^/      /'
+      rc=1
+    fi
+  done <<< "$list"
+  return $rc
+}
+
 cmd="${1:-}"; shift || true
 case "$cmd" in
   scan-staged)       scan_staged ;;
@@ -184,7 +220,8 @@ case "$cmd" in
   check-identities)  check_identities "${1:?usage: check-identities <range|--all>}" ;;
   check-config)      check_config ;;
   scan-range)        scan_range "${1:?base}" "${2:?tip}" ;;
+  scan-commits)      scan_commits "${1:?usage: scan-commits <rev-range>}" ;;
   *)
-    echo "usage: pii-guard.sh {scan-staged|scan-message <f>|scan-tree|check-identities <range>|check-config|scan-range <base> <tip>}" >&2
+    echo "usage: pii-guard.sh {scan-staged|scan-message <f>|scan-tree|check-identities <range>|check-config|scan-range <base> <tip>|scan-commits <range>}" >&2
     exit 2 ;;
 esac

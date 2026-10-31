@@ -93,3 +93,37 @@ test('non-ASCII file names are scanned whatever core.quotepath is (#11-4)', () =
     assert.match(r.stdout, /日本語\.txt/);
   }
 });
+
+test('content added in one commit and removed in a later one is found commit by commit (#12-1)', () => {
+  const { git, guard, write } = repo();
+  write('a.txt', `${address()}\n`);
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  write('a.txt', 'ok\n');
+  write('b.txt', 'unrelated\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'remove');
+  assert.equal(guard('scan-range', 'HEAD~2', 'HEAD').status, 0, 'the summed diff hides it');
+  const r = guard('scan-commits', 'HEAD~2..HEAD');
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /の追加内容/);
+});
+
+test('commit messages are scanned (#12-2)', () => {
+  const { git, guard } = repo();
+  git('commit', '-q', '--allow-empty', '-m', `ask ${address()}`);
+  const r = guard('scan-commits', 'HEAD~1..HEAD');
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /コミットメッセージ/);
+});
+
+test('the root commit is scanned when the whole history is given', () => {
+  const { dir, guard, write } = repo();
+  const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
+  git('checkout', '-q', '--orphan', 'fresh');
+  write('r.txt', `${address()}\n`);
+  git('add', '-A');
+  git('commit', '-q', '-m', 'root');
+  assert.equal(guard('scan-commits', 'HEAD').status, 1);
+  assert.equal(guard('scan-commits', 'no-such-ref').status, 2);
+});
