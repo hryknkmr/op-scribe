@@ -133,20 +133,23 @@
       text = text.replace(/[\uE000\uE001]/g, '').replace(OWN_PLACEHOLDER, (m) => `\uE000${String.fromCharCode(0xE100 + kept.push(m) - 1)}\uE001`);
     }
 
-    const keywords = keywordPattern(opts.keywords);
-    if (keywords) {
-      text = text.replace(keywords, () => {
-        kinds.push('keyword');
-        return mark('masked');
-      });
-    }
-
+    // The patterns first, on the text as written: a keyword masked first would break the
+    // context they need ("token=abcd", "user@example.com" with "example" listed; review R30).
+    // A keyword is never part of a placeholder name (usableKeyword), so it cannot break one.
     for (const rule of RULES) {
       text = text.replace(rule.re, (...args) => {
         const match = args[0];
         if (rule.accept && !rule.accept(match)) return match;
         kinds.push(rule.kind);
         return rule.replace ? rule.replace(...args) : mark(rule.kind);
+      });
+    }
+
+    const keywords = keywordPattern(opts.keywords);
+    if (keywords) {
+      text = text.replace(keywords, () => {
+        kinds.push('keyword');
+        return mark('masked');
       });
     }
 
@@ -387,7 +390,10 @@
       return { url: mark('url:invalid'), kinds: ['url'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return { url: mark(`url:${url.protocol.replace(':', '').slice(0, LIMITS.scheme)}`), kinds: ['url'] };
+      // none, long and invalid name our own markers (no URL, too long, unparsable): a
+      // scheme of that name would read as one of them, so it is just invalid (U2; review R30).
+      const scheme = url.protocol.replace(':', '').slice(0, LIMITS.scheme);
+      return { url: mark(`url:${['none', 'long', 'invalid'].includes(scheme) ? 'invalid' : scheme}`), kinds: ['url'] };
     }
 
     const host = parsedHost(url.hostname);

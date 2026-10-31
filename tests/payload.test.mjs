@@ -458,7 +458,7 @@ test('checkCanonical finds what is safe but not what the masking writes (E8; rev
   const r = clone(rec);
   r.steps[0].url = '[[url:https]]';
   r.steps[4].args = { ['あ'.repeat(38) + '-21']: typed.redacted('arg', 'v') };
-  r.steps[5].note = 'é';
+  r.steps[5].note = 'e\u0301';
   r.steps[2].url = 'HTTPS://SITE-1.INVALID:443/';
   r.webmcpTools = { 'https://site-1.invalid': ['a'], 'https://site-1.invalid/': ['b'] };
   const payload = build(r);
@@ -508,4 +508,20 @@ test('the exits refuse a bracket in a URL outside the masking own [[v]] (K1, E2;
     r.steps[2].url = value;
     assert.equal(P.checkPayload(regen(build(r))).some((p) => p.problem === 'bracket outside a placeholder'), !ok, value);
   }
+});
+
+test('the no-URL marker is a start URL only, and only when no step has a URL (U2, E2; review R30)', () => {
+  const start = clone(rec);
+  const payload = build(start);
+  payload.recording.startUrl = '[[url:none]]';
+  assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'no URL while a step has one'));
+  const step = clone(rec);
+  step.steps[2].url = '[[url:none]]';
+  assert.ok(P.checkPayload(regen(build(step))).some((p) => p.problem === 'no-URL marker as a URL'));
+});
+
+test('checkCanonical finds an argument key that is not NFKC (E8; review R30)', () => {
+  const r = clone(rec);
+  r.steps[4].args = { 'e\u0301': typed.redacted('arg', 'v') };
+  assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'key not NFKC'));
 });

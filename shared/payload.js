@@ -376,8 +376,10 @@
    * step every query value is [[v]] and there is no fragment (the interim
    * rule until ③). site (WebMCP) is an origin only.
    */
-  function checkUrl(value, env, path, problems, { origin = false } = {}) {
+  function checkUrl(value, env, path, problems, { origin = false, none = false } = {}) {
     const bad = (problem) => problems.push({ path, problem });
+    // The no-URL marker is a start URL only, never a URL a step holds (review R30).
+    if (value === '[[url:none]]' && !none) return bad('no-URL marker as a URL');
     if (PLACEHOLDER_URL.test(value)) return;
     let url;
     try { url = new URL(value); } catch { return bad('not a URL'); }
@@ -410,7 +412,9 @@
     const start = payload.recording.startUrl;
     const startStep = steps.find((s) => s.url === start);
     if (!startStep && start !== '[[url:none]]') problems.push({ path: 'recording.startUrl', problem: 'not a URL of the steps' });
-    checkUrl(start, startStep?.env, 'recording.startUrl', problems);
+    // [[url:none]] means no step has a URL: with one, the start is that URL (startUrlOf; review R30).
+    if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
+    checkUrl(start, startStep?.env, 'recording.startUrl', problems, { none: true });
     payload.recording.webmcpTools.forEach((w, i) => checkUrl(w.site, 'standard', `recording.webmcpTools[${i}].site`, problems, { origin: true }));
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
@@ -477,6 +481,8 @@
       if (!isObject(node) && !Array.isArray(node)) return;
       if (isTypedLeaf(node)) return;
       for (const [k, v] of Object.entries(node)) {
+        const body = k.replace(/…$/u, '');
+        if (body.normalize('NFKC') !== body) bad(`${path}.${k}`, 'key not NFKC');
         const n = Number(/-(\d+)$/.exec(k)?.[1]);
         if (!Array.isArray(node) && [...k].length === cut(LIMITS.argKey) && n > LIMITS.argKeys) bad(`${path}.${k}`, 'key suffix past the key count');
         keys(v, `${path}.${k}`);

@@ -368,3 +368,16 @@ test('a URL path never carries a page-made placeholder (K1, U5; review R29)', ()
   assert.equal(url, 'https://example.com/%5B%5Bsecret%5D%5D/a');
   assert.deepEqual(S.finalScan({ url }), []);
 });
+
+test('a scheme named like a marker of ours is just invalid (U2; review R30)', () => {
+  for (const scheme of ['none', 'long', 'invalid']) assert.equal(S.scrubUrl(`${scheme}:private`).url, '[[url:invalid]]', scheme);
+  assert.equal(S.scrubUrl('mailto:x').url, '[[url:mailto]]');
+});
+
+test('patterns see the text before keywords are masked (K2, K3; review R30)', () => {
+  const token = S.scrubText('token=abcdef', { keywords: ['token'] });
+  assert.ok(token.kinds.includes('secret') && !token.text.includes('abcdef'), token.text);
+  const mail = S.scrubText('user@example.com', { keywords: ['example'] });
+  assert.ok(mail.kinds.includes('email') && !mail.text.includes('user'), mail.text);
+  assert.deepEqual(S.scrubText('Acme の件', { keywords: ['Acme'] }), { text: '[[masked]] の件', kinds: ['keyword'] });
+});
