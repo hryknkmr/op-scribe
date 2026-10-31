@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -142,6 +142,8 @@ test('the co-author exception covers the trailer form, not the address', () => {
     `noreply@${domain}`,
     `someone@${domain}`,
     `Co-Authored-By: Claude <x.noreply@${domain}>`,
+    `Co-Authored-By: Some Person <noreply@${domain}>`,
+    `see ${trailer}`,
     `Co-Authored-By: ${address()} <noreply@${domain}>`,
     `${trailer} ${address()}`
   ];
@@ -179,4 +181,26 @@ test('a malformed pattern stops every scan instead of finding nothing', () => {
     assert.equal(r.status, 2, args[0]);
     assert.match(r.stderr, /パターンに誤り/);
   }
+});
+
+test('the wording of the exception in AGENTS.md passes', () => {
+  const domain = ['anthropic', 'com'].join('.');
+  const { git, guard, write } = repo();
+  write('a.md', `共著者行（\`Co-Authored-By: … <noreply@${domain}>\`）は対象外\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-tree').status, 0);
+});
+
+test('the guard itself is scanned', () => {
+  const { dir, git, guard } = repo();
+  appendFileSync(join(dir, 'scripts', 'pii-guard.sh'), `# ${address()}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+});
+
+test('a message with only comment lines passes', () => {
+  const { dir, guard } = repo();
+  const file = join(dir, 'msg.txt');
+  writeFileSync(file, '# comment\n');
+  assert.equal(guard('scan-message', file).status, 0);
 });

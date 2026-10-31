@@ -35,12 +35,10 @@ LOCAL_PATTERNS_FILE="${GUARD_DIR}/pii-guard.patterns.local.txt"
 ALLOWED_EMAIL_RE='@users\.noreply\.github\.com$|^noreply@github\.com$'
 
 # 走査から除外するパス（denylist 語・パターン例を正当に含むファイル）。
-# テスト（tests/pii-guard.test.mjs）は除外しない（盲点を作らない）。fake secret は連結で組み立てる。
+# ガード本体・ワークフロー・テストは除外しない（盲点を作らない）。fake secret は連結で組み立てる。
 EXCLUDE_PATHS=(
   "scripts/pii-guard.patterns.txt"
   "scripts/pii-guard.patterns.local.txt"
-  "scripts/pii-guard.sh"
-  ".github/workflows/pii-guard.yml"
 )
 
 # 実在しうるメールアドレスの混入検出。予約ドメイン（RFC 2606 / 6761）と noreply のみ許可。
@@ -100,9 +98,11 @@ is_excluded() {
   return 1
 }
 
-# 共著者行の形をした箇所だけを消す。名前に @ を許すと、別のアドレスを一緒に消してしまう。
+# AGENTS.md の例外を消す: AI ツールの共著者行が行全体のもの（差分の + は可）と、AGENTS.md の説明の表記。
+# 名前を限るのは、実在の人名を同じ形で通さないため。
 strip_coauthor() {
-  sed -E 's/[Cc]o-[Aa]uthored-[Bb]y:[^<>@]*<noreply@anthropic\.com>//g'
+  sed -E -e 's/^\+?[[:space:]]*[Cc]o-[Aa]uthored-[Bb]y: Claude[ A-Za-z0-9.-]* <noreply@anthropic\.com>[[:space:]]*$//' \
+    -e 's/`Co-Authored-By: … <noreply@anthropic\.com>`//g'
 }
 
 # stdin のテキストから許可外のアドレスを表示する。grep の失敗は 2 を返す（検出なしと区別する）。
@@ -152,7 +152,7 @@ scan_message() {
   local file="$1" out
   [[ -f "$file" ]] || { echo "pii-guard: message file not found: $file" >&2; return 2; }
   # コメント行(#)を除いた本文を走査
-  out="$(grep -vE '^[[:space:]]*#' "$file" | grep_text)"
+  out="$({ grep -vE '^[[:space:]]*#' "$file" || (( $? == 1 )); } | grep_text)"
   if [[ -n "$out" ]]; then
     echo "  ✗ commit message"; echo "$out" | sed 's/^/      /'
     return 1
