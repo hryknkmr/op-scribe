@@ -355,11 +355,10 @@ test('compound credential names, unclosed quotes, and URLs in text checked at th
   for (const t of ['https://example.com/users/@someone/orders/123456', 'https://example.com/?id=abc123', 'https://example.com/?phone=1234']) {
     assert.equal(S.finalScan({ t }).length, 1, t);
   }
-  // What the filter itself wrote passes again unchanged.
+  // What the filter itself wrote passes the exit.
   const ctx = { hostAllowlist: ['example.com'] };
   const once = S.scrubUrl('https://example.com/users/@someone/orders/123456?id=abc123&email=a%40example.com&code=x', ctx).url;
-  assert.equal(S.scrubUrl(once, ctx).url, once);
-  assert.deepEqual(S.finalScan({ once }), []);
+  assert.deepEqual(S.finalScan({ once }, { hostAllowlist: ['example.com'] }), []);
 });
 
 test('a credential is replaced whatever it looks like, and a chosen option is kept unless it is card data', () => {
@@ -385,4 +384,14 @@ test('only the filter\'s own placeholders are trusted; hosts and contact keys of
   assert.deepEqual(S.finalScan({ args: { email: 'alice', phone: '1234', user_id: 'abc123', ok: 'a***@e***.com', uid: 'ab**23' } }).map((f) => f.path),
     ['args.email', 'args.phone', 'args.user_id']);
   assert.deepEqual(S.finalScan({ recording: { id: 'rec-abc', steps: [{ id: 's12', key: 'Enter' }] } }), []);
+});
+
+test('nested URLs encoded more than once, userinfo in scheme-relative URLs, and no trust in look-alikes from the page', () => {
+  const ctx = { hostAllowlist: ['example.com'], aliases: {} };
+  const raw = 'https://example.com/login?next=https%253A%252F%252Fprivate.internal.test%252Fa#/go/https%253A%252F%252Fother.internal.test%252Fb';
+  assert.equal(S.scrubUrl(raw, ctx).url, 'https://example.com/login?next=https%3A%2F%2Fsite-1.invalid%2Fa#/go/https://site-2.invalid/b');
+  assert.deepEqual(S.finalScan({ raw }, { hostAllowlist: ['example.com'] }).map((f) => f.kinds), [['host']]);
+  assert.equal(S.scrubText('see //user:pass@private.internal.test/path', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'see //site-1.invalid/path');
+  assert.equal(S.maskFieldValue('****123456', { type: 'tel' }).value, '******3456');
+  for (const value of ['[[masked]]', '[[card]]']) assert.equal(S.maskFieldValue(value, { type: 'password' }).value, '[[secret]]');
 });

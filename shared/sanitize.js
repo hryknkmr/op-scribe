@@ -201,7 +201,7 @@
    */
   // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
   // a host with or without dots, in any letters, an IP address, [IPv6]). Over-matching only hides more.
-  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
+  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:[^\s/@<>"']+@)?(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
@@ -340,18 +340,19 @@
   /** A value whose key or field says what it is (classifyKey's kinds), under the policy for that kind. */
   /**
    * A value this filter already hid: a placeholder, or the shape a partial mask leaves (ab**23, s***@e***.com,
-   * ***-****-5678). Kept as it is, so that a recording passed through again (the worker, the final scan) is stable.
+   * ***-****-5678). Trusted only by the final scan (opts.trustHidden), which reads what this filter already wrote;
+   * a value from the page is masked whatever it looks like (****123456 typed into a phone field is not trusted).
    */
   const alreadyHidden = (value) => isPlaceholder(value) || /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(value)
     || /^[^\s@*]?\*{3}@[^\s@*]?\*{3}(?:\.[^\s@*]+)?$/.test(value) || /^[+\s()*-]*\*[+\d\s()*-]*$/.test(value);
 
   function maskByKind(kind, text, opts = {}) {
-    // A credential is replaced whatever it looks like (ab**cd may be a password); only this filter's own
-    // placeholder passes again unchanged.
+    // A credential is replaced whatever it looks like (ab**cd may be a password); at the exit, only this filter's
+    // own placeholder passes again unchanged.
     if (kind === 'secret' || kind === 'card') {
-      return isPlaceholder(String(text).trim()) ? { value: text, kinds: [] } : { value: mark(kind), kinds: [kind] };
+      return opts.trustHidden && isPlaceholder(String(text).trim()) ? { value: text, kinds: [] } : { value: mark(kind), kinds: [kind] };
     }
-    if (kind && alreadyHidden(String(text).trim())) return { value: text, kinds: [] };
+    if (kind && opts.trustHidden && alreadyHidden(String(text).trim())) return { value: text, kinds: [] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: opts.maxLength, hosts: opts.hosts });
     // A contact field keeps its value only when the whole of it was recognized as one address or number
     // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
@@ -425,14 +426,25 @@
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
     if (!ctx.aliases) ctx.aliases = {};
-    return { hostAllowlist: ctx.hostAllowlist, aliases: ctx.aliases };
+    return { hostAllowlist: ctx.hostAllowlist, aliases: ctx.aliases, trustHidden: ctx.trustHidden };
+  };
+
+  /** Decoded until it no longer changes (at most 3 times): https%253A%252F%252F... is a URL too. */
+  const decodeDeep = (value) => {
+    let out = String(value);
+    for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(out); i += 1) {
+      let next;
+      try { next = decodeURIComponent(out); } catch { break; }
+      if (next === out) break;
+      out = next;
+    }
+    return out;
   };
 
   /** One path or fragment segment under the policy. */
   function scrubSegment(segment, ctx, kinds) {
-    let decoded = segment;
-    try { decoded = decodeURIComponent(segment); } catch { /* keep raw */ }
-    if (alreadyHidden(decoded.replace(/^@/, ''))) return segment;
+    const decoded = decodeDeep(segment);
+    if (ctx.trustHidden && alreadyHidden(decoded.replace(/^@/, ''))) return segment;
     if (decoded.startsWith('@') && decoded.length > 1) {
       kinds.push('id');
       return `@${partialId(decoded.slice(1), 1, 1)}`;
@@ -463,8 +475,9 @@
       let value = '';
       if (v) {
         // The key decides first (classifyKey); a value shaped like an id is partly hidden whatever its key.
-        const meaning = classifyKey(k, { protocol: true }) || (ID_SEGMENT.test(v) ? 'id' : null);
-        const r = maskByKind(meaning, v, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+        const decoded = decodeDeep(v);
+        const meaning = classifyKey(k, { protocol: true }) || (ID_SEGMENT.test(decoded) ? 'id' : null);
+        const r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
         kinds.push(...r.kinds);
         value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
       }
@@ -512,12 +525,10 @@
     const fragment = url.hash.slice(1);
     const [route, query] = fragment.includes('?') ? [fragment.slice(0, fragment.indexOf('?')), fragment.slice(fragment.indexOf('?') + 1)]
       : fragment.includes('=') ? ['', fragment] : [fragment, null];
-    if (url.hash.includes('://')) {
+    if (decodeDeep(fragment).includes('://')) {
       // A URL inside the fragment (#/redirect/https://...?x=1): read as text, so its host and its own
       // parameters follow the policy. Checked before the fragment's own parameters, which it would split.
-      let decoded = fragment;
-      try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
-      const r = scrubText(decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+      const r = scrubText(decodeDeep(fragment), { keywords: ctx.keywords, hosts: hostsOf(ctx) });
       kinds.push(...r.kinds);
       hash = `#${r.text}`;
     } else if (query !== null) {
@@ -556,13 +567,10 @@
       for (const match of String(text).match(TEXT_URL) || []) {
         const relative = match.startsWith('//');
         const raw = relative ? `https:${match}` : match;
-        const kinds = scrubUrl(raw, { hostAllowlist: [], keywords: opts.keywords }).kinds.filter((kind) => kind !== 'host');
-        // A host neither allowed nor an alias this filter wrote (site-N.invalid), when the caller knows the allowlist.
-        if (Array.isArray(opts.hostAllowlist)) {
-          let host = '';
-          try { host = new URL(raw).hostname.replace(/\.+$/, ''); } catch { /* unparsed: scrubUrl said so */ }
-          if (host && !hostAllowed(host, opts.hostAllowlist) && !/^site-\d+\.invalid$/.test(host)) kinds.push('host');
-        }
+        // Hosts, nested ones too, when the caller knows the allowlist: allowed, or an alias this filter wrote (*.invalid).
+        const known = Array.isArray(opts.hostAllowlist);
+        const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, '*.invalid'] : [], keywords: opts.keywords, trustHidden: true })
+          .kinds.filter((kind) => known || kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
           return;
