@@ -23,7 +23,8 @@
     argItems: 10,
     argKeys: 20,
     argDepth: 3,
-    argLeaves: 100,
+    argLeaves: 20,
+    argsInSentence: 200,
     keptNumber: 1e6,
     typedLength: 1e6,
     fileCount: 999,
@@ -57,19 +58,29 @@
   /**
    * Upper bounds of a whole payload, derived from the limits above rather than
    * chosen apart from them (review of #22): every recording the limits allow
-   * must fit. A step holds at most its URL and link (url each), name, selector,
-   * note, tool name, and argLeaves arguments with their keys; 512 covers the
-   * fixed fields and the JSON around them.
+   * must fit, escapes included. Worst cases: JSON writes a control character
+   * as \u0000 (6 characters) and a quote or backslash as 2; a Gherkin table
+   * cell doubles backslashes and pipes once more.
    */
-  const STEP_CHARS = 2 * LIMITS.url + cut(LIMITS.name) + LIMITS.selector + cut(LIMITS.note) + cut(LIMITS.tool)
-    + LIMITS.argLeaves * (cut(LIMITS.argKey) + cut(LIMITS.kept.arg) + 64) + 512;
-  const RECORDING_CHARS = LIMITS.steps * STEP_CHARS + LIMITS.toolList * (LIMITS.url + LIMITS.toolList * cut(LIMITS.tool));
+  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + LIMITS.selector + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
+  // The arguments as JSON with their typed wrappers ({"treatment":"kept","field":"arg","text":...}).
+  const ARGS_JSON = LIMITS.argLeaves * (6 * cut(LIMITS.argKey) + 6 * cut(LIMITS.kept.arg) + 64) + 64;
+  const STEP = Object.freeze({
+    // One step in the payload JSON.
+    json: 6 * TEXT + ARGS_JSON + 512,
+    // Its Markdown: the action and the expected result (a note or the next navigation), args cut to argsInSentence.
+    markdown: TEXT + cut(LIMITS.argsInSentence) + 512,
+    // Its Gherkin: the sentence, then each field again in an escaped table cell, and the arguments' JSON (cell-escaped).
+    gherkin: 3 * TEXT + cut(LIMITS.argsInSentence) + 2 * ARGS_JSON + 1024
+  });
+  const MARKDOWN = LIMITS.steps * STEP.markdown + 4096;
+  const GHERKIN = LIMITS.steps * STEP.gherkin + 4096;
+  const TOOLS_JSON = LIMITS.toolList * (6 * LIMITS.url + LIMITS.toolList * 6 * cut(LIMITS.tool));
   const TOTALS = Object.freeze({
-    // Markdown says each step at most twice (action and expected result); hand edits get the same room.
-    markdown: 2 * RECORDING_CHARS,
-    // The recording, its Gherkin (each step's text and its attribute table: at most three times) and
-    // the Markdown, at 6 bytes a character at worst (a control character escaped as \u0000 in JSON).
-    payloadBytes: 6 * (RECORDING_CHARS + 3 * RECORDING_CHARS + 2 * RECORDING_CHARS)
+    markdown: MARKDOWN,
+    gherkin: GHERKIN,
+    // The recording, plus the Markdown and the Gherkin as JSON strings: 6 bytes a character at worst.
+    payloadBytes: LIMITS.steps * STEP.json + TOOLS_JSON + 6 * (MARKDOWN + GHERKIN) + 4096
   });
 
   /** WAI-ARIA 1.2 roles that are not abstract: the ones an element can take. */

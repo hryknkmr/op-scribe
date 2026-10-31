@@ -268,11 +268,11 @@ test('finalScan still scans what a placeholder carries (rows E4, E6; review new 
   assert.deepEqual(S.finalScan({ markdown: '[[text:12]] [[url:invalid]]' }, { keywords: ['acme'], hosts: ['x'] }), []);
 });
 
-test('one call keeps at most 100 argument values (row W5)', () => {
+test('one call keeps at most 20 argument values (row W5)', () => {
   const wide = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, Array.from({ length: 10 }, (_, j) => j)]));
   const out = S.maskArgs(wide, { env: 'standard' });
   const leaves = Object.values(out).reduce((n, list) => n + list.length, 0);
-  assert.equal(leaves, 100);
+  assert.equal(leaves, 20);
 });
 
 test('the count in [[text:N]] is not a number to find (review R11)', () => {

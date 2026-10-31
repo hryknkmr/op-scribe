@@ -112,8 +112,7 @@
         fields: {
           generator: { type: 'enum', row: 'M4', values: ['template', 'on-device-ai', 'manual', 'none'] },
           markdown: str('E4', TOTALS.markdown),
-          // No limit of its own: it must equal the Gherkin rebuilt from the recording (E3).
-          gherkin: str('E3', Infinity)
+          gherkin: str('E3', TOTALS.gherkin)
         }
       },
       sentAt: str('M2', 24, ISO)

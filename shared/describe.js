@@ -13,6 +13,8 @@
 (function (root) {
   'use strict';
 
+  const { LIMITS } = root.OpScribeLimits || require('./limits.js');
+
   const LABELS = {
     secret: '秘匿値',
     email: 'メールアドレス',
@@ -171,7 +173,9 @@
       case 'submit':
         return 'フォームを送信する';
       case 'tool': {
-        const args = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
+        const json = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
+        // The sentence shows the arguments up to argsInSentence; the Gherkin table keeps them all.
+        const args = [...json].length > LIMITS.argsInSentence ? `${[...json].slice(0, LIMITS.argsInSentence).join('')}…` : json;
         return `WebMCP ツール「${step.tool}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':

@@ -285,24 +285,33 @@ test('an argument tree far too deep is refused without rendering it (rows E1, E3
   assert.ok(problems.some((p) => p.problem === 'too deep'));
 });
 
-test('the largest recording the limits allow still passes the check and fits the totals (rows E1, E3, E4; review new R5)', async () => {
+test('the largest recording the limits allow, with the worst characters, passes and fits the totals (rows E1, E3, E4; review R13)', () => {
   const { LIMITS, TOTALS } = require('../shared/limits.js');
-  const url = `https://site-1.invalid/${'a/'.repeat((LIMITS.url - 24) / 2)}`.slice(0, LIMITS.url);
-  const long = (n) => 'あ'.repeat(n);
-  const args = Object.fromEntries(Array.from({ length: LIMITS.argKeys }, (_, i) => [
-    `${String(i).padStart(2, '0')}${'k'.repeat(LIMITS.argKey - 2)}`,
-    Array.from({ length: LIMITS.argLeaves / LIMITS.argKeys }, () => ({ treatment: 'kept', field: 'arg', text: long(LIMITS.kept.arg) }))
+  // Characters that escapes make longest: a control character (\u0001 in JSON), a quote,
+  // a backslash and a pipe (doubled again in a Gherkin cell). Names and notes are one line.
+  const worst = (n, control = true) => Array.from({ length: n }, (_, i) => (control ? '\u0001"\\|' : '"\\|')[i % (control ? 4 : 3)]).join('');
+  const url = `https://site-1.invalid/${'a/'.repeat(LIMITS.url)}`.slice(0, LIMITS.url);
+  const args = Object.fromEntries(Array.from({ length: LIMITS.argLeaves }, (_, i) => [
+    `${String(i).padStart(2, '0')}${worst(LIMITS.argKey - 2)}…`,
+    { treatment: 'kept', field: 'arg', text: `${worst(LIMITS.kept.arg)}…` }
   ]));
-  const steps = Array.from({ length: LIMITS.steps }, (_, i) => (i % 2
-    ? { type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: long(LIMITS.tool), ok: true, args }
-    : { type: 'click', t: i, env: 'standard', source: 'user', url,
-      target: { role: 'button', tag: 'button', name: long(LIMITS.name), selector: 's'.repeat(LIMITS.selector), href: url } }));
+  const kinds = [
+    (i) => ({ type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: `${worst(LIMITS.tool, false)}…`, ok: true, args }),
+    (i) => ({ type: 'click', t: i, env: 'standard', source: 'user', url,
+      target: { role: 'button', tag: 'button', name: `${worst(LIMITS.name, false)}…`, selector: worst(LIMITS.selector, false), href: url } }),
+    (i) => ({ type: 'input', t: i, env: 'standard', source: 'user', url, target: { role: 'textbox', name: `${worst(LIMITS.name, false)}…` },
+      value: { treatment: 'kept', field: 'text', text: `${worst(LIMITS.kept.text)}…` } }),
+    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…` })
+  ];
+  const steps = Array.from({ length: LIMITS.steps }, (_, i) => kinds[i % kinds.length](i));
   const big = { ...clone(rec), startUrl: url, steps, webmcpTools: {} };
   const markdown = D.toMarkdown(D.buildReproduction(big));
-  assert.ok([...markdown].length <= TOTALS.markdown);
+  assert.ok([...markdown].length <= TOTALS.markdown, `markdown ${markdown.length} > ${TOTALS.markdown}`);
   const payload = P.buildPayload(big, { generator: 'template', markdown }, {});
+  assert.ok([...payload.reproduction.gherkin].length <= TOTALS.gherkin, `gherkin ${payload.reproduction.gherkin.length} > ${TOTALS.gherkin}`);
   assert.deepEqual(P.checkPayload(payload), []);
-  assert.ok(Buffer.byteLength(JSON.stringify(payload)) <= TOTALS.payloadBytes);
+  const bytes = Buffer.byteLength(JSON.stringify(payload));
+  assert.ok(bytes <= TOTALS.payloadBytes, `${bytes} > ${TOTALS.payloadBytes}`);
 });
 
 test('a panel note takes its environment from the recording when the payload is built (M1, E2; review R12)', () => {
