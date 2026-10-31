@@ -4,8 +4,8 @@
 
 | 番号 | 題 | 状態 |
 | --- | --- | --- |
-| [0001](0001-commercial-environment-policy.md) | 商用環境だけを厳格に扱う伏せ方 | 採用 |
-| [0002](0002-why-review-did-not-converge.md) | 伏せる規則のレビューが収束しなかった真因と対策 | 採用 |
+| [0001](0001-commercial-environment-policy.md) | 商用環境だけを厳格に扱う伏せ方 | 採用・未実装 |
+| [0002](0002-why-review-did-not-converge.md) | 伏せる規則のレビューが収束しなかった真因と対策 | 採用（対策 2〜5 は案） |
 
 書き方:
 
