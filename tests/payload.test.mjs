@@ -427,3 +427,44 @@ test('the exits refuse what the masking cannot make: a personal card, a scheme t
     assert.equal(P.checkPayload(build(r)).some((p) => p.problem === 'key too long'), !ok, suffix);
   }
 });
+
+test('one-line fields refuse a line break, a control or an invisible character at the safety gate (E7, T1-T3, W6, M3; review R26)', () => {
+  const set = {
+    name: (r, v) => { r.steps[1].target.name = v; },
+    selector: (r, v) => { r.steps[1].target.selector = v; },
+    note: (r, v) => { r.steps[5].note = v; },
+    tool: (r, v) => { r.steps[4].tool = v; },
+    toolList: (r, v) => { r.webmcpTools['https://site-1.invalid'] = [v]; }
+  };
+  for (const [field, put] of Object.entries(set)) {
+    for (const bad of ['a\nThen b', 'a\u0007b', 'a b', 'a​b', 'a‮b']) {
+      const r = clone(rec);
+      put(r, bad);
+      assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'not one line'), `${field} ${JSON.stringify(bad)}`);
+    }
+  }
+  const env = P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser: 'Chrome\n141' });
+  assert.ok(P.checkPayload(env).some((p) => p.path === 'recording.environment.browser' && p.problem === 'not one line'));
+});
+
+test('a selector never carries a placeholder of ours (T3, E6; review R26)', () => {
+  const r = clone(rec);
+  r.steps[1].target.selector = '#[[secret]]';
+  assert.ok(P.checkPayload(regen(build(r))).some((p) => p.path.endsWith('.target.selector') && p.problem === 'unexpected form'));
+});
+
+test('checkCanonical finds what is safe but not what the masking writes (E8; review R26)', () => {
+  assert.deepEqual(P.checkCanonical(build(rec)), []);
+  const r = clone(rec);
+  r.steps[0].url = '[[url:https]]';
+  r.steps[4].args = { ['あ'.repeat(38) + '-21']: typed.redacted('arg', 'v') };
+  r.steps[5].note = 'é';
+  r.steps[2].url = 'HTTPS://SITE-1.INVALID:443/';
+  r.webmcpTools = { 'https://site-1.invalid': ['a'], 'https://site-1.invalid/': ['b'] };
+  const payload = build(r);
+  payload.recording.webmcpTools[1].site = 'https://site-1.invalid';
+  const problems = P.checkCanonical(payload).map((p) => p.problem);
+  for (const problem of ['http placeholder', 'key suffix past the key count', 'not NFKC', 'not the parsed URL', 'site twice']) {
+    assert.ok(problems.includes(problem), problem);
+  }
+});

@@ -2,8 +2,9 @@
  * op-scribe - every length and count limit, and the fields of each step kind, in one place.
  *
  * The masking (shared/sanitize.js, shared/record.js) cuts to these limits and
- * the independent check (shared/payload.js) accepts exactly what the cut can
- * produce. Defining them twice let the two drift apart: the masking made
+ * the independent check (shared/payload.js) accepts every length the cut can
+ * produce - a safe superset of what the masking writes, not the same set
+ * (ADR 0003, E1; E8 checks the masking's own form). Defining them twice let the two drift apart: the masking made
  * values the check then refused (review of #22). A cut text gets "…"
  * appended, so it may be one character longer than its limit (cut()).
  *

@@ -109,5 +109,8 @@ test('every payload built from generated page input passes the independent check
     const payload = P.buildPayload(rec, { generator: 'manual', markdown: D.toMarkdown(D.buildReproduction(rec)) }, { browser: S.cleanLine(g.text(100), { keywords: settings.keywords, maxLength: 60 }).text, language: 'ja' });
     const problems = P.checkPayload(JSON.parse(JSON.stringify(payload)));
     assert.deepEqual(problems, [], `seed ${seed}: ${JSON.stringify(problems.slice(0, 3))}`);
+    // And in the form the masking writes (E8): the producer has not drifted.
+    const drift = P.checkCanonical(payload);
+    assert.deepEqual(drift, [], `seed ${seed}: ${JSON.stringify(drift.slice(0, 3))}`);
   }
 });

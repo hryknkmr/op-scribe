@@ -28,7 +28,10 @@
 
   const str = (row, max, re) => ({ type: 'string', row, max, re });
   // A text the masking cuts at n: longer than n only with the "…" the cut appends.
-  const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
+  // Always one line, with nothing hidden (E7, safety): a line break forges a Gherkin step
+  // or a Markdown heading, and an invisible or bidi control hides text from the reviewer.
+  const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n, line: true });
+  const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/u;
   const overCut = (text, n) => [...text].length > n && !text.endsWith('…');
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   const URL_VALUE = str('U1', LIMITS.url);
@@ -40,7 +43,8 @@
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       name: opt(cutStr('T2', LIMITS.name)),
-      selector: opt(cutStr('T3', LIMITS.selector)),
+      // Page text with "[[" is escaped by the masking: a "[[" here would forge a placeholder finalScan skips.
+      selector: opt({ ...cutStr('T3', LIMITS.selector), re: /^(?![\s\S]*\[\[)/ }),
       href: opt(URL_VALUE)
     }
   };
@@ -296,6 +300,7 @@
         if (value === null && node.nullable) return undefined;
         if (typeof value !== 'string') return bad('not a string');
         if ([...value].length > node.max || (node.cutAt && overCut(value, node.cutAt))) return bad('too long');
+        if (node.line && NOT_ONE_LINE.test(value)) return bad('not one line');
         if (node.re && !node.re.test(value)) return bad('unexpected form');
         // A date must exist, not only have the right digits (row M2).
         if (node.re === ISO) {
@@ -407,7 +412,56 @@
     return problems;
   }
 
-  const api = { SCHEMA, POLICY, SHAPE, shapeRows, buildPayload, checkPayload };
+  /**
+   * Row E8: the form the masking produces, apart from the safety gate above.
+   * checkPayload accepts a safe superset; this finds a value that is safe but
+   * that the masking would not have written - a sign the producer drifted.
+   * Findings are LOW (ADR 0003): the tests run it on every generated payload,
+   * the exits do not stop on it.
+   */
+  function checkCanonical(payload) {
+    const problems = [];
+    const bad = (path, problem) => problems.push({ path, problem });
+    const isTypedLeaf = (v) => isObject(v) && typeof v.treatment === 'string';
+    const walk = (v, path) => {
+      if (typeof v === 'string') {
+        // The "…" a cut appends is ours and is not NFKC ("..."); everything before it is.
+        const body = v.replace(/…$/u, '');
+        if (body.normalize('NFKC') !== body) bad(path, 'not NFKC');
+        const scheme = /^\[\[url:([^\]]*)\]\]$/.exec(v)?.[1];
+        // scrubUrl keeps http(s) URLs as URLs; only other schemes become a placeholder (U2).
+        if (scheme === 'http' || scheme === 'https') bad(path, 'http placeholder');
+        else if (/^https?:\/\//i.test(v)) {
+          // The URL parser's own form: lowercase scheme and host, no default port.
+          try {
+            const u = new URL(v);
+            if (!v.startsWith(`${u.protocol}//${u.host}`)) bad(path, 'not the parsed URL');
+          } catch { bad(path, 'not a URL'); }
+        }
+      } else if (Array.isArray(v)) {
+        v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      } else if (isObject(v)) {
+        Object.entries(v).forEach(([k, x]) => walk(x, `${path}.${k}`));
+      }
+    };
+    walk(payload?.recording, 'recording');
+    // A key the masking made unique ends in -2 .. -argKeys, at its cut length (W5).
+    const keys = (node, path) => {
+      if (!isObject(node) && !Array.isArray(node)) return;
+      if (isTypedLeaf(node)) return;
+      for (const [k, v] of Object.entries(node)) {
+        const n = Number(/-(\d+)$/.exec(k)?.[1]);
+        if (!Array.isArray(node) && [...k].length === cut(LIMITS.argKey) && n > LIMITS.argKeys) bad(`${path}.${k}`, 'key suffix past the key count');
+        keys(v, `${path}.${k}`);
+      }
+    };
+    (payload?.recording?.steps || []).forEach((step, i) => keys(step.args, `recording.steps[${i}].args`));
+    const sites = (payload?.recording?.webmcpTools || []).map((w) => w.site);
+    sites.forEach((site, i) => { if (sites.indexOf(site) !== i) bad(`recording.webmcpTools[${i}].site`, 'site twice'); });
+    return problems;
+  }
+
+  const api = { SCHEMA, POLICY, SHAPE, shapeRows, buildPayload, checkPayload, checkCanonical };
   root.OpScribePayload = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
