@@ -346,3 +346,18 @@ test('an id inside a path segment is partly hidden, and WebMCP argument keys are
   const findings = S.finalScan({ steps: [{ key: 'Enter', args: { code: 'abc123', privacy: { redactions: { otp: 'x' } } } }], recording: { privacy: { redactions: { secret: 1 } } } });
   assert.deepEqual(findings.map((f) => f.path), ['steps[0].args.code', 'steps[0].args.privacy.redactions.otp']);
 });
+
+test('compound credential names, unclosed quotes, and URLs in text checked at the exit like scrubUrl', () => {
+  for (const name of ['pass', 'userpass', 'verificationcode']) assert.equal(S.maskFieldValue('hunter2', { type: 'text', name }).value, '[[secret]]', name);
+  assert.equal(S.maskFieldValue('123', { name: 'securitycode' }).value, '[[card]]');
+  for (const name of ['compass', 'passport']) assert.equal(S.maskFieldValue('x', { name }).value, 'x', name);
+  assert.equal(S.scrubText('password="hunter').text, 'password="[[secret]]');
+  for (const t of ['https://example.com/users/@someone/orders/123456', 'https://example.com/?id=abc123', 'https://example.com/?phone=1234']) {
+    assert.equal(S.finalScan({ t }).length, 1, t);
+  }
+  // What the filter itself wrote passes again unchanged.
+  const ctx = { hostAllowlist: ['example.com'] };
+  const once = S.scrubUrl('https://example.com/users/@someone/orders/123456?id=abc123&email=a%40example.com&code=x', ctx).url;
+  assert.equal(S.scrubUrl(once, ctx).url, once);
+  assert.deepEqual(S.finalScan({ once }), []);
+});

@@ -97,14 +97,16 @@
       // An unquoted value is taken up to the next space.
       kind: 'secret',
       // Keys in any letters: 認証コード: 123456.
-      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s"'&,}]+)/gu,
+      re: /(?<![\p{L}\p{N}_.-])(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("[^"]*"?|'[^']*'?|[^\s"'&,}]+)/gu,
       accept: (match) => {
         const [, key, , value] = match.match(/^(\p{L}[\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
         return ['secret', 'card'].includes(classifyKey(key)) && !/^["']?\[\[/.test(value);
       },
       replace: (match, key, sep, value) => {
+        // An unclosed quote (password="hunter) takes the rest of the text: it is all the value as far as can be told.
         const quote = /^["']/.test(value) ? value[0] : '';
-        return `${key}${sep}${quote}${mark('secret')}${quote}`;
+        const closed = quote && value.length > 1 && value.endsWith(quote);
+        return `${key}${sep}${quote}${mark('secret')}${closed ? quote : ''}`;
       }
     },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
@@ -266,7 +268,7 @@
   const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
   // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
-  const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)/;
+  const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)|^pass$|^(?:user|login|admin|account|new|old|current|confirm|db)pass$|^(?:verification|verify|confirm|confirmation|auth|access|login|sms|backup|recovery|onetime|otp|mfa|pin)code$/;
   const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session'];
   const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
     'sms', 'backup', 'recovery', 'time', 'otp', 'mfa', 'pin'];
@@ -292,7 +294,7 @@
     if (!words.length) return null;
     const has = (list) => words.some((w) => list.includes(w));
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
-    if (JA_CARD.test(text) || has(['cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber']) || pair(['card', 'cc'], 'number')
+    if (JA_CARD.test(text) || has(['cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'securitycode', 'cardcode']) || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
@@ -330,7 +332,15 @@
   }
 
   /** A value whose key or field says what it is (classifyKey's kinds), under the policy for that kind. */
+  /**
+   * A value this filter already hid: a placeholder, or the shape a partial mask leaves (ab**23, s***@e***.com,
+   * ***-****-5678). Kept as it is, so that a recording passed through again (the worker, the final scan) is stable.
+   */
+  const alreadyHidden = (value) => /^\[\[[^\]]+\]\]$/.test(value) || /^[^*\s]{0,4}\*+[^*\s]{0,4}$/.test(value)
+    || /^[^\s@*]?\*{3}@[^\s@*]?\*{3}(?:\.[^\s@*]+)?$/.test(value) || /^[+\s()*-]*\*[+\d\s()*-]*$/.test(value);
+
   function maskByKind(kind, text, opts = {}) {
+    if (kind && alreadyHidden(String(text).trim())) return { value: text, kinds: [] };
     if (kind === 'secret' || kind === 'card') return { value: mark(kind), kinds: [kind] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: opts.maxLength, hosts: opts.hosts });
     // A contact field keeps its value only when the whole of it was recognized as one address or number
@@ -412,6 +422,7 @@
   function scrubSegment(segment, ctx, kinds) {
     let decoded = segment;
     try { decoded = decodeURIComponent(segment); } catch { /* keep raw */ }
+    if (alreadyHidden(decoded.replace(/^@/, ''))) return segment;
     if (decoded.startsWith('@') && decoded.length > 1) {
       kinds.push('id');
       return `@${partialId(decoded.slice(1), 1, 1)}`;
@@ -525,18 +536,16 @@
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const credential = (key, options) => ['secret', 'card'].includes(classifyKey(key, options));
-    // Credential parameters of URLs written in the text (an edited ?code=abc123): what scrubUrl would hide.
+    // URLs written in the text (an edited ?code=abc123, /orders/123456): whatever scrubUrl would still hide,
+    // except the host, which only the recording can place (its aliases are scanned as keywords).
     const urlParams = (text, path) => {
       for (const match of String(text).match(TEXT_URL) || []) {
-        let url;
-        try { url = new URL(match.startsWith('//') ? `https:${match}` : match); } catch { continue; }
-        const fragment = url.hash.slice(1);
-        const query = fragment.includes('?') ? fragment.slice(fragment.indexOf('?') + 1) : fragment.includes('=') ? fragment : '';
-        for (const [k, v] of [...url.searchParams, ...new URLSearchParams(query)]) {
-          if (v && v.replace(PLACEHOLDER, '').trim() && credential(k, { protocol: true })) {
-            findings.push({ path: path || '(root)', kinds: ['secret'] });
-            return;
-          }
+        const relative = match.startsWith('//');
+        const kinds = scrubUrl(relative ? `https:${match}` : match, { hostAllowlist: [], keywords: opts.keywords }).kinds
+          .filter((kind) => kind !== 'host');
+        if (kinds.length) {
+          findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
+          return;
         }
       }
     };
