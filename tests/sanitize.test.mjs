@@ -301,3 +301,18 @@ test('short credentials, nested credentials, user names, internal addresses and 
   assert.equal(S.scrubText('alice@intranet or bob@example.com').text, 'a***@i*** or b***@e***.com');
   assert.equal(S.scrubText('see ftp://private.internal.test/a', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'see [[url:ftp]]');
 });
+
+test('an unknown [[...]] cannot split what the final scan looks for', () => {
+  const findings = S.finalScan({ a: 'Ac[[foo]]me', b: 'user[[foo]]@example.com', c: 'pass[[foo]]word=hunter22' }, { keywords: ['Acme'] });
+  assert.deepEqual(findings.map((f) => f.path), ['a', 'b', 'c']);
+});
+
+test('opaque mixed ids in a path, phone numbers in common notations, and only the real redaction counts skipped', () => {
+  assert.equal(S.scrubUrl('https://example.com/users/abc123def456ghi7', { hostAllowlist: ['example.com'] }).url, 'https://example.com/users/ab******i7');
+  for (const [input, output] of [['(415) 555-2671', '(***) ***-2671'], ['415-555-2671', '***-***-2671'], ['03 1234 5678', '** **** 5678'], ['(03) 1234-5678', '(**) ****-5678']]) {
+    assert.equal(S.scrubText(input).text, output);
+  }
+  for (const kept of ['2026-10-31', '1 000 000 円']) assert.equal(S.scrubText(kept).text, kept);
+  assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { secret: 2 } } }, steps: [{ args: { redactions: { token: 'abc' } } }] })
+    .map((f) => f.path), ['steps[0].args.redactions.token']);
+});

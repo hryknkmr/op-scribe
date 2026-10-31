@@ -109,6 +109,8 @@
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g, replace: partialPhone },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
+    // Three groups with an area code in brackets or set apart: (415) 555-2671, 415-555-2671, 03 1234 5678, (03) 1234-5678.
+    { kind: 'phone', re: /(?<![\d(-])(?:\(\d{2,4}\)\s?|\d{2,4}[ -])\d{3,4}[ -]\d{4}(?![\d-])/g, replace: partialPhone },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, replace: (m) => partialId(m, 4, 4) },
     // IPv6 first, so one ending in an IPv4 address (2001:db8::192.0.2.33) is taken whole.
     // Written out, shortened with ::, or ending in IPv4. Three groups of digits (10:30:00) is a time.
@@ -381,7 +383,8 @@
     return aliases[origin];
   }
 
-  const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36})$/i;
+  // Digits, hex, a UUID, or an opaque token of 16+ letters mixed with digits (abc123def456ghi7).
+  const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36}|(?=.*\d)(?=.*[a-z])[a-z0-9_-]{16,})$/i;
 
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
@@ -492,7 +495,9 @@
     const findings = [];
     const check = (text, path) => {
       // Also with the placeholders taken out: text a page wrapped around one (Ac[[secret]]me) reads as a whole.
-      const kinds = [' ', ''].flatMap((gap) => scrubText(String(text).replace(PLACEHOLDER, gap), { keywords: opts.keywords }).kinds);
+      // And with any [[...]] taken out, known or not: an unknown one (Ac[[foo]]me) must not split a word either.
+      const kinds = [String(text).replace(PLACEHOLDER, ' '), String(text).replace(PLACEHOLDER, ''), String(text).replace(/\[\[[^\]]*\]\]/g, '')]
+        .flatMap((t) => scrubText(t, { keywords: opts.keywords }).kinds);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const credential = (key, options) => ['secret', 'card'].includes(classifyKey(key, options));
@@ -513,8 +518,9 @@
     };
     // under: the credential kind of a key above, which covers everything nested in it.
     const walk = (v, path, key = '', under = null) => {
-      // Counts of what this filter hid, keyed by kind (secret: 2): not values.
-      if (key === 'redactions') return undefined;
+      // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only there, and only numbers.
+      if (/(?:^|\.)privacy\.redactions$/.test(path) && v && typeof v === 'object'
+          && Object.values(v).every((n) => Number.isInteger(n))) return undefined;
       const kind = under || (key && credential(key) ? classifyKey(key) : null);
       // A value under a key naming a credential is one, unless it is only a placeholder of this filter.
       if (kind && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
