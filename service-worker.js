@@ -198,7 +198,7 @@ function cleanStep(raw, rec, settings, origin = null) {
     step.valueClass = VALUE_CLASSES.has(raw.valueClass) ? raw.valueClass : 'text';
     const value = String(raw.value ?? '');
     // On production free text arrives as its length only ([[text:12]]); anything else is not kept.
-    if (commercial && step.valueClass === 'text' && value && !isPlaceholder(value)) step.value = '[[v]]';
+    if (commercial && !['search', 'choice'].includes(step.valueClass) && value && !isPlaceholder(value)) step.value = '[[v]]';
     // A contact or id field's value is masked for its kind again here (the content script's partial mask is kept).
     else if (['email', 'phone', 'id', 'secret', 'card'].includes(step.valueClass)) {
       const r = maskByKind(step.valueClass, value, { keywords: policy.keywords, maxLength: 200, trustHidden: true });
@@ -327,7 +327,8 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings));
+    // Judged by the asking page itself, not by the step before it.
+    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, sender.origin || sender.url));
     return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };

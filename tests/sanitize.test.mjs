@@ -474,7 +474,7 @@ test('production (docs/adr/0001): free text is its length only; search boxes by 
   assert.equal(S.maskFieldValue('shoes', { name: 'q', search: true }, strict).value, 'shoes');
   assert.equal(S.maskFieldValue('shoes', { name: 'q' }, strict).value, '[[text:5]]');
   assert.equal(S.maskFieldValue('Japan', { tag: 'select', type: 'select' }, strict).value, 'Japan');
-  assert.equal(S.maskFieldValue('a@example.com', { type: 'email' }, strict).value, 'a***@e***.com');
+  assert.equal(S.maskFieldValue('a@example.com', { type: 'email' }, strict).value, '[[text:13]]');
   assert.equal(S.maskFieldValue('Taro', { name: 'full_name' }).value, 'Taro');
   assert.deepEqual(S.maskArgs({ q: 'shoes', count: 3, otp: '1' }, strict), { q: '[[text:5]]', count: 3, otp: '[[secret]]' });
 });
@@ -582,4 +582,17 @@ test('the local part is read whole with its symbols, and only the filter\'s own 
     assert.deepEqual(S.finalScan({ output }), [], output);
   }
   assert.equal(S.finalScan({ raw: 'verysecret*tag@example.com' }).length, 1);
+});
+
+test('on production every typed value but a search box and a chosen option is its length, contact fields too', () => {
+  const strict = { strict: true };
+  assert.equal(S.maskFieldValue('a@example.com', { type: 'email' }, strict).value, '[[text:13]]');
+  assert.equal(S.maskFieldValue('090-1234-5678', { type: 'tel' }, strict).value, '[[text:13]]');
+  assert.equal(S.maskFieldValue('hunter2', { type: 'password' }, strict).value, '[[secret]]');
+  const findings = S.finalScan({ steps: [
+    { privacy: { profile: 'commercial' }, valueClass: 'email', value: 'a***@e***.com' },
+    { privacy: { profile: 'commercial' }, valueClass: 'text', value: ['Taro Yamada'] },
+    { privacy: { profile: 'commercial' }, valueClass: 'email', value: '[[text:13]]' }
+  ] });
+  assert.deepEqual(findings.map((f) => f.path), ['steps[0].value', 'steps[1].value']);
 });

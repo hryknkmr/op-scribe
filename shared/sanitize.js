@@ -448,8 +448,9 @@
     if (cls.kind === 'ignore') return null;
     const text = raw == null ? '' : String(raw);
     if (!text) return { value: '', kinds: [] };
-    // On a production host (opts.strict) typed text is kept as its length only.
-    if (opts.strict && cls.kind === 'text') return { value: mark(`text:${[...text].length}`), kinds: ['text'] };
+    // On a production host (opts.strict) every typed value but a search box's and a chosen option's is kept as its
+    // length only: contact details and ids too (credentials and card data are replaced whole as everywhere).
+    if (opts.strict && !['search', 'choice', 'secret'].includes(cls.kind)) return { value: mark(`text:${[...text].length}`), kinds: ['text'] };
     const kind = cls.kind === 'secret' ? cls.label : ['search', 'choice', 'text'].includes(cls.kind) ? null : cls.kind;
     return maskByKind(kind, text, { keywords: opts.keywords, maxLength: 200 });
   }
@@ -788,8 +789,9 @@
         if (['email', 'phone', 'id'].includes(v.valueClass) && typeof v.value === 'string' && v.value.trim() && !alreadyHidden(v.value.trim())) {
           findings.push({ path: path ? `${path}.value` : 'value', kinds: [v.valueClass] });
         }
-        if (v.privacy?.profile === 'commercial' && typeof v.value === 'string' && v.value
-            && !['search', 'choice'].includes(v.valueClass) && !isPlaceholder(v.value) && !alreadyHidden(v.value.trim())) {
+        if (v.privacy?.profile === 'commercial' && v.value !== undefined && v.value !== ''
+            && !(['search', 'choice'].includes(v.valueClass) && typeof v.value === 'string')
+            && !(typeof v.value === 'string' && isPlaceholder(v.value))) {
           findings.push({ path: path ? `${path}.value` : 'value', kinds: ['text'] });
         }
         for (const [k, item] of Object.entries(v)) {

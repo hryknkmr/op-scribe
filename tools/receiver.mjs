@@ -46,6 +46,12 @@ function structureProblem(payload) {
     || (Array.isArray(recording.webmcpTools) && recording.webmcpTools.map((entry) => extra(entry, ['site', 'tools'])
       || (typeof entry?.site !== 'string' || !Array.isArray(entry.tools) || entry.tools.some((t) => typeof t !== 'string') ? 'webmcpTools[]' : '')).find(Boolean));
   if (deeper) return `unknown field: ${deeper}`;
+  // And of the types buildPayload writes: text where text is written, so nothing hides in an array or an object.
+  const TEXT_FIELDS = ['type', 'url', 'value', 'valueClass', 'key', 'tool', 'note', 'source'];
+  const badType = recording.steps.find((step) => TEXT_FIELDS.some((field) => step[field] !== undefined && typeof step[field] !== 'string')
+    || (step.target && Object.values(step.target).some((v) => typeof v !== 'string'))
+    || (step.args !== undefined && (typeof step.args !== 'object' || step.args === null)));
+  if (badType) return 'a step field of the wrong type';
   if (!Array.isArray(recording.steps)) return 'steps missing';
   if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';
   if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';
