@@ -568,3 +568,9 @@ test('a scheme-relative URL inside a path or a fragment is read as a URL, and es
   assert.equal(S.finalScan({ u: 'https://example.com/#/redirect//private.internal.test/login' }, { hostAllowlist: ['example.com'] }).length, 1);
   assert.equal(S.scrubText('{"password":"abc\\"suffix","q":"x"}').text, '{"password":"[[secret]]","q":"x"}');
 });
+
+test('a page\'s own scheme name never becomes a trusted placeholder, and escaped quotes in a quoted local part', () => {
+  assert.equal(S.scrubText('open acmesecret://host/path and ftp://x.test/a', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'open [[url:other]] and [[url:ftp]]');
+  assert.equal(S.finalScan({ a: '[[url:acmesecret]]' }, { keywords: ['acmesecret'] }).length, 1);
+  assert.equal(S.scrubText('"john\\"doe"@example.com').text, '"j***"@e***.com');
+});

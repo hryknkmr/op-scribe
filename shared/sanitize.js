@@ -25,7 +25,9 @@
    * final scan; anything else written as [[...]] (by a page, the model or a
    * person editing the text) is scanned like ordinary text.
    */
-  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|text:\d+|file:\d+|url:[a-z-]+)\]\]/g;
+  // url:… names only schemes from this list (URL_SCHEMES): a page's own scheme name never becomes trusted text.
+  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|text:\d+|file:\d+|url:(?:data|javascript|vbscript|mailto|tel|file|ftp|ws|wss|blob|invalid|other))\]\]/g;
+  const URL_SCHEMES = new Set(['data', 'javascript', 'vbscript', 'mailto', 'tel', 'file', 'ftp', 'ws', 'wss', 'blob']);
 
   /** Exactly one placeholder this filter writes. A [[...]] of any other kind is the page's text and is read as such. */
   const isPlaceholder = (value) => new RegExp(`^${PLACEHOLDER.source}$`).test(String(value));
@@ -134,7 +136,7 @@
     { kind: 'email', re: /[\p{L}\p{N}._%+-]+@\[(?:IPv6:)?[0-9A-Fa-f:.]+\]/gu, replace: (m) => `${[...m][0]}***@[***]` },
     // A quoted local part: "john doe"@example.com.
     // Not one this filter already wrote ("j***"@e***.com).
-    { kind: 'email', re: /"(?![^"]*\*\*\*")[^"\n@]{1,64}"@(?![\p{L}\p{N}-]*\*)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
+    { kind: 'email', re: /"(?![^"]*\*\*\*")(?:[^"\\\n@]|\\.){1,64}"@(?![\p{L}\p{N}-]*\*)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
@@ -615,7 +617,8 @@
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       // Hidden whole; the kind tells the final scan an unhidden one (ftp://, file://) is there.
-      return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds: ['url'] };
+      const scheme = url.protocol.replace(':', '').toLowerCase();
+      return { url: mark(`url:${URL_SCHEMES.has(scheme) ? scheme : 'other'}`), kinds: ['url'] };
     }
     // example.test. (the DNS root dot) is the same host as example.test: one alias, and found in text without the dot.
     if (url.hostname.endsWith('.')) url.hostname = url.hostname.replace(/\.+$/, '');

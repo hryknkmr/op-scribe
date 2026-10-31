@@ -511,8 +511,10 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     // Settings saved before production hosts existed were strict everywhere: say once that this changed.
     // Shown in the recording section, which is open, until the settings are saved once.
     if (stored[SETTINGS_KEY] && !('productionHosts' in stored[SETTINGS_KEY])) {
-      ui.policyNotice.textContent = '入力の扱いが変わりました。以前は全サイトで自由入力を文字数だけにしていましたが、今は「商用環境のホスト」に登録したホストだけです。'
-        + '「プライバシーと送信先」で登録して保存してください';
+      ui.policyNotice.textContent = stored[SETTINGS_KEY].privacyLevel === 'balanced'
+        ? '入力の扱いが変わりました。「商用環境のホスト」に登録したホストでは、自由入力を文字数だけにします。「プライバシーと送信先」で登録して保存してください'
+        : '入力の扱いが変わりました。以前は全サイトで自由入力を文字数だけにしていましたが、今は「商用環境のホスト」に登録したホストだけです。'
+          + '「プライバシーと送信先」で登録して保存してください';
       ui.policyNotice.hidden = false;
     }
     const draft = (await chrome.storage.session.get(DRAFT_KEY))[DRAFT_KEY];
