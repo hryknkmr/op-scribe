@@ -48,7 +48,8 @@
    * nested (an argument too deep) and value (an argument that is neither text
    * nor a number) are kinds of their own, not counted in privacy.redactions.
    */
-  const PII_KINDS = ['email', 'phone', 'card', 'personal'];
+  // A card field is a secret field (I3), never a personal one: classifyField decides it first.
+  const PII_KINDS = ['email', 'phone', 'personal'];
   const TYPED_SCHEMA = Object.freeze({
     kept: Object.freeze(['text', 'choice', 'search', 'arg']),
     length: Object.freeze({ text: ['text'], arg: ['text'], pii: PII_KINDS }),

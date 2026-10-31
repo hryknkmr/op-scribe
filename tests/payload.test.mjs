@@ -409,3 +409,21 @@ test('a personal field keeps its length only in a commercial step (row E2, I4; r
   r.steps[1].value = typed.redacted('pii', 'email');
   assert.ok(!P.checkPayload(regen(build(r))).some((p) => p.path.startsWith('recording.steps[1]')));
 });
+
+test('the exits refuse what the masking cannot make: a personal card, a scheme that is not one, a key suffix below 2 (E1, E2; review R25)', () => {
+  const card = clone(rec);
+  card.steps[1].value = { treatment: 'length', field: 'pii', kind: 'card', length: 16 };
+  assert.ok(P.checkPayload(regen(build(card))).some((p) => p.problem === 'bad kind'));
+
+  const url = clone(rec);
+  url.steps[0].url = '[[url:1]]';
+  url.startUrl = '[[url:1]]';
+  assert.ok(P.checkPayload(regen(build(url))).some((p) => p.path === 'recording.steps[0].url'));
+  assert.equal(S.scrubUrl('1:').url, '[[url:invalid]]');
+
+  for (const [suffix, ok] of [['-0', false], ['-1', false], ['-01', false], ['-2', true], ['-10', true]]) {
+    const r = clone(rec);
+    r.steps[4].args = { ['あ'.repeat(41 - suffix.length) + suffix]: typed.redacted('arg', 'v') };
+    assert.equal(P.checkPayload(build(r)).some((p) => p.problem === 'key too long'), !ok, suffix);
+  }
+});

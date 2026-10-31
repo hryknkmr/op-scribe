@@ -26,7 +26,7 @@
   // so "[[text:09012345678]]" written by hand is scanned like any other text.
   // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
   const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
-  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z0-9+.-]{1,16})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z][a-z0-9+.-]{0,15})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
   const placeholderKinds = (text) => [...String(text).matchAll(OWN_PLACEHOLDER)].map(([m]) => {
@@ -181,7 +181,6 @@
   function piiLabel(hints, type) {
     if (type === 'email' || /mail|メール/i.test(hints)) return 'email';
     if (type === 'tel' || /phone|tel|mobile|fax|電話|携帯/i.test(hints)) return 'phone';
-    if (/card|カード/i.test(hints)) return 'card';
     return 'personal';
   }
 

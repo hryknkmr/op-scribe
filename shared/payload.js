@@ -253,7 +253,7 @@
       const entries = Object.entries(node);
       if (entries.length > LIMITS.argKeys) problems.push({ path, problem: 'too many keys' });
       for (const [k, v] of entries) {
-        if ([...k].length > cut(LIMITS.argKey) || (overCut(k, LIMITS.argKey) && !/-\d+$/.test(k))) problems.push({ path, problem: 'key too long' });
+        if ([...k].length > cut(LIMITS.argKey) || (overCut(k, LIMITS.argKey) && !/-(?:[2-9]|[1-9]\d+)$/.test(k))) problems.push({ path, problem: 'key too long' });
         checkArgs(v, env, `${path}.${k}`, problems, depth + 1);
       }
       return;
@@ -339,7 +339,8 @@
 
   const SAFE_VALUE = /^[\w.-]{1,24}$/;
   const SPA_ROUTE = /^#\/[\w/-]{0,60}$/;
-  const PLACEHOLDER_URL = /^\[\[url:[a-z0-9+.-]{1,16}\]\]$/;
+  // A scheme starts with a letter (scrubUrl writes the parsed one, or invalid / none).
+  const PLACEHOLDER_URL = /^\[\[url:[a-z][a-z0-9+.-]{0,15}\]\]$/;
 
   /**
    * Rows U1-U4, U7, U8: a URL value is either the placeholder for a URL that was
