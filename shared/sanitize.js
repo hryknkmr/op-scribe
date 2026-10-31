@@ -79,10 +79,24 @@
 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // The names inside this extension's placeholders ([[email]], [[text:3]] ...).
+  const PLACEHOLDER_WORDS = ['secret', 'card', 'email', 'phone', 'personal', 'postal', 'id', 'ip', 'number',
+    'masked', 'nested', 'value', 'text', 'file', 'url', 'invalid', 'none', 'long'];
+
+  /**
+   * Whether a keyword is used (row K2): two characters or more, and not part of
+   * a placeholder name. A keyword such as "mail" cannot tell a real [[email]]
+   * from one written by hand, so it is not used rather than used half way.
+   */
+  function usableKeyword(raw) {
+    const k = String(raw).normalize('NFKC').trim();
+    return [...k].length >= 2 && !PLACEHOLDER_WORDS.some((w) => w.includes(k.toLowerCase()));
+  }
+
   function keywordPattern(keywords) {
     const list = (keywords || [])
       .map((k) => String(k).normalize('NFKC').trim())
-      .filter((k) => k.length >= 2)
+      .filter(usableKeyword)
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(list.map(escapeRe).join('|'), 'gi') : null;
   }
@@ -99,8 +113,14 @@
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
     text = text.replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
-    // After the invisible characters are gone, so "[​[" cannot slip through.
+    // After the invisible characters are gone, so a zero-width space between two "[" cannot slip through.
     if (opts.escape !== false) text = text.replace(/\[(?=\[)/g, '[ ');
+    // Text that went through here before keeps its own placeholders: set them
+    // aside so the keywords and rules below never rewrite inside one.
+    const kept = [];
+    if (opts.escape === false) {
+      text = text.replace(/[\uE000\uE001]/g, '').replace(OWN_PLACEHOLDER, (m) => `\uE000${String.fromCharCode(0xE100 + kept.push(m) - 1)}\uE001`);
+    }
 
     const keywords = keywordPattern(opts.keywords);
     if (keywords) {
@@ -119,6 +139,7 @@
       });
     }
 
+    if (kept.length) text = text.replace(/\uE000([\uE100-\uF8FF])\uE001/g, (m, c) => kept[c.charCodeAt(0) - 0xE100] ?? '');
     // Cut by characters (code points), never inside a surrogate pair, and drop
     // a placeholder the cut left unfinished ("[", "[[email" or "[[email]").
     const chars = [...text];
@@ -432,6 +453,7 @@
     mark,
     PLACEHOLDER,
     scrubText,
+    usableKeyword,
     typed,
     classifyField,
     walkArgs,

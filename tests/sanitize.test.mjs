@@ -283,3 +283,16 @@ test('the element takes the first real role in the list (row I6; review R12)', (
   assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'unknown searchbox' }, commercial).value.field, 'search');
   assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'unknown' }, commercial).value.field, 'text');
 });
+
+test('keywords that are part of a placeholder name are not used (row K2; review R12)', () => {
+  for (const k of ['email', 'mail', 'ID', 'text', 'mask']) assert.equal(S.usableKeyword(k), false, k);
+  for (const k of ['Acme', 'Brand', '社名']) assert.equal(S.usableKeyword(k), true, k);
+  assert.deepEqual(S.finalScan({ m: '[[email]] と mail' }, { keywords: ['mail'] }), []);
+});
+
+test('masking text again never rewrites inside its own placeholders (review R12)', () => {
+  assert.equal(S.scrubText('[[email]] / Acme / [[text:1234567]]', { keywords: ['Acme'], escape: false }).text,
+    '[[email]] / [[masked]] / [[text:1234567]]');
+  // Private-use characters from the page cannot pose as a set-aside placeholder.
+  assert.equal(S.scrubText('ab [[id]]', { escape: false }).text, 'ab [[id]]');
+});

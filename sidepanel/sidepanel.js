@@ -514,9 +514,9 @@ ui.settingsForm.addEventListener('submit', (event) => {
     await chrome.storage.local.set({ [SETTINGS_KEY]: next });
     settings = { ...S.defaults(), ...next };
     if (next.commercialHosts.length) await dismissNotice();
-    const short = next.keywords.filter((k) => k.length < 2);
+    const unused = next.keywords.filter((k) => !S.usableKeyword(k));
     ui.settingsStatus.textContent = (await granted)
-      ? `保存しました${short.length ? '（1 文字の語は誤検出が多いため無視します）' : ''}`
+      ? `保存しました${unused.length ? `（1 文字の語と、伏せ字の名前の一部になる語は使いません: ${unused.slice(0, 5).join('、')}）` : ''}`
       : '保存しました（送信先へのアクセスは未許可です）';
   })();
 });
