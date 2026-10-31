@@ -9,10 +9,11 @@
  * Every step is sanitized again here, whatever the content script already
  * did: URLs are aliased, user keywords masked, and redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/describe.js');
+importScripts('shared/sanitize.js', 'shared/screen.js', 'shared/describe.js');
 
 const { scrubText, scrubUrl, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
-const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
+const { buildReproduction, toMarkdown, toGherkin, isPageRewrite } = self.OpScribeDescribe;
+const { classifyScreen, describeComponents } = self.OpScribeScreen;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -152,10 +153,19 @@ function cleanStep(raw, rec, settings) {
       if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
     }
     if (t.href) step.target.href = url(t.href);
+    if (t.component?.kind) {
+      step.target.component = { kind: text(t.component.kind, 12) };
+      if (t.component.name) step.target.component.name = text(t.component.name, 30);
+      if (Number.isFinite(t.component.size)) step.target.component.size = t.component.size;
+    }
   }
+  // Screens are classified from the masked URL, so no raw path ends up in their reasons.
+  if (raw.screen) step.screen = cleanScreen({ ...raw.screen, url: step.url }, text);
   if (raw.value !== undefined) step.value = text(raw.value, 200);
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
+  if (['user', 'automation', 'script', 'agent'].includes(raw.actor)) step.actor = raw.actor;
+  if (raw.seq) step.seq = String(raw.seq).slice(0, 24);
   if (raw.tool) {
     step.tool = text(raw.tool, 80);
     step.ok = raw.ok !== false;
@@ -166,17 +176,96 @@ function cleanStep(raw, rec, settings) {
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
   }
-  if (raw.note) step.note = text(raw.note, 300);
+  if (raw.note) {
+    step.note = text(raw.note, 300);
+    // A note belongs to the page it was written on; WebMCP only returns notes of the asking site.
+    if (!step.url) step.url = [...rec.steps].reverse().find((s) => s.url)?.url;
+  }
   bump(rec, [...kinds, ...(raw.valueKinds || [])]);
   return step;
 }
 
+/**
+ * Masks every label the content script collected, then derives what the
+ * screen is for. Only the derived summary and short labels are kept.
+ */
+function cleanScreen(raw, text) {
+  const list = (values, max, limit) => (Array.isArray(values) ? values : []).slice(0, limit).map((v) => text(v, max));
+  const features = {
+    url: raw.url,
+    title: text(raw.title, 80),
+    h1: text(raw.h1, 60),
+    forms: (Array.isArray(raw.forms) ? raw.forms : []).slice(0, 6).map((form) => ({
+      kind: form.kind === 'search' ? 'search' : 'form',
+      global: Boolean(form.global),
+      name: text(form.name, 30),
+      submit: text(form.submit, 30),
+      fields: (Array.isArray(form.fields) ? form.fields : []).slice(0, 12)
+        .map((field) => ({ type: text(field.type, 16), label: text(field.label, 30) }))
+    })),
+    buttons: list(raw.buttons, 30, 15),
+    navLinks: list(raw.navLinks, 20, 10),
+    headings: list(raw.headings, 30, 6),
+    dialogs: list(raw.dialogs, 30, 3),
+    editor: Boolean(raw.editor),
+    article: Boolean(raw.article),
+    textLength: Number(raw.textLength) || 0,
+    prose: Number(raw.prose) || 0,
+    tables: Number(raw.tables) || 0,
+    repeated: raw.repeated?.count ? { count: Number(raw.repeated.count) } : null
+  };
+  const { purposes, summary } = classifyScreen(features);
+  return {
+    title: features.title,
+    h1: features.h1 !== features.title ? features.h1 : '',
+    purposes: purposes.map(({ kind, label, reasons }) => ({ kind, label, reasons })),
+    summary,
+    components: describeComponents(features)
+  };
+}
+
 function appendStep(rec, step) {
+  rec.nextId = (rec.nextId || 0) + 1;
+  step.id = `s${rec.nextId}`;
   rec.steps.push(step);
   if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
 }
 
+/**
+ * A screen described again (after rendering settled, or its title changed)
+ * replaces the earlier description as long as no operation happened in between.
+ */
+function appendScreen(rec, step) {
+  for (let i = rec.steps.length - 1; i >= 0; i -= 1) {
+    const s = rec.steps[i];
+    if (s.type === 'navigate' || s.type === 'note') continue;
+    if (s.type === 'screen' && s.url === step.url) {
+      rec.steps[i] = { ...step, t: s.t, id: s.id };
+      return s.id;
+    }
+    break;
+  }
+  appendStep(rec, step);
+  return step.id;
+}
+
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
+
+/** What appeared or disappeared right after an operation belongs to that operation. */
+function attachChange(rec, detail, settings) {
+  const step = rec.steps.find((s) => s.seq && s.seq === String(detail?.seq));
+  if (!step) return false;
+  const lines = (list) => (Array.isArray(list) ? list : []).slice(0, 8)
+    .map((t) => scrubText(t, { keywords: settings.keywords, maxLength: 160, hosts: { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases } }).text);
+  step.change = { appeared: lines(detail.change?.appeared) };
+  // Shown and gone again before the watch ended (a toast).
+  const transient = lines(detail.change?.transient);
+  if (transient.length) step.change.transient = transient;
+  // Of those, what a notification area (status, alert, toast) showed: the page telling the result.
+  const notices = lines(detail.change?.notices).slice(0, 4);
+  if (notices.length) step.change.notices = notices;
+  return true;
+}
 
 // ------------------------------------------------------------------ actions
 
@@ -184,7 +273,7 @@ async function start({ tabId, url }) {
   const settings = await getSettings();
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
-    return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
+    return { ok: false, error: 'PERMISSION_DENIED' };  // a reply, not a mutate() result
   }
   return mutate(async (previous) => {
     if (previous?.state === 'recording') await stopTab(previous);
@@ -204,6 +293,8 @@ async function start({ tabId, url }) {
     rec.startUrl = scrubUrl(url, { ...settings, aliases: rec.aliases }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
+    // Persist before injecting: the injected script immediately asks whether it is being recorded.
+    await chrome.storage.session.set({ [REC_KEY]: rec });
     await injectNow(tabId);
     await setBadge(true);
     return { save: rec, reply: { ok: true } };
@@ -219,11 +310,17 @@ async function stopTab(rec) {
 }
 
 const stop = () => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording') return { reply: { ok: true } };
-  await stopTab(rec);
-  rec.state = 'stopped';
-  rec.endedAt = Date.now();
-  return { save: rec, reply: { ok: true } };
+    if (!rec || rec.state !== 'recording') return { reply: { ok: true } };
+    // The last screen may not have been described yet (fast automated runs): ask for it now.
+    try {
+      const last = await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' });
+      if (last?.pending) attachChange(rec, last.pending, await getSettings());
+      if (last?.screen) appendScreen(rec, cleanStep({ type: 'screen', ...last }, rec, await getSettings()));
+    } catch { /* tab gone or not injected */ }
+    await stopTab(rec);
+    rec.state = 'stopped';
+    rec.endedAt = Date.now();
+    return { save: rec, reply: { ok: true } };
 });
 
 /** Words the final scan must not find: the user's list plus every real host that was aliased. */
@@ -255,8 +352,10 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
-  // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+  // Steps on other sites are never handed to this page. The model's text is not on the steps:
+  // it was written from neighbouring screens too, which may be on other sites.
+  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`));
+  const scan = scanFor(rec, settings);
 
   if (op === 'status') {
     return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
@@ -265,13 +364,13 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
     const reply = { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) };
     // Same gate as every other exit: the page gets nothing the final scan would stop.
-    if (scanFor(rec, settings)(reply).length) return { reply: { ok: false, error: 'BLOCKED_BY_FINAL_SCAN' } };
+    if (scan(reply).length) return { reply: { ok: false, error: 'BLOCKED_BY_FINAL_SCAN' } };
     return { reply };
   }
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings));
+    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent', pageUrl: `${sender.origin}/` }, rec, settings));
     return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
@@ -317,7 +416,13 @@ async function handle(message, sender) {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        appendStep(rec, cleanStep(detail, rec, settings));
+        const step = cleanStep(detail, rec, settings);
+        if (step.type === 'screen') appendScreen(rec, step);
+        else appendStep(rec, step);
+        return { save: rec, reply: { ok: true } };
+      }
+      if (type === 'CHANGE') {
+        if (!attachChange(rec, detail, settings)) return { reply: { ok: false } };
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
@@ -352,8 +457,14 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
     const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings);
-    const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
-    if (last?.url === step.url && rec.steps[rec.steps.length - 1] === last) return null;
+    const last = rec.steps[rec.steps.length - 1];
+    if (last?.type === 'navigate' && last.url === step.url) return null;
+    // The page rewrote its own URL (tracking parameters, canonical form): not a new step.
+    const rewritten = isPageRewrite(rec.steps, step);
+    if (rewritten) {
+      for (const s of rewritten) s.url = step.url;
+      return { save: rec };
+    }
     appendStep(rec, step);
     return { save: rec };
   });

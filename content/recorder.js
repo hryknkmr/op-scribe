@@ -28,6 +28,10 @@
   /** { keywords } while this tab is being recorded, otherwise null. */
   let config = null;
   let lastStep = null;
+  let sequence = 0;
+  const documentId = Math.random().toString(36).slice(2, 8);
+  /** Who performed the event being handled: user | automation | script. */
+  let actor = 'user';
   const committed = new WeakMap();
 
   async function send(type, detail, attempt = 0) {
@@ -47,7 +51,11 @@
   async function hello() {
     const response = await send('HELLO');
     config = response?.active ? response.config : null;
-    if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
+    if (config) {
+      window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
+      screenKey = '';
+      scheduleScreen();
+    }
   }
 
   // ---------------------------------------------------------------- targets
@@ -101,6 +109,16 @@
   }
 
   const textOf = (el) => (el.innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim();
+  // Masked first, then cut: a cut through an address or a token would hide it from the patterns.
+  const clip = (text, n) => S.scrubText(String(text || ''), { keywords: config?.keywords }).text.slice(0, n);
+
+  /** A label's own words: a label wrapping its control would otherwise also yield the control's options or text. */
+  function labelText(label) {
+    if (!label.querySelector('select, input, textarea, button, [contenteditable="true"]')) return textOf(label);
+    const copy = label.cloneNode(true);
+    copy.querySelectorAll('select, input, textarea, button, [contenteditable="true"]').forEach((c) => c.remove());
+    return (copy.textContent || '').replace(/\s+/g, ' ').trim();
+  }
 
   /**
    * Approximates the accessible name. Never reads the content of a field the
@@ -116,7 +134,7 @@
       if (text) return text;
     }
     if (el.labels?.length) {
-      const text = [...el.labels].map(textOf).join(' ');
+      const text = [...el.labels].map(labelText).join(' ');
       if (text) return text;
     }
     if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return el.value || el.type;
@@ -154,6 +172,636 @@
     return parts.join(' > ');
   }
 
+  // ------------------------------------------------------- screen and parts
+
+  // What counts as shown: painted (not display:none, hidden or transparent, here or above), larger than a
+  // point (not text for screen readers only), and where a person can bring it into view - by scrolling the
+  // page or a scrolling area (overflow: auto/scroll), not past an area that cuts it off (overflow: hidden/clip),
+  // and, for a fixed element that never scrolls, inside the screen. Covering by other elements is not judged.
+
+  const PAINTED = { opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true };
+  const SCROLLS = /^(auto|scroll)$/;
+  const CUTS = /^(hidden|clip)$/;
+  const AXES = [['X', 'left', 'right', 'scrollLeft', 'scrollWidth'], ['Y', 'top', 'bottom', 'scrollTop', 'scrollHeight']];
+
+  /** The padding box of an element: where its content shows, and what an overflow setting clips to. */
+  const paddingBox = (el) => {
+    const r = el.getBoundingClientRect();
+    const left = r.left + el.clientLeft;
+    const top = r.top + el.clientTop;
+    return { left, top, right: left + el.clientWidth, bottom: top + el.clientHeight };
+  };
+
+  /** Effects that hide or cut what is inside in a way not computed here: not read rather than guessed. */
+  const hidesInside = (st) => st.clipPath !== 'none' || Boolean(st.maskImage && st.maskImage !== 'none')
+    || ((st.position === 'absolute' || st.position === 'fixed') && Boolean(st.clip) && st.clip !== 'auto')
+    || /opacity\(\s*0(\.0*)?%?\s*\)/.test(st.filter || '');
+
+  /**
+   * Whether a box (viewport coordinates) inside `from` can be brought into view. Each axis is judged on its own.
+   * memo: element -> computed style, shared within one reading.
+   */
+  function reachable(from, rect, memo = new Map()) {
+    const style = (el) => {
+      if (!memo.has(el)) memo.set(el, getComputedStyle(el));
+      return memo.get(el);
+    };
+    let box = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    const root = document.documentElement;
+    let fixed = false;
+    for (let el = from; el && el !== root && el !== document.body; el = el.parentElement) {
+      const st = style(el);
+      if (hidesInside(st)) return false;
+      // Above a fixed element only effects that hide everything inside still apply, not scrolling or clipping.
+      if (fixed) continue;
+      let inner = null;
+      for (const [axis, lo, hi, offset, size] of AXES) {
+        const overflow = st[`overflow${axis}`];
+        if (overflow === 'visible') continue;
+        // A scaled or rotated area clips along edges this box does not describe: not read rather than guessed.
+        if (!inner && st.transform !== 'none') return false;
+        inner ||= paddingBox(el);
+        if (CUTS.test(overflow)) {
+          if (box[lo] < inner[lo] - 0.5 || box[hi] > inner[hi] + 0.5) return false;
+        } else if (SCROLLS.test(overflow)) {
+          // Somewhere in the scrolled content: in view once the area is scrolled there. Seen from further
+          // out, it is then where the area is.
+          const start = box[lo] - inner[lo] + el[offset];
+          if (start + (box[hi] - box[lo]) <= 0 || start >= el[size]) return false;
+          box = { ...box, [lo]: inner[lo], [hi]: inner[hi] };
+        }
+      }
+      if (st.position === 'fixed') fixed = true;
+    }
+    const page = document.scrollingElement || root;
+    const pageStyle = style(root);
+    const bodyStyle = document.body ? style(document.body) : pageStyle;
+    if (hidesInside(pageStyle) || hidesInside(bodyStyle)) return false;
+    for (const [axis, lo, hi, scroll, size, view] of [['X', 'left', 'right', scrollX, 'scrollWidth', innerWidth], ['Y', 'top', 'bottom', scrollY, 'scrollHeight', innerHeight]]) {
+      const locked = CUTS.test(pageStyle[`overflow${axis}`]) || CUTS.test(bodyStyle[`overflow${axis}`]);
+      // Wholly inside: text partly off the screen (fixed) or off the page shows only in part.
+      if (fixed || locked) {
+        if (box[lo] < -0.5 || box[hi] > view + 0.5) return false;
+      } else if (box[lo] + scroll < -0.5 || box[hi] + scroll > page[size] + 0.5) return false;
+    }
+    return true;
+  }
+
+  // Styles read during one task, shared by the checks of that task (hundreds of links share their
+  // ancestors). Dropped when the task ends: the page may change them before the next one.
+  let sharedMemo = null;
+  const taskMemo = () => {
+    if (!sharedMemo) {
+      sharedMemo = new Map();
+      setTimeout(() => { sharedMemo = null; }, 0);
+    }
+    return sharedMemo;
+  };
+
+  /** An element shown to the person (see above); sized: false for one that may have been emptied. */
+  // Also used as a filter callback ((el, index, array)): anything but an options object and a Map is ignored.
+  const visible = (el, options, memo) => {
+    const sized = !(options && typeof options === 'object' && !Array.isArray(options) && options.sized === false);
+    if (!(memo instanceof Map)) memo = taskMemo();
+    if (!el?.getClientRects().length) return false;
+    if (el.checkVisibility && !el.checkVisibility(PAINTED)) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none' || hidesInside(style)) return false;
+    const rect = el.getBoundingClientRect();
+    if (sized && !(rect.width > 1 && rect.height > 1)) return false;
+    // The element's own overflow clips what is inside it, not itself: judged from its parent up.
+    return !el.parentElement || reachable(el.parentElement, rect, memo);
+  };
+
+  // Time for reading one screen's structure, so a large page is not held up for long.
+  const SCREEN_MS = 150;
+  // Text nodes inside these are not screen text: code, a closed box's other choices, typed values.
+  const NOT_TEXT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE', 'NOSCRIPT', 'SELECT', 'DATALIST', 'TEXTAREA', 'OPTION']);
+  const INLINE = /^(inline|inline-block|inline-flex|inline-grid|contents|ruby|ruby-text)$/;
+
+  /**
+   * Reads only text that can be seen, one text node at a time: the characters' own boxes must all be
+   * shown and reachable. Stops for good at the deadline (fail-closed: nothing after that point is read).
+   */
+  function textReader({ ms = SCREEN_MS } = {}) {
+    const deadline = performance.now() + ms;
+    const memo = taskMemo();
+    const verdict = new Map();
+    const reader = { cut: false };
+    /** Past the deadline: everything after this point is left out (fail-closed), also by other callers. */
+    reader.late = () => {
+      if (!reader.cut && performance.now() > deadline) reader.cut = true;
+      return reader.cut;
+    };
+    const style = (el) => {
+      if (!memo.has(el)) memo.set(el, getComputedStyle(el));
+      return memo.get(el);
+    };
+    const blockOf = (el) => {
+      for (let node = el; node; node = node.parentElement) {
+        if (node.tagName === 'BODY' || !INLINE.test(style(node).display)) return node;
+      }
+      return null;
+    };
+    const painted = (el) => {
+      for (let node = el; node; node = node.parentElement) {
+        // display: contents has no box of its own: what it shows is judged by the ancestor that has one.
+        if (style(node).display !== 'contents') {
+          return !node.checkVisibility || node.checkVisibility(PAINTED);
+        }
+      }
+      return false;
+    };
+    const shown = (node) => {
+      if (verdict.has(node)) return verdict.get(node);
+      const parent = node.parentElement;
+      // Text drawn in a fully transparent colour is not seen either.
+      const ink = parent && style(parent);
+      const clear = (color) => /^(transparent|rgba\([^)]*,\s*0(\.0*)?\)|rgb\([^)]*\/\s*0(\.0*)?%?\))$/.test(String(color || '').trim());
+      let ok = Boolean(parent) && painted(parent) && !clear(ink.color) && !clear(ink.webkitTextFillColor || ink.color);
+      if (ok) {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()].filter((r) => r.width > 0 || r.height > 0);
+        ok = rects.length > 0 && rects.every((r) => r.width > 1 && r.height > 1 && reachable(parent, r, memo));
+      }
+      verdict.set(node, ok);
+      return ok;
+    };
+    /** The shown lines under a node (an element or a text node), in page order. */
+    reader.lines = (start) => {
+      const lines = [];
+      let line = '';
+      let block = null;
+      const flush = () => {
+        const text = line.replace(/\s+/g, ' ').trim();
+        if (text) lines.push(text);
+        line = '';
+      };
+      const take = (node) => {
+        if (!node.textContent.trim()) return;
+        if (!shown(node)) return;
+        const nodeBlock = blockOf(node.parentElement);
+        if (nodeBlock !== block) { flush(); block = nodeBlock; }
+        line += node.textContent;
+      };
+      if (reader.cut) return lines;
+      if (start.nodeType === 3) {
+        take(start);
+        flush();
+        return lines;
+      }
+      const walker = document.createTreeWalker(start, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+        // Not rendered at all (display: none, content-visibility: hidden): nothing inside can show.
+        acceptNode: (node) => (node.nodeType === 1 && (NOT_TEXT.has(node.tagName)
+          || (node.checkVisibility && !node.checkVisibility() && style(node).display !== 'contents'))
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT)
+      });
+      for (let node = walker.currentNode; node; node = walker.nextNode()) {
+        if (reader.late()) break;
+        if (node.nodeType === 3) take(node);
+        else if (node.tagName === 'BR') flush();
+      }
+      flush();
+      return lines;
+    };
+    return reader;
+  }
+
+  const unique = (list) => [...new Set(list.filter(Boolean))];
+  const CHROME_REGION = 'nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]';
+
+  /** Name of a region: aria-label, aria-labelledby, or its first heading. */
+  function regionName(el) {
+    const aria = el.getAttribute('aria-label');
+    if (aria?.trim()) return clip(aria.trim(), 30);
+    const by = el.getAttribute('aria-labelledby');
+    const labelled = by && document.getElementById(by.split(/\s+/)[0]);
+    if (labelled) return clip(textOf(labelled), 30);
+    const heading = el.querySelector('legend, h1, h2, h3, h4');
+    return heading ? clip(textOf(heading), 30) : '';
+  }
+
+  function isSearchForm(form) {
+    if (form.getAttribute('role') === 'search' || form.closest('[role="search"]')) return true;
+    if (/search/i.test(form.getAttribute('action') || '')) return true;
+    return [...form.querySelectorAll('input')].some((input) => input.type === 'search'
+      || /^(q|query|keyword|keywords|search)$/i.test(input.getAttribute('name') || ''));
+  }
+
+  /**
+   * Links rendered by the same component share their markup; that signature
+   * is how a list of cards is told apart from one-off links.
+   */
+  const linkSignature = (a) => `${a.className}|${a.parentElement?.tagName}.${a.parentElement?.className}`;
+
+  /** The elements that pass a test, as many as are looked at before the deadline (the rest are not). */
+  const within = (deadline) => (list, test) => {
+    const out = [];
+    for (const el of list) {
+      if (performance.now() > deadline) break;
+      if (test(el)) out.push(el);
+    }
+    return out;
+  };
+  const unbounded = (list, test) => [...list].filter((el) => test(el));
+
+  function contentLinks(pick = unbounded) {
+    return pick(document.querySelectorAll('a[href]'), (a) => !a.closest(CHROME_REGION) && visible(a));
+  }
+
+  /**
+   * A button named by content rather than by the UI: inside a list item, card or article, one of a
+   * row of look-alike buttons (cards as buttons), or with a name longer than a label (a whole card).
+   */
+  function isContentButton(button) {
+    if (button.closest('li, article, [role="listitem"], [role="article"], [role="row"]')) return true;
+    if ((accessibleName(button) || '').length > 40) return true;
+    const parent = button.parentElement;
+    if (!parent || !button.className) return false;
+    return [...parent.children].filter((c) => c.tagName === button.tagName && c.className === button.className).length >= 3;
+  }
+
+  /**
+   * Articles repeated side by side in one container are cards, not an article to read; a main article
+   * with a row of related cards keeps its body. Each card may sit in its own wrapper (<div><article>).
+   */
+  const CARDS_AT = 3;
+  function articlesIn(root, pick = unbounded) {
+    const articles = pick(root.querySelectorAll('article, [role="article"]'), (a) => visible(a));
+    const rowOf = (a) => {
+      let node = a;
+      for (let i = 0; i < 3 && node.parentElement && node.parentElement.children.length === 1; i += 1) node = node.parentElement;
+      return node.parentElement;
+    };
+    const rows = new Map();
+    for (const a of articles) rows.set(rowOf(a), (rows.get(rowOf(a)) || 0) + 1);
+    const cards = new Set(articles.filter((a) => rows.get(rowOf(a)) >= CARDS_AT));
+    return { cards, main: articles.filter((a) => !cards.has(a)) };
+  }
+
+  /** Text written as paragraphs (an article body), not the text of cards, links or list items. */
+  function proseLength(root, pick = unbounded) {
+    const { cards } = articlesIn(root, pick);
+    let total = 0;
+    const body = (p) => {
+      if (total > 100000 || p.closest('a, li, nav, header, footer, [role="navigation"]') || !visible(p)) return false;
+      const card = p.closest('article, [role="article"]');
+      if (card && cards.has(card)) return false;
+      total += textOf(p).length;
+      return true;
+    };
+    pick(root.querySelectorAll('p'), body);
+    return total;
+  }
+
+  function repeatedGroup(links = contentLinks()) {
+    const groups = new Map();
+    for (const a of links) {
+      const key = linkSignature(a);
+      if (!groups.has(key)) groups.set(key, new Set());
+      groups.get(key).add(a.href);
+    }
+    let best = 0;
+    for (const hrefs of groups.values()) best = Math.max(best, hrefs.size);
+    return best >= 5 ? { count: best } : null;
+  }
+
+  /**
+   * Everything the side panel needs to say what this screen is and what it
+   * is for. Labels only - never field values, never body text.
+   */
+  function extractScreen(started = performance.now()) {
+    // Within the screen's time: past it, what is left is not looked at (counts stay partial).
+    const pick = within(started + SCREEN_MS);
+    const collected = pick(document.querySelectorAll('form, [role="search"]'), visible);
+    const forms = collected
+      .filter((el) => !collected.some((other) => other !== el && other.contains(el)))
+      .slice(0, 6)
+      .map((el) => {
+        const fields = pick(el.querySelectorAll('input, select, textarea'),
+          (f) => f.type !== 'hidden' && f.type !== 'submit' && f.type !== 'button' && visible(f))
+          .slice(0, 12)
+          .map((f) => ({ type: f.tagName === 'INPUT' ? (f.type || 'text') : f.tagName.toLowerCase(), label: clip(accessibleName(f), 30) }));
+        const submit = el.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+        return {
+          kind: isSearchForm(el) ? 'search' : 'form',
+          // In the header or navigation: there on every page of the site, not what this page is for.
+          global: Boolean(el.closest(CHROME_REGION)),
+          name: regionName(el),
+          fields,
+          submit: submit ? clip(accessibleName(submit), 30) : ''
+        };
+      })
+      .filter((form) => form.fields.length);
+
+    const buttons = unique(pick(document.querySelectorAll('button, [role="button"], input[type="submit"], input[type="button"]'),
+      (b) => visible(b) && !b.closest('[contenteditable="true"]') && !isContentButton(b))
+      .map((b) => clip(accessibleName(b), 30)))
+      .slice(0, 15);
+    const navLinks = unique(pick(document.querySelectorAll('nav a[href], header a[href], [role="navigation"] a[href]'), visible)
+      .map((a) => clip(accessibleName(a), 20)))
+      .slice(0, 10);
+    // Section names only. Headings in an article, an editor, a card (inside or around a
+    // link) or a list item are content - other people's titles - not part of the UI.
+    const headings = unique(pick(document.querySelectorAll('h2, h3'),
+      (h) => visible(h) && !h.closest('article, [contenteditable="true"], a, li') && !h.querySelector('a'))
+      .map((h) => clip(textOf(h), 30)))
+      .slice(0, 6);
+    const dialogs = pick(document.querySelectorAll('dialog[open], [role="dialog"], [aria-modal="true"]'), visible)
+      .map(regionName).slice(0, 3);
+    const editor = pick(document.querySelectorAll('[contenteditable="true"], textarea'),
+      (el) => visible(el) && el.getBoundingClientRect().height > 120).length > 0;
+    const h1 = pick(document.querySelectorAll('h1'), visible)[0];
+    const main = document.querySelector('main, [role="main"]') || document.body;
+    const articles = articlesIn(main, pick).main.length;
+    const links = contentLinks(pick);
+
+    return {
+      url: location.href,
+      title: clip(document.title, 120),
+      h1: h1 ? clip(textOf(h1), 80) : '',
+      lang: document.documentElement.lang || '',
+      forms,
+      buttons,
+      navLinks,
+      headings,
+      dialogs,
+      editor,
+      article: articles > 0 && (main.innerText || '').length > 800,
+      textLength: (main.innerText || '').length,
+      prose: proseLength(main, pick),
+      tables: pick(document.querySelectorAll('table'), visible).length,
+      links: links.length,
+      repeated: repeatedGroup(links)
+    };
+  }
+
+  // ------------------------------------------------------------ what changed
+
+  /**
+   * Text that appears or disappears right after an operation: the result of
+   * operations that do not change the URL (validation errors, toasts, modals).
+   * - The watch lasts CHANGE_MS, long enough for a toast after a slow response
+   *   (a quiet page may still be waiting for one), and ends early when the next
+   *   operation starts, so a quick follow-up does not lend its result.
+   * - Text that appears and is gone again before the watch ends (a toast) is
+   *   kept as transient; text removed and put back (a re-rendered list) is not a change.
+   * - Notification areas shown or hidden by attributes (class, hidden, ...) count too.
+   * - Only text in notification areas is handed over (see finish).
+   */
+  const CHANGE_MS = 5000;
+  // role and aria-live too: an element that becomes a notification area shows its text as a notice.
+  const SHOWN_BY = ['class', 'style', 'hidden', 'aria-hidden', 'open', 'role', 'aria-live'];
+  // Notification areas as the page declares them for assistive technology. Guessing from class names
+  // (toast, notif...) also took lists of notifications, and a dialog may hold a whole list or form.
+  const NOTICE = '[role="status"], [role="alert"], [aria-live="polite"], [aria-live="assertive"]';
+  let finishChange = null;
+  function watchChange(seq) {
+    finishChange?.();
+    if (!document.body) return;
+    // whitespace-free text -> { text, first, last }. Removed nodes are detached, so their
+    // innerText loses the cell/line spacing: lines are compared without whitespace.
+    const seen = new Map();
+    // notice: shown in a notification area (status, alert, toast), so it is the page telling the result.
+    const note = (kind, text, notice = false) => {
+      const k = text.replace(/\s+/g, '');
+      const entry = seen.get(k);
+      if (!entry) seen.set(k, { text, first: kind, last: kind, notice: notice && kind === 'add' });
+      else {
+        entry.last = kind;
+        if (kind === 'add') entry.text = text;  // attached text keeps its spacing
+        if (notice && kind === 'add') entry.notice = true;
+      }
+    };
+    const seenShown = (l) => seen.get(l.replace(/\s+/g, ''))?.first === 'add';
+    const inNotice = (node) => Boolean((node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE));
+    const NOT_SHOWN = 'script, style, template, noscript, [hidden], [aria-hidden="true"]';
+    // A removed element is detached: its style is gone, so it counts only if nothing marks it hidden.
+    const markedHidden = (el) => Boolean(el.closest?.(NOT_SHOWN)) || el.style?.display === 'none' || el.style?.visibility === 'hidden';
+    /** The text of a detached element as it was shown: hidden parts and scripts left out. */
+    const detachedText = (el) => {
+      if (markedHidden(el)) return '';
+      const copy = el.cloneNode(true);
+      copy.querySelectorAll(NOT_SHOWN).forEach((c) => c.remove());
+      copy.querySelectorAll('[style]').forEach((c) => { if (c.style.display === 'none' || c.style.visibility === 'hidden') c.remove(); });
+      return copy.textContent;
+    };
+    // parent: where a removed text node was (it has no parentElement any more).
+    // read: the text reader of this batch, for what is still in the page (only shown text is read).
+    const lines = (node, parent = null, read = null) => {
+      const el = node.nodeType === 1 ? node : node.parentElement || parent;
+      if (!el || el.closest('[contenteditable="true"]')) return [];
+      if (node.isConnected) return (read || textReader({ ms: 30 })).lines(node).filter((l) => l.length > 1);
+      const raw = node.nodeType === 3 ? (markedHidden(el) ? '' : node.textContent) : detachedText(el);
+      return String(raw || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter((l) => l.length > 1);
+    };
+    // Only what was on screen: text added or changed inside something hidden never counts.
+    // sized: false for where text was removed from - emptied, it may have no height left.
+    const shown = (node, sized = true) => {
+      const el = node.nodeType === 1 ? node : node.parentElement;
+      return Boolean(el) && visible(el, { sized });
+    };
+    // What the notification areas already showed before the operation: shown again by a class or style
+    // change (an animation), it is not something that appeared.
+    // Each notification area's text before the operation. What it shows later is compared with that as a
+    // whole, so a node replaced (textContent = ...) or changed in the middle gives only what changed.
+    // One reader with one time limit for all of them; past it, nothing counts as new (fail-closed: nothing
+    // is taken as new that could not be compared).
+    const regionBefore = new Map();
+    const baseline = textReader({ ms: 30 });
+    for (const el of document.querySelectorAll(NOTICE)) {
+      if (baseline.late()) break;
+      if (visible(el)) regionBefore.set(el, baseline.lines(el).join('\n'));
+    }
+    const unknown = baseline.cut;
+    // A notice compared word by word: split at spaces and punctuation, the separators kept to rejoin it.
+    const SEPARATOR = /([\s/|:：・、。,，()（）「」『』[\]]+)/;
+    const EDGES = /^[\s/|:：・、。,，()（）「」『』[\]]+|[\s/|:：・、。,，()（）「」『』[\]]+$/g;
+    /**
+     * The words of now that are not in old (by their longest common sequence), each run of them rejoined as it
+     * reads, one run per line: 担当: A / 顧客: B / 状態: 待機中 -> 担当: C / 顧客: B / 状態: 完了 gives C and 完了.
+     * Too long to compare: nothing (fail-closed).
+     */
+    const added = (old, now) => {
+      const before = old.split(SEPARATOR).filter((part, i) => i % 2 === 0 && part);
+      const parts = now.split(SEPARATOR);  // word, separator, word, ...
+      const at = parts.map((part, i) => (i % 2 === 0 && part ? i : -1)).filter((i) => i >= 0);
+      if (before.length * at.length > 40000) return '';
+      const table = Array.from({ length: before.length + 1 }, () => new Array(at.length + 1).fill(0));
+      for (let i = before.length - 1; i >= 0; i -= 1) {
+        for (let j = at.length - 1; j >= 0; j -= 1) {
+          table[i][j] = before[i] === parts[at[j]] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+        }
+      }
+      const kept = new Set();
+      for (let i = 0, j = 0; i < before.length && j < at.length;) {
+        if (before[i] === parts[at[j]]) { kept.add(at[j]); i += 1; j += 1; } else if (table[i + 1][j] >= table[i][j + 1]) i += 1; else j += 1;
+      }
+      const runs = [];
+      let run = '';
+      const flush = () => {
+        const text = run.replace(EDGES, '');
+        if (text) runs.push(text);
+        run = '';
+      };
+      parts.forEach((part, i) => {
+        if (i % 2 === 1) run += run ? part : '';
+        else if (part && kept.has(i)) flush();
+        else run += part;
+      });
+      flush();
+      return runs.join('\n');
+    };
+    /** What a notification area shows that it did not before the operation, noted as notices. */
+    const noteRegion = (region, read) => {
+      if (!region || !visible(region)) return;
+      const now = lines(region, null, read).join('\n');
+      added(regionBefore.get(region) || '', now).split('\n').map((l) => l.replace(/\s+/g, ' ').trim())
+        .filter((l) => l.length > 1).forEach((l) => note('add', l, true));
+    };
+    const regionOf = (node) => (node.nodeType === 1 ? node : node.parentElement)?.closest(NOTICE) || null;
+    const take = (records) => {
+      // One reader per batch: a style read now may change before the next batch (a toast fading in).
+      const read = textReader({ ms: 30 });
+      for (const r of records) {
+        if (r.type === 'attributes') {
+          const el = r.target.closest?.(NOTICE);
+          if (!el || (el.textContent || '').length > 300) continue;
+          if (visible(el)) noteRegion(el, read);
+          // Hidden by a class or style now, so innerText is empty: read what it says to see it go away.
+          else String(el.textContent || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(seenShown).forEach((l) => note('remove', l));
+          continue;
+        }
+        // One record can both remove and add (replaceChildren): the removal came first.
+        // Removed from where it was shown: the parent it left is still in the page.
+        // Removals are noted only to tell a toast going away (transient) and a re-rendered list (removed and
+        // put back: no change). What was removed is never handed over: a removed element is detached and
+        // how it was styled (hidden by a class, transparent) is lost.
+        if (shown(r.target, false)) for (const n of r.removedNodes) lines(n, r.target).forEach((l) => note('remove', l));
+        for (const n of r.addedNodes) {
+          // A notice may come inside a wrapper (a portal or container added in one piece), and the
+          // wrapper itself may have no box (display: contents, only positioned children).
+          if (n.nodeType === 1 && !inNotice(n)) {
+            for (const inner of [...n.querySelectorAll(NOTICE)].slice(0, 10)) {
+              noteRegion(inner, read);
+            }
+          }
+          if (inNotice(n)) noteRegion(regionOf(n), read);
+          else if (shown(n)) lines(n, null, read).forEach((l) => note('add', l));
+        }
+        if (r.type === 'characterData' && inNotice(r.target)) noteRegion(regionOf(r.target), read);
+        else if (r.type === 'characterData' && shown(r.target)) lines(r.target, null, read).forEach((l) => note('add', l));
+      }
+    };
+    const observer = new MutationObserver(take);
+    observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: SHOWN_BY });
+    // finish(false) hands the change over instead of sending it (recording is stopping).
+    const finish = (deliver = true) => {
+      if (finishChange !== finish) return null;
+      finishChange = null;
+      clearTimeout(timer);
+      take(observer.takeRecords());
+      observer.disconnect();
+      const scrub = (e) => clip(e.text, 160);
+      // Only what the page shows as a notice (status, alert, toast) leaves the page as text: other text that
+      // appeared (a row, a card, a body) may be anyone's, and whether it could be seen is only a best effort.
+      const isNew = (e) => e.notice && !unknown;
+      const of = (first, last) => [...seen.values()].filter((e) => isNew(e) && e.first === first && e.last === last).slice(0, 8).map(scrub);
+      const change = { appeared: of('add', 'add'), transient: of('add', 'remove') };
+      // Appeared during the watch (first seen added), like appeared and transient: a notice node removed and
+      // put back (re-rendered) is not new.
+      const notices = [...seen.values()].filter((e) => isNew(e) && e.first === 'add' && e.text.length <= 160).slice(0, 4).map(scrub);
+      if (notices.length) change.notices = notices;
+      if (!config || !(change.appeared.length || change.transient.length)) return null;
+      if (deliver) send('CHANGE', { seq, change });
+      return { seq, change };
+    };
+    const timer = setTimeout(finish, CHANGE_MS);
+    finishChange = finish;
+  }
+
+  /** Which part of the screen an element belongs to. */
+  function componentOf(el) {
+    const dialog = el.closest('dialog, [role="dialog"], [aria-modal="true"]');
+    if (dialog) return { kind: 'dialog', name: regionName(dialog) };
+    const form = el.closest('form, [role="search"]');
+    if (form) return { kind: isSearchForm(form) ? 'search' : 'form', name: isSearchForm(form) ? '' : regionName(form) };
+    const nav = el.closest('nav, [role="navigation"]');
+    if (nav) return { kind: 'nav', name: regionName(nav) };
+    if (el.closest('header, [role="banner"]')) return { kind: 'header' };
+    if (el.closest('footer, [role="contentinfo"]')) return { kind: 'footer' };
+    const link = el.closest('a[href]');
+    if (link) {
+      const signature = linkSignature(link);
+      const size = new Set(contentLinks().filter((a) => linkSignature(a) === signature).map((a) => a.href)).size;
+      if (size >= 3) return { kind: 'list', size };
+    }
+    if (el.closest('aside, [role="complementary"]')) return { kind: 'aside' };
+    if (el.closest('article')) return { kind: 'article' };
+    if (el.closest('main, [role="main"]')) return { kind: 'main' };
+    return undefined;
+  }
+
+  // A screen is identified by its URL (without fragment) and its title.
+  let screenKey = '';
+  let screenPending = false;
+  const currentKey = () => `${location.href.split('#')[0]}|${document.title}`;
+
+  /** force: describe the same screen again (the worker replaces the earlier description). */
+  function sendScreen(force = false) {
+    if (!config || !document.body) return;
+    const key = currentKey();
+    if (key === screenKey && !force) return;
+    screenKey = key;
+    const started = performance.now();
+    send('STEP', { type: 'screen', pageUrl: location.href, screen: extractScreen(started) });
+  }
+
+  /** Waits until the DOM stops changing (client-rendered lists), up to maxMs. */
+  function whenQuiet(quietMs = 700, maxMs = 4000) {
+    return new Promise((resolve) => {
+      let timer = 0;
+      const finish = () => {
+        observer.disconnect();
+        clearTimeout(timer);
+        clearTimeout(cap);
+        resolve();
+      };
+      const observer = new MutationObserver(() => {
+        clearTimeout(timer);
+        timer = setTimeout(finish, quietMs);
+      });
+      observer.observe(document.documentElement, { subtree: true, childList: true });
+      timer = setTimeout(finish, quietMs);
+      const cap = setTimeout(finish, maxMs);
+    });
+  }
+
+  async function scheduleScreen() {
+    if (screenPending || !config) return;
+    screenPending = true;
+    try {
+      if (document.readyState === 'loading') {
+        await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, { once: true }));
+      }
+      // Automated tests leave a screen within a second: describe it right away,
+      // then again once client-side rendering has settled.
+      sendScreen();
+      const key = currentKey();
+      await whenQuiet();
+      if (currentKey() === key) sendScreen(true);
+      else sendScreen();
+    } finally {
+      screenPending = false;
+    }
+  }
+
+  // SPA transitions change the URL or title without a load; poll for them.
+  setInterval(() => {
+    if (config && currentKey() !== screenKey) scheduleScreen();
+  }, 1000);
+
   function describe(el) {
     if (!el) return undefined;
     const target = {
@@ -163,6 +811,8 @@
       selector: selectorFor(el)
     };
     if (el.tagName === 'A' && el.href) target.href = el.href;
+    const component = componentOf(el);
+    if (component) target.component = component;
     return target;
   }
 
@@ -183,8 +833,14 @@
   // ------------------------------------------------------------------ steps
 
   function emit(type, extra = {}) {
+    // An operation always happens on a known screen: describe it first if it changed.
+    if (type !== 'tool' && currentKey() !== screenKey) sendScreen();
     lastStep = { type, at: Date.now() };
-    send('STEP', { type, pageUrl: location.href, ...extra });
+    // A per-document sequence number lets the worker attach what this operation changed.
+    sequence += 1;
+    const seq = `${documentId}-${sequence}`;
+    send('STEP', { type, seq, pageUrl: location.href, actor: type === 'tool' ? 'agent' : actor, ...extra });
+    if (type !== 'tool') watchChange(seq);
   }
 
   function currentValue(el) {
@@ -266,10 +922,22 @@
     }
   };
 
+  // Operations are recorded whoever performs them; the actor is recorded with them.
+  // Trusted events come from a person or from browser automation (CDP / WebDriver
+  // sets navigator.webdriver). Untrusted ones were dispatched by a script; only
+  // the ones that change state are kept, focus and key noise is not.
+  const SCRIPT_RECORDABLE = new Set(['click', 'change', 'submit']);
+  // Automation tools pick options and files by setting them and dispatching an untrusted
+  // change (Playwright selectOption / setInputFiles, WebDriver Select): under automation,
+  // that is the tool's operation rather than the page's own script.
+  const automatedPick = (event) => navigator.webdriver && event.type === 'change'
+    && (event.target?.tagName === 'SELECT' || (event.target?.tagName === 'INPUT' && event.target.type === 'file'));
+
   for (const [type, handler] of Object.entries(handlers)) {
     window.addEventListener(type, (event) => {
-      // Synthetic events (page scripts, automation) are not human operations.
-      if (!config || !event.isTrusted) return;
+      if (!config) return;
+      if (!event.isTrusted && !SCRIPT_RECORDABLE.has(type)) return;
+      actor = !event.isTrusted ? (automatedPick(event) ? 'automation' : 'script') : navigator.webdriver ? 'automation' : 'user';
       try { handler(event); } catch (error) { console.warn('[op-scribe] handler failed', type, error); }
     }, true);
   }
@@ -299,8 +967,15 @@
     }
   });
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.from !== 'op-scribe/worker') return;
+    if (message.type === 'OPS_FLUSH') {
+      // Recording is about to stop: hand over the screen as it is now.
+      // The last operation's change is handed over too: it would arrive after the recording stopped.
+      const pending = finishChange?.(false) || null;
+      const started = performance.now();
+      return void sendResponse(config && document.body ? { pageUrl: location.href, screen: extractScreen(started), pending } : null);
+    }
     if (message.type === 'OPS_STOP') {
       config = null;
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);

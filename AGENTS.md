@@ -22,5 +22,6 @@ AI エージェント向けの作業ルール。人向けの説明は README.md�
 - 送信・コピー・保存のすべての出口で `finalScan` を通し、検出があれば止める。
 - Gherkin は記録から決定的に生成する。AI の出力から作らない。
 - オンデバイス AI の出力は `validate` を通らなければ採用しない。
+- 画面の構造（`extractScreen` → `classifyScreen`）には UI のラベルと件数・文字数だけを入れる。一覧・カード・記事・エディタの中身は入れない。
 
 フィルタを変えたら `tests/sanitize.test.mjs` にケースを足し、`pnpm test` と `pnpm guard` を通すこと。

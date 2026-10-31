@@ -16,62 +16,100 @@
 
 ```gherkin
 # op-scribe: Gherkin + attributes
-# recording: rec-mgx0abcd-1a2b3c / privacy: strict
+# recording: rec-example / privacy: strict
 # ‹…› and [[…]] are masked values: supply test values, never guess the original.
 # site-N.invalid is an alias for a host that is not disclosed.
 @op-scribe @privacy-strict
 Feature: 記録された操作の再現
 
   Background:
-    Given "https://site-1.invalid/" を開いている
-      | url | https://site-1.invalid/ |
+    Given 「Example」画面を開いている
+      | url     | https://example.com/ |
+      | title   | Example |
+      | purpose | 検索・閲覧の画面 |
+      | reason  | 検索フォーム |
+      | ui      | 検索フォーム（キーワード） |
+      | ui      | ナビゲーション（ホーム、ランキング、ヘルプ） |
 
   Scenario: 記録された操作
-    When 「ログイン」リンクをクリックする
-      | action   | click |
-      | url      | https://site-1.invalid/ |
-      | role     | link |
-      | name     | ログイン |
-      | tag      | a |
-      | selector | [data-testid="login-link"] |
-      | href     | https://site-1.invalid/login |
-    Then "https://site-1.invalid/login" に遷移する
-      | url | https://site-1.invalid/login |
-    When 「メールアドレス」入力欄に ‹メールアドレス› を入力する
-      | action   | input |
-      | url      | https://site-1.invalid/login |
-      | role     | textbox |
-      | name     | メールアドレス |
-      | selector | #email |
-      | value    | [[email]] |
-    And 「ログインする」ボタンをクリックする
-      | action   | click |
-      | url      | https://site-1.invalid/login |
-      | role     | button |
-      | name     | ログインする |
-      | selector | form > button |
-    Then "https://site-1.invalid/home" に遷移する
-      | url | https://site-1.invalid/home |
-    And ホーム画面にユーザーメニューが表示される
+    When 検索フォームの「キーワード」検索欄に 「shoes」 を入力する
+      | action    | input |
+      | url       | https://example.com/ |
+      | component | 検索フォーム |
+      | role      | searchbox |
+      | name      | キーワード |
+      | tag       | input |
+      | selector  | #q |
+      | value     | shoes |
+      | actor     | automation |
+    And 検索フォームの「キーワード」検索欄で Enter キーを押す
+      | action    | key |
+      | url       | https://example.com/ |
+      | component | 検索フォーム |
+      | role      | searchbox |
+      | name      | キーワード |
+      | tag       | input |
+      | selector  | #q |
+      | key       | Enter |
+      | actor     | automation |
+    Then 「「shoes」の検索結果」画面が表示される
+      | url     | https://example.com/search?q=shoes |
+      | title   | 「shoes」の検索結果 |
+      | purpose | 検索・一覧の閲覧の画面 |
+      | reason  | URL（/search） |
+      | reason  | 同じ形のリンクが 20 件 |
+      | ui      | 一覧（同じ形のリンク 20 件） |
+      | ui      | ボタン（並び替え、絞り込み） |
+    When 一覧（20 件）の「Running Shoes 2026」リンクをクリックする
+      | action    | click |
+      | url       | https://example.com/search?q=shoes |
+      | component | 一覧（20 件） |
+      | role      | link |
+      | name      | Running Shoes 2026 |
+      | tag       | a |
+      | selector  | main > a:nth-of-type(1) |
+      | href      | https://example.com/items/12**56 |
+      | actor     | automation |
+    Then 「Running Shoes 2026」画面が表示される
+      | url     | https://example.com/items/12**56 |
+      | title   | Running Shoes 2026 |
+      | purpose | 購入・決済・詳細の閲覧の画面 |
+      | reason  | ボタン「カートに入れる」 |
+      | reason  | 記事本文 |
+      | ui      | 本文（約 4200 文字） |
+      | ui      | ボタン（カートに入れる、お気に入り、共有） |
 ```
 
 ### キーワードの割り当て
 
 | キーワード | 何を表すか |
 | --- | --- |
-| `Given`（Background） | 記録開始時の画面 |
-| `When` | ユーザー（または agent）の操作 1 つ |
-| `Then` | 操作の直後 4 秒以内に起きた画面遷移、操作ログに追加した期待結果・確認点 |
+| `Given`（Background） | 記録開始時の画面（画面の属性表つき） |
+| `When` | 操作 1 つ（人・自動テスト・スクリプト・エージェントのいずれでも） |
+| `Then` | 操作の結果表示された画面（画面の属性表つき）、操作ログに追加した期待結果・確認点 |
 | `And` | 直前と同じ種類が続くとき |
 
 操作に起因しない遷移（アドレスバーへの直接入力など）は `When "…" を開く` になります。
 
-### 属性（+α）
+### 画面の属性（`Given` / `Then … 画面が表示される` の表）
+
+| 属性 | 内容 | 例 |
+| --- | --- | --- |
+| `url` | 画面の URL（伏せ済み） | `https://example.com/trend` |
+| `title` | `head > title`（伏せ済み） | `急上昇` |
+| `h1` | 主見出し（title と違うときだけ） | |
+| `purpose` | 推定した画面の目的 | `一覧の閲覧の画面`、`検索・一覧の閲覧の画面` |
+| `reason` | 推定の根拠（複数行） | `検索フォーム`、`同じ形のリンクが 32 件`、`URL（/search）` |
+| `ui` | 主な UI（複数行） | `検索フォーム（キーワード）`、`入力フォーム（3 項目: 氏名、メール、件名） → 「送信」` |
+
+目的は、検索・作成・投稿・編集・保存・削除・ログイン・購入・出力・共有・反応・情報の入力・一覧の閲覧・詳細の閲覧から推定します（`shared/screen.js`）。
+
+### 操作の属性（+α）
 
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
 | `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
-| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/:id` |
+| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/12**56` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
 | `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
 | `tag` | HTML タグ名 | `button` |
@@ -81,28 +119,48 @@ Feature: 記録された操作の再現
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
 | `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"shoes"}` |
-| `source` | agent による操作・追記のとき `agent` | |
+| `component` | 操作した部品 | `ヘッダー`、`検索フォーム`、`一覧（32 件）`、`ダイアログ「確認」` |
+| `intent` | ボタン等の表示名から読んだ意図 | `編集・保存`、`削除` |
+| `actor` | 人以外が操作したとき: `automation`（WebDriver / CDP）、`script`（ページ内スクリプト）、`agent`（WebMCP） | |
+| `source` | エージェントが追記した期待結果のとき `agent` | |
 
 再現する側（人・AI）へのルール:
 
 - 要素は `role` + `name` で探し、見つからなければ `selector` を使う（Playwright の `getByRole` に対応）。
-- `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。
+- `[[secret]]` / `[[card]]`（Markdown では `‹秘匿値›` など）は伏せた認証情報。元の値を推測せず、テスト用の値を用意して入れる。
+- `s***@e***.com` や `12****78` のように一部を伏せた値も、テスト用の値に置き換えて使う。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 
 ## 簡易手順（Markdown）
 
 ```markdown
-# 操作の再現手順（4 ステップ）
+# 「Example」から「Running Shoes 2026」までの操作（4 ステップ）
 
 ## 前提条件
-- https://site-1.invalid にアクセスできる状態であること
-- ‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること
+- https://example.com にアクセスできる状態であること
 
 ## 手順
-1. https://site-1.invalid/ を開く
-2. 「ログイン」リンクをクリックする
-   - 期待結果: https://site-1.invalid/login に遷移する
-...
+
+### 画面 1: 「Example」
+- URL: https://example.com/
+- 画面の目的: 検索・閲覧の画面（根拠: 検索フォーム）
+- 主な UI: 検索フォーム（キーワード） / ナビゲーション（ホーム、ランキング、ヘルプ）
+
+1. https://example.com/ を開く
+2. 検索フォームの「キーワード」検索欄に 「shoes」 を入力する
+3. 検索フォームの「キーワード」検索欄で Enter キーを押す
+   - 期待結果: 「「shoes」の検索結果」画面に遷移する
+
+### 画面 2: 「「shoes」の検索結果」
+- URL: https://example.com/search?q=shoes
+- 画面の目的: 検索・一覧の閲覧の画面（根拠: URL（/search）、同じ形のリンクが 20 件）
+- 主な UI: 一覧（同じ形のリンク 20 件） / ボタン（並び替え、絞り込み）
+
+4. 一覧（20 件）の「Running Shoes 2026」リンクをクリックする
+   - 期待結果: 「Running Shoes 2026」画面に遷移する
+
+## 補足
+- 操作の主体: 自動テスト 3 件
 ```
 
 ## 送信ペイロード（`op-scribe.recording/v1`）
