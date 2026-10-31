@@ -427,3 +427,12 @@ test('other URL schemes are stopped at the exit, parameter keys are decoded, and
   for (const name of ['credit_card', 'creditCard', 'cc-name', 'cardholder']) assert.equal(S.maskFieldValue('4111111111111112', { name }).value, '[[card]]', name);
   for (const name of ['discard', 'postcard']) assert.equal(S.classifyKey(name), null, name);
 });
+
+test('invisible controls cannot split a name or a listed word; nested contact keys and short phone numbers', () => {
+  for (const name of ['o​tp', 'to​ken', '認​証コード']) assert.equal(S.maskFieldValue('123456', { name }).value, '[[secret]]', JSON.stringify(name));
+  assert.equal(S.scrubText('Acme and Ac​me', { keywords: ['Ac​me'] }).text, '[[masked]] and [[masked]]');
+  assert.deepEqual(S.finalScan({ args: { user_id: { value: 'abc123' }, email: { value: 'alice' } } }).map((f) => f.path), ['args.user_id.value', 'args.email.value']);
+  const args = S.maskArgs({ phone: '1234' });
+  assert.deepEqual(args, { phone: '****' });
+  assert.deepEqual(S.finalScan({ args }), []);
+});

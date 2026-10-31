@@ -77,6 +77,8 @@
   /** Keeps the separators and the last four digits: 090-1234-5678 → ***-****-5678 */
   function partialPhone(phone) {
     let remaining = phone.replace(/\D/g, '').length;
+    // Four digits or fewer (an extension): none are kept.
+    if (remaining <= 4) return phone.replace(/\d/g, '*');
     return phone.replace(/\d/g, (d) => {
       remaining -= 1;
       return remaining < 4 ? d : '*';
@@ -189,9 +191,14 @@
     return out.sort((a, b) => b[0].length - a[0].length);
   }
 
+  // Zero-width and bidi controls can hide content from the human reviewer, and split a word (o\u200btp).
+  const invisible = (value) => String(value).replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
+  /** A name or a word as it is compared: NFKC, without invisible controls. */
+  const plain = (value) => invisible(String(value ?? '').normalize('NFKC'));
+
   function keywordPattern(keywords) {
     const list = (keywords || [])
-      .map((k) => String(k).normalize('NFKC').trim())
+      .map((k) => plain(k).trim())
       .filter((k) => k.length >= 2)
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(list.map(escapeRe).join('|'), 'gi') : null;
@@ -210,7 +217,7 @@
     if (input == null) return { text: '', kinds };
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
-    text = text.replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
+    text = invisible(text);
 
     // URLs written in the text follow the URL policy (hosts not allowed under their alias, ids partly
     // hidden) when the caller knows the recording's hosts: opts.hosts = { hostAllowlist, aliases }.
@@ -265,7 +272,7 @@
    * A key as lowercase words: orderID -> order id, APIKey -> api key, verification_code -> verification code.
    * A number at the end of a word is a counter, not part of the name: cvv2 -> cvv, otp1 -> otp (2fa stays).
    */
-  const wordsOf = (key) => String(key || '').normalize('NFKC')
+  const wordsOf = (key) => plain(key || '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
     .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
@@ -296,7 +303,7 @@
    * argument, where a few more words (code, state, session, ...) name credentials.
    */
   function classifyKey(key, { protocol = false } = {}) {
-    const text = String(key || '').normalize('NFKC');
+    const text = plain(key || '');
     const words = wordsOf(text);
     if (!words.length) return null;
     const has = (list) => words.some((w) => list.includes(w));
@@ -326,7 +333,7 @@
    */
   function classifyField(meta = {}) {
     const type = String(meta.type || '').toLowerCase();
-    const autocomplete = String(meta.autocomplete || '').toLowerCase();
+    const autocomplete = plain(meta.autocomplete || '').toLowerCase();
     if (type === 'hidden') return { kind: 'ignore' };
     // A chosen option is the page's own text (Japan from country_id, Morning from a "session" list): kept, except
     // when the name says card data or a credential (an expiry month, a one-time code chosen from a list).
@@ -606,14 +613,15 @@
     };
     // under: the credential kind of a key above, which covers everything nested in it.
     // args: inside WebMCP arguments, where keys are protocol keys (code, state) as in maskArgs.
-    const walk = (v, path, key = '', under = null, args = false) => {
+    // namedUnder: the contact or id kind of an argument key above ({ user_id: { value: ... } }), as maskArgs carries it.
+    const walk = (v, path, key = '', under = null, args = false, namedUnder = null) => {
       // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only the recording's own, only numbers.
       if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object'
           && Object.values(v).every((n) => Number.isInteger(n))) return undefined;
       const inArgs = args || key === 'args';
       const kind = under || (key && credential(key, { protocol: args }) ? classifyKey(key, { protocol: args }) : null);
       // In WebMCP arguments, a contact or id key's value must be one this filter already hid (a***@e***.com, ab**23).
-      const named = args && key ? classifyKey(key, { protocol: true }) : null;
+      const named = (args && key ? classifyKey(key, { protocol: true }) : null) || namedUnder;
       if (!kind && ['email', 'phone', 'id'].includes(named) && (typeof v === 'number' || typeof v === 'string')
           && String(v).trim() && !alreadyHidden(String(v).trim())) {
         findings.push({ path: path || '(root)', kinds: [named] });
@@ -626,11 +634,12 @@
         urlParams(v, path);
         return check(v, path);
       }
-      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind, inArgs));
+      const carried = ['email', 'phone', 'id'].includes(named) ? named : null;
+      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind, inArgs, carried));
       if (v && typeof v === 'object') {
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k, k, kind, inArgs);
+          walk(item, path ? `${path}.${k}` : k, k, kind, inArgs, carried);
         }
       }
       return undefined;
