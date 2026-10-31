@@ -362,3 +362,9 @@ test('argument keys are one line before they are kept (E7; review R27)', () => {
   const args = S.maskArgs({ 'a\tb\nc': 'x' }, { env: 'standard' });
   assert.deepEqual(Object.keys(args), ['a b c']);
 });
+
+test('a URL path never carries a page-made placeholder (K1, U5; review R29)', () => {
+  const { url } = S.scrubUrl('https://example.com/[[secret]]/a', { hostAllowlist: ['example.com'] });
+  assert.equal(url, 'https://example.com/%5B%5Bsecret%5D%5D/a');
+  assert.deepEqual(S.finalScan({ url }), []);
+});

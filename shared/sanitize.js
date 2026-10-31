@@ -410,7 +410,8 @@
       if (ID_SEGMENT.test(decoded)) { kinds.push('id'); return ':id'; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
       if (r.kinds.length) { kinds.push(...r.kinds); return ':masked'; }
-      return seg;
+      // The parser leaves [ and ] as they are; encoded, a page's "[[secret]]" never reads as ours (K1).
+      return seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
     }).join('/');
 
     const params = [];

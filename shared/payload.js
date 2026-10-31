@@ -384,6 +384,8 @@
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return bad('not http(s)');
     if (url.username || url.password) return bad('credentials in URL');
     if (origin && (url.pathname !== '/' || url.search || url.hash || value !== url.origin)) return bad('not an origin');
+    // K1 in URLs: the only "[" a URL carries is the masking's own [[v]] query value (review R29).
+    if (/[[\]]/.test(url.pathname) || /[[\]]/.test(url.search.replace(/=\[\[v\]\](?=&|$)/g, '='))) return bad('bracket outside a placeholder');
     if (env === 'commercial') {
       for (const [, v] of url.searchParams) if (v && v !== '[[v]]') return bad('commercial query value kept');
       if (url.hash) return bad('commercial fragment kept');

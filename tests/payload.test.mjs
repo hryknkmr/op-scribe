@@ -499,3 +499,13 @@ test('every bidi control and default-ignorable character is removed, never rende
     assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'hidden character'), JSON.stringify(c));
   }
 });
+
+test('the exits refuse a bracket in a URL outside the masking own [[v]] (K1, E2; review R29)', () => {
+  for (const [value, ok] of [['https://site-1.invalid/[[secret]]', false], ['https://site-1.invalid/a?q=[[secret]]x', false],
+    ['https://site-1.invalid/a?[[k]]=1', false], ['https://site-1.invalid/a?q=[[v]]&r=1', true], ['https://site-1.invalid/%5B%5Bx%5D%5D', true]]) {
+    const r = clone(rec);
+    r.steps.forEach((s) => { s.env = 'standard'; });
+    r.steps[2].url = value;
+    assert.equal(P.checkPayload(regen(build(r))).some((p) => p.problem === 'bracket outside a placeholder'), !ok, value);
+  }
+});
