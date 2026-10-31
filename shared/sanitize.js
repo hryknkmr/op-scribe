@@ -213,6 +213,20 @@
 
   const KEPT_LIMIT = LIMITS.kept;
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
+
+  /**
+   * The treatment of a form control's value, by its classification and the
+   * environment (rows I2-I8). The content script masks by it and the worker
+   * checks what arrives against it, so the two cannot disagree (review R22).
+   */
+  const FIELD_TREATMENT = Object.freeze({
+    secret: Object.freeze({ commercial: 'redacted', standard: 'redacted' }),
+    pii: Object.freeze({ commercial: 'length', standard: 'redacted' }),
+    free: Object.freeze({ commercial: 'length', standard: 'kept' }),
+    choice: Object.freeze({ commercial: 'kept', standard: 'kept' }),
+    search: Object.freeze({ commercial: 'kept', standard: 'kept' })
+  });
+  const fieldTreatment = (cls, env) => FIELD_TREATMENT[cls.kind]?.[env === 'commercial' ? 'commercial' : 'standard'];
   const lengthOf = (text) => [...text].length;
 
   /** Typed values (ADR 0003). Rendered as placeholders only by shared/describe.js. */
@@ -235,16 +249,14 @@
     if (cls.kind === 'ignore') return null;
     const field = FIELD_OF[cls.kind];
     const text = raw == null ? '' : String(raw);
-    const kinds = (kind) => (text ? [kind] : []);
-    const commercial = opts.env === 'commercial';
-    // Secret fields are redacted even when empty (rows I2, I3).
-    if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: kinds(cls.label) };
-    // Personal fields: commercial keeps the length (0 when cleared), standard redacts (row I4).
-    if (cls.kind === 'pii') {
-      return { value: commercial ? typed.length(field, cls.label, text) : typed.redacted(field, cls.label), kinds: kinds(cls.label) };
-    }
-    // Commercial free text is a length even when cleared (row I8).
-    if (cls.kind === 'free' && commercial) return { value: typed.length(field, 'text', text), kinds: kinds('text') };
+    const kind = cls.label || 'text';
+    const kinds = text ? [kind] : [];
+    // Secret fields are redacted even when empty (rows I2, I3); personal fields keep the
+    // length in commercial (0 when cleared) and are redacted in standard (I4); commercial
+    // free text is a length even when cleared (I8).
+    const treatment = fieldTreatment(cls, opts.env);
+    if (treatment === 'redacted') return { value: typed.redacted(field, kind), kinds };
+    if (treatment === 'length') return { value: typed.length(field, kind, text), kinds };
     if (!text) return { value: typed.kept(field, ''), kinds: [] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: KEPT_LIMIT[field] });
     return { value: typed.kept(field, r.text), kinds: r.kinds };
@@ -482,6 +494,7 @@
     usableKeyword,
     typed,
     classifyField,
+    fieldTreatment,
     walkArgs,
     maskFieldValue,
     maskArgs,

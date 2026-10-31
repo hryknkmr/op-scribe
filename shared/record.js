@@ -14,7 +14,7 @@
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
   const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
-  const { scrubText, cleanLine, oneLine, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
+  const { scrubText, cleanLine, oneLine, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
@@ -126,6 +126,7 @@
 
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
   const NO_VALUE_TYPES = new Set(['file', 'checkbox', 'radio']);
+  const STRICTNESS = { kept: 0, length: 1, redacted: 2 };
   const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role'];
 
   /**
@@ -154,6 +155,15 @@
     const value = raw.value;
     if (!value || typeof value !== 'object' || value.field !== field) return null;
     if ((cls.kind === 'secret' || cls.kind === 'pii') && value.kind !== cls.label) return null;
+    // The treatment the content script gives this field in one environment or the other
+    // (fieldTreatment, review R22). It may have judged the environment otherwise: a value
+    // looser than this step's environment allows is made strict, never kept looser.
+    const expected = fieldTreatment(cls, env);
+    if (![fieldTreatment(cls, 'commercial'), fieldTreatment(cls, 'standard')].includes(value.treatment)) return null;
+    if (STRICTNESS[value.treatment] < STRICTNESS[expected]) {
+      kinds.push(cls.label || 'v');
+      return typed.redacted(field, cls.label || 'v');
+    }
     return cleanValue(value, env, settings, kinds, field);
   }
 

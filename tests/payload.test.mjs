@@ -400,3 +400,12 @@ test('a selector longer than its limit passes only with the cut mark (row T3; re
   r.steps[1].target.selector = `#${'a'.repeat(159)}…`;
   assert.deepEqual(P.checkPayload(regen(build(r))), []);
 });
+
+test('a personal field keeps its length only in a commercial step (row E2, I4; review R22)', () => {
+  const r = clone(rec);
+  r.steps[1] = { ...r.steps[1], env: 'standard', value: { treatment: 'length', field: 'pii', kind: 'email', length: 12 } };
+  r.steps.forEach((s) => { s.env = 'standard'; });
+  assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'standard personal value not redacted'));
+  r.steps[1].value = typed.redacted('pii', 'email');
+  assert.ok(!P.checkPayload(regen(build(r))).some((p) => p.path.startsWith('recording.steps[1]')));
+});

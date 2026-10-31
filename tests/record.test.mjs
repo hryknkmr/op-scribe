@@ -73,12 +73,25 @@ test('a value that is not a typed value of its field drops the step; a malformed
   for (const value of ['plain text', 42, null, { text: 'x' }, { treatment: 'other', text: 'x' }]) {
     assert.equal(R.cleanStep(input(value, { field: META.text }), rec, settings, { tabUrl: BETA }), null, JSON.stringify(value));
   }
-  const malformed = [{ treatment: 'other', field: 'text', text: 'x' }, { treatment: 'length', field: 'text', kind: 'text', length: -1 },
-    { treatment: 'redacted', field: 'text', kind: 'url' }, { treatment: 'length', field: 'text', kind: 'email', length: 3 }];
-  for (const value of malformed) {
+  // A treatment the masking never gives this field, in either environment, drops the step too (review R22).
+  for (const value of [{ treatment: 'other', field: 'text', text: 'x' }, { treatment: 'redacted', field: 'text', kind: 'url' }]) {
+    assert.equal(R.cleanStep(input(value), rec, settings, { tabUrl: BETA }), null, JSON.stringify(value));
+  }
+  for (const value of [{ treatment: 'length', field: 'text', kind: 'text', length: -1 }, { treatment: 'length', field: 'text', kind: 'email', length: 3 }]) {
     assert.deepEqual(R.cleanStep(input(value), rec, settings, { tabUrl: BETA }).value, typed.redacted('text', 'v'), JSON.stringify(value));
   }
-  assert.equal(rec.redactions.v, 4);
+  assert.equal(rec.redactions.v, 2);
+});
+
+test('a value looser than the step environment allows is made strict, as the content script would have (row I4; review R22)', () => {
+  const mail = { treatment: 'length', field: 'pii', kind: 'email', length: 12 };
+  // The content script judged commercial, the worker judges standard: the length is not kept.
+  const rec = newRec();
+  assert.deepEqual(R.cleanStep(input(mail, { pageUrl: BETA }), rec, settings, { tabUrl: BETA }).value, typed.redacted('pii', 'email'));
+  assert.deepEqual(rec.redactions, { email: 1 });
+  assert.deepEqual(R.cleanStep(input(mail), newRec(), settings, { tabUrl: PROD }).value, mail);
+  // Stricter than needed stays as it is: a redacted personal value in commercial.
+  assert.deepEqual(R.cleanStep(input(typed.redacted('pii', 'email')), newRec(), settings, { tabUrl: PROD }).value, typed.redacted('pii', 'email'));
 });
 
 test('a field that is not recorded drops the step in the worker too (row I1; review R20)', () => {

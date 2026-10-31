@@ -213,6 +213,8 @@
       if (!hasOnly(v, ['treatment', 'field', 'kind', 'length'])) return bad('unknown field');
       if (v.field === 'secret' || v.field === 'file') return bad(`${v.field} not redacted`);
       if (!Number.isInteger(v.length) || v.length < 0 || v.length > LIMITS.typedLength) return bad('bad length');
+      // A personal field keeps its length only in a commercial step (I4; review R22).
+      if (v.field === 'pii' && env !== 'commercial') return bad('standard personal value not redacted');
       return undefined;
     }
     if (v.field === 'file') {
