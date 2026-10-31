@@ -71,6 +71,15 @@
     : Boolean(Object.hasOwn(TYPED_SCHEMA, treatment) && Object.hasOwn(TYPED_SCHEMA[treatment], field)
       && TYPED_SCHEMA[treatment][field].includes(kind)));
 
+  /**
+   * Characters that hide or reorder text for the reader: every bidi control and
+   * every default-ignorable code point (zero-width, tags, fillers), by Unicode
+   * property rather than a hand-made list (E7; review R28 found U+061C and
+   * U+2066-U+2069 missing from three copies of one). The masking removes them,
+   * the renderer never writes them and the gate refuses them - all from here.
+   */
+  const HIDDEN_CHARS = '[\\p{Bidi_Control}\\p{Default_Ignorable_Code_Point}]';
+
   /** The longest text a cut to n can produce. */
   const cut = (n) => n + 1;
 
@@ -133,7 +142,7 @@
   /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
   const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
 
-  const api = { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
+  const api = { LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

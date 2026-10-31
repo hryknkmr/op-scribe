@@ -17,7 +17,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, cut, primaryRole } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, cut, primaryRole, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
@@ -25,7 +25,7 @@
   // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
   // so "[[text:09012345678]]" written by hand is scanned like any other text.
   // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
-  const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
+  const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
   const OWN_PLACEHOLDER = /\[\[(?:url:([a-z][a-z0-9+.-]{0,15})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */

@@ -19,7 +19,7 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -32,7 +32,7 @@
   // or a Markdown heading, and an invisible or bidi control hides text from the reviewer.
   const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
   const BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
-  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/u;
+  const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
 
   /**
    * Row E7 at the gate, for every string of the recording rather than a list of

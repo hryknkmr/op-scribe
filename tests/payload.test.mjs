@@ -489,3 +489,13 @@ test('a line break in a URL or a hidden character in an argument is refused, and
   typedText.steps.forEach((s) => { s.env = 'standard'; });
   assert.ok(!P.checkPayload(regen(build(typedText))).some((p) => p.problem === 'not one line'));
 });
+
+test('every bidi control and default-ignorable character is removed, never rendered and refused, from one definition (E7; review R28)', () => {
+  for (const c of ['\u061C', '\u2066', '\u2067', '\u2068', '\u2069', '\u00AD', '\u{E0041}']) {
+    assert.equal(S.cleanLine(`a${c}b`).text, 'ab', JSON.stringify(c));
+    const r = clone(rec);
+    r.steps[1].target.name = `a${c}b`;
+    assert.ok(!D.toGherkin(r).includes(c) && !D.toMarkdown(D.buildReproduction(r)).includes(c), JSON.stringify(c));
+    assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'hidden character'), JSON.stringify(c));
+  }
+});

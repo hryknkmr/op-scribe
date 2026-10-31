@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
 
   const LABELS = {
     secret: '秘匿値',
@@ -144,7 +144,7 @@
    * otherwise start a new Gherkin step or Markdown item.
    */
   // Zero-width and bidi controls hide or reorder text for the reader (E7): never rendered.
-  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/gu;
+  const HIDDEN = new RegExp(HIDDEN_CHARS, 'gu');
   const line = (text) => String(text ?? '').replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
 
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
