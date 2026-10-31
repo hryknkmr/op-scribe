@@ -17,13 +17,13 @@
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   // What a step must carry to mean anything (row T6); without it the step is not recorded.
-  const REQUIRED = { navigate: 'url', input: 'value', select: 'value', check: 'checked', upload: 'value', tool: 'tool', note: 'note' };
+  const REQUIRED = { navigate: 'url', input: 'value', select: 'value', check: 'checked', upload: 'value', key: 'key', tool: 'tool', note: 'note' };
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = { choice: 120, search: 120, text: 200, arg: 200 };
   const KIND = /^[a-z]{1,16}$/;
   // ADR 0003 rows T4 and T5.
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
-  const KEY = /^(?:(?:ctrl|meta|alt)\+){0,3}Enter$|^Escape$/;
+  const KEY = /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/;
   // RegExp#test(undefined) tests the string "undefined".
   const is = (re, value) => typeof value === 'string' && re.test(value);
 

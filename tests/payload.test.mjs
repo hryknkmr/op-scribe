@@ -198,3 +198,24 @@ test('checkPayload: an empty secret or personal value is not kept either (rows I
     assert.notDeepEqual(P.checkPayload(regen(payload)), [], field);
   }
 });
+
+test('checkPayload: standard URLs keep only the allowed forms, and key steps carry a valid key (rows U7, U8, T5; review R2)', () => {
+  const standardRec = clone(rec);
+  for (const step of standardRec.steps) step.env = 'standard';
+  const base = () => clone(build(standardRec));
+  const cases = [
+    (p) => { p.recording.steps[0].url = 'https://site-1.invalid/?token=abc%20def'; },
+    (p) => { p.recording.steps[0].url = 'https://site-1.invalid/#customer-secret'; },
+    (p) => { p.recording.steps[0].url = `https://site-1.invalid/?q=${'a'.repeat(25)}`; },
+    (p) => { p.recording.steps.push({ n: p.recording.steps.length + 1, type: 'key', t: 9, env: 'standard', source: 'user' }); },
+    (p) => { p.recording.steps.push({ n: p.recording.steps.length + 1, type: 'key', t: 9, env: 'standard', source: 'user', key: 'ctrl+ctrl+Enter' }); }
+  ];
+  for (const change of cases) {
+    const payload = base();
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
+  }
+  const ok = base();
+  ok.recording.steps[0].url = 'https://site-1.invalid/?tab=items&q=[[v]]#/settings';
+  assert.deepEqual(P.checkPayload(regen(ok)), []);
+});

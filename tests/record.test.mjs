@@ -88,13 +88,15 @@ test('WebMCP arguments: commercial strings and numbers are not kept (rows W2, W3
 test('role, tag and key keep only allowed forms (rows T4, T5)', () => {
   const rec = newRec();
   const step = R.cleanStep({
-    type: 'key', pageUrl: BETA, key: 'a', target: { role: 'Button <b>', tag: 'button', name: 'x' }
+    type: 'click', pageUrl: BETA, target: { role: 'Button <b>', tag: 'button', name: 'x' }
   }, rec, settings, { tabUrl: BETA });
-  assert.equal(step.key, undefined);
   assert.equal(step.target.role, undefined);
   assert.equal(step.target.tag, 'button');
-  assert.equal(R.cleanStep({ type: 'key', key: 'meta+Enter' }, rec, settings, { tabUrl: BETA }).key, 'meta+Enter');
-  assert.equal(R.cleanStep({ type: 'key' }, rec, settings, { tabUrl: BETA }).target, undefined);
+  assert.equal(R.cleanStep({ type: 'key', key: 'ctrl+meta+Enter' }, rec, settings, { tabUrl: BETA }).key, 'ctrl+meta+Enter');
+  // Any other key, or a key that is missing, drops the step (R2).
+  for (const key of ['a', 'ctrl+ctrl+Enter', 'meta+ctrl+Enter', undefined]) {
+    assert.equal(R.cleanStep({ type: 'key', key }, rec, settings, { tabUrl: BETA }), null, String(key));
+  }
 });
 
 test('unknown step types are not recorded (row T6)', () => {

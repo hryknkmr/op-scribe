@@ -52,7 +52,7 @@
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
       checked: opt({ type: 'bool', row: 'T6' }),
-      key: opt(str('T5', 32, /^(?:(?:ctrl|meta|alt)\+){0,3}Enter$|^Escape$/)),
+      key: opt(str('T5', 32, /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/)),
       tool: opt(str('W6', 81)),
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
@@ -306,7 +306,7 @@
     select: { required: ['value'], allowed: ['url', 'target', 'value'] },
     check: { required: ['checked'], allowed: ['url', 'target', 'checked'] },
     upload: { required: ['value'], allowed: ['url', 'target', 'value'] },
-    key: { required: [], allowed: ['url', 'target', 'key'] },
+    key: { required: ['key'], allowed: ['url', 'target', 'key'] },
     submit: { required: [], allowed: ['url', 'target'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
     note: { required: ['note'], allowed: ['url', 'note'] }
@@ -327,6 +327,8 @@
     if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
   }
 
+  const SAFE_VALUE = /^[\w.-]{1,24}$/;
+  const SPA_ROUTE = /^#\/[\w/-]{0,60}$/;
   const PLACEHOLDER_URL = /^\[\[url:[a-z0-9+.-]{1,16}\]\]$/;
 
   /**
@@ -346,7 +348,11 @@
     if (env === 'commercial') {
       for (const [, v] of url.searchParams) if (v && v !== '[[v]]') return bad('commercial query value kept');
       if (url.hash) return bad('commercial fragment kept');
+      return;
     }
+    // standard (rows U7, U8): only the allowed forms; the key names are the worker's job (E2).
+    for (const [, v] of url.searchParams) if (v && v !== '[[v]]' && !SAFE_VALUE.test(v)) return bad('query value not in an allowed form');
+    if (url.hash && !SPA_ROUTE.test(url.hash)) return bad('fragment is not an SPA route');
   }
 
   /**
