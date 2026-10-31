@@ -74,15 +74,14 @@
   }
 
   /**
-   * Where the recording starts, from the steps it still has: the recorded
-   * start URL only while a step still carries it (a deleted first navigation
-   * must not come back, #16), otherwise the first step's URL, or [[url:none]].
+   * Where the recording starts, from the steps it still has: the URL of the
+   * first step that has one, or [[url:none]]. Never the recorded start URL by
+   * itself: a deleted first navigation must not come back, not even when a
+   * later step goes to the same URL (#16; review R34).
    * The Markdown, the Gherkin, the payload and the model input all use this.
    */
   function startUrlOf(rec) {
-    const steps = rec?.steps || [];
-    if (rec?.startUrl && steps.some((s) => s.url === rec.startUrl)) return rec.startUrl;
-    return steps.find((s) => s.url)?.url || '[[url:none]]';
+    return (rec?.steps || []).find((s) => s.url)?.url || '[[url:none]]';
   }
 
   /**

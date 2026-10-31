@@ -104,7 +104,7 @@
       tag: el.tagName.toLowerCase(),
       selector: selectorFor(el)
     };
-    if (el.tagName === 'A' && el.href) target.href = el.href;
+    if ((el.tagName === 'A' || el.tagName === 'AREA') && el.href) target.href = el.href;
     return target;
   }
 

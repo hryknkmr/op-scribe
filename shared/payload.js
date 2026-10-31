@@ -416,6 +416,7 @@
     const start = payload.recording.startUrl;
     const startStep = steps.find((s) => s.url === start);
     if (!startStep && start !== '[[url:none]]') problems.push({ path: 'recording.startUrl', problem: 'not a URL of the steps' });
+    else if (start !== D.startUrlOf(payload.recording)) problems.push({ path: 'recording.startUrl', problem: 'not the first URL of the steps' });
     // [[url:none]] means no step has a URL: with one, the start is that URL (startUrlOf; review R30).
     if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
     checkUrl(start, startStep?.env, 'recording.startUrl', problems, { none: true });

@@ -171,6 +171,7 @@ test('checkPayload checks the form of every URL value (rows U1-U4, U7, U8; revie
   }
   const ok = clone(build());
   ok.recording.steps[0].url = 'https://site-1.invalid/?q=[[v]]';
+  ok.recording.startUrl = ok.recording.steps[0].url;
   ok.recording.steps[1].url = '[[url:invalid]]';
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
@@ -217,6 +218,7 @@ test('checkPayload: standard URLs keep only the allowed forms, and key steps car
   }
   const ok = base();
   ok.recording.steps[0].url = 'https://site-1.invalid/?tab=items&q=[[v]]#/settings';
+  ok.recording.startUrl = ok.recording.steps[0].url;
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
 
@@ -533,4 +535,18 @@ test('a select holds a choice, never free text with its longer limit (I5, E2; re
   assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'text value in select'));
   r.steps[2].value = typed.kept('choice', '東京');
   assert.ok(!P.checkPayload(regen(build(r))).some((p) => p.path === 'recording.steps[2].value'));
+});
+
+test('a deleted start URL never comes back, not even when a later step goes there (E3, E4; review R34)', () => {
+  const r = clone(rec);
+  r.startUrl = 'https://site-1.invalid/a';
+  r.steps = [
+    { type: 'click', t: 1, env: 'standard', source: 'user', url: 'https://site-1.invalid/b', target: { role: 'button', name: 'x' } },
+    { type: 'navigate', t: 2, env: 'standard', source: 'user', url: 'https://site-1.invalid/a' }
+  ];
+  assert.equal(D.startUrlOf(r), 'https://site-1.invalid/b');
+  const payload = build(r);
+  assert.equal(payload.recording.startUrl, 'https://site-1.invalid/b');
+  payload.recording.startUrl = 'https://site-1.invalid/a';
+  assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'not the first URL of the steps'));
 });

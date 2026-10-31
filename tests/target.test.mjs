@@ -129,3 +129,11 @@ test('a field inside a <search> element is in a search landmark (row I6; review 
   plain.parentElement = el('div', {}, '', [plain]);
   assert.equal(T.inSearch(plain), false);
 });
+
+test('a link of an image map is an operated link named by its alt text (row T2; review R34)', () => {
+  const area = el('area', { href: '/shop', alt: 'ショップ' });
+  assert.equal(T.operated(area), area);
+  assert.equal(T.implicitRole(area), 'link');
+  assert.equal(T.accessibleName(area), 'ショップ');
+  assert.equal(T.operated(el('area', { alt: '飾り' })), null);
+});

@@ -17,7 +17,7 @@
 
   // Elements a person operates by their tag. No <label>: one without a control is page
   // text, and one with a control is recorded through the control it forwards the click to.
-  const NATIVE = 'a[href], button, input, select, textarea, summary, [contenteditable=""], [contenteditable="true"]';
+  const NATIVE = 'a[href], area[href], button, input, select, textarea, summary, [contenteditable=""], [contenteditable="true"]';
   // ARIA widget roles: elements a person operates, whatever their tag.
   const WIDGET_ROLES = new Set(['button', 'link', 'menuitem', 'menuitemcheckbox', 'menuitemradio', 'tab', 'checkbox',
     'radio', 'switch', 'option', 'combobox', 'treeitem', 'slider', 'spinbutton', 'listbox', 'searchbox', 'textbox',
@@ -60,7 +60,8 @@
     if (role) return role;
     const tag = el.tagName.toLowerCase();
     switch (tag) {
-      case 'a': return el.hasAttribute('href') ? 'link' : 'generic';
+      case 'a':
+      case 'area': return el.hasAttribute('href') ? 'link' : 'generic';
       case 'button':
       case 'summary': return 'button';
       case 'select': return el.multiple || el.size > 1 ? 'listbox' : 'combobox';
@@ -95,7 +96,8 @@
         .filter(Boolean).map(textOf).join(' ');
       if (text) return text;
     }
-    if (el.tagName === 'IMG') return oneLine(el.alt);
+    // An image, or a link of an image map, is named by its alt text (T2; review R34).
+    if (el.tagName === 'IMG' || el.tagName === 'AREA') return oneLine(el.alt);
     const declared = oneLine(el.getAttribute('title'));
     if (!isOperated(el)) return declared;
     if (el.labels?.length) {
