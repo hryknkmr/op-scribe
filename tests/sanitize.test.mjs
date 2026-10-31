@@ -448,3 +448,14 @@ test('encoded fragment parameters, exact aliases at the exit, keys starting with
   const once = S.maskArgs({ email: 'a@example.com', phone: '090-1234-5678' });
   assert.deepEqual(S.maskArgs(once, { trustHidden: true }), once);
 });
+
+test('names mixing Latin and Japanese, narrower card and phone words, and only real redaction counts skipped', () => {
+  for (const label of ['PINコード', 'OTPコード', 'TOTPコード', 'SMSコード', 'ログインコード']) {
+    assert.equal(S.maskFieldValue('123456', { label }).value, '[[secret]]', label);
+  }
+  for (const name of ['cardTitle', 'cardinality', 'headphone_model', 'smartphone']) assert.equal(S.classifyKey(name), null, name);
+  for (const name of ['card_number', 'cardholder', 'credit_card']) assert.equal(S.classifyKey(name), 'card', name);
+  assert.equal(S.classifyKey('mobile_phone'), 'phone');
+  assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { 'alice@example.com': 1 } } } }).length, 1);
+  assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { secret: 2, email: 1 } } } }), []);
+});

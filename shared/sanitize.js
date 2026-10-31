@@ -274,10 +274,15 @@
    */
   const wordsOf = (key) => plain(key || '')
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    // Latin and other letters written together are separate words: PINコード -> pin コード.
+    .replace(/([A-Za-z0-9])([^\x00-\x7f])/g, '$1 $2').replace(/([^\x00-\x7f])([A-Za-z0-9])/g, '$1 $2')
     .toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    .map((w) => JA_WORDS[w] || w)
     .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
 
   // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
+  // Japanese words that name the same thing as an English one, so the pairs below apply: PINコード, APIキー.
+  const JA_WORDS = { コード: 'code', キー: 'key' };
   const SESSION_WORDS = new Set(['session', 'sessionid', 'sid']);
   const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
@@ -285,17 +290,18 @@
   const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)|^pass$|^(?:user|login|admin|account|new|old|current|confirm|db)pass$|^(?:verification|verify|confirm|confirmation|auth|access|login|sms|backup|recovery|onetime|otp|mfa|pin)code$/;
   const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session'];
   const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
-    'sms', 'backup', 'recovery', 'time', 'otp', 'mfa', 'pin'];
+    'sms', 'backup', 'recovery', 'time', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'pin', 'ログイン', '確認', '認証', 'セキュリティ'];
   // Only in URLs and protocol arguments: OAuth and signed-URL parameters. A form field named "state" or "code" is a
   // place or a promotion code, and is kept.
   const PROTOCOL_WORDS = new Set(['auth', 'key', 'code', 'state', 'session', 'sid', 'sig', 'signature', 'nonce', 'ticket', 'pass', 'saml', 'assertion']);
   const JA_CARD = /有効期限|カード番号|セキュリティコード/;
-  const JA_SECRET = /暗証|パスワード|認証コード|確認コード|ワンタイム|トークン|秘密鍵|シークレット|(?:API|アクセス|プライベート)キー/i;
+  const JA_SECRET = /暗証|パスワード|(?:認証|確認|ログイン|セキュリティ|バックアップ|リカバリー?)コード|二段階|2段階|ワンタイム|トークン|秘密鍵|シークレット|(?:API|アクセス|プライベート)キー/i;
   // ユーザーID, ログインID, 会員番号: an id named in Japanese (after NFKC, ＩＤ is ID).
   const JA_ID = /[^\x00-\x7f]ID$|(?:会員|顧客|注文|ユーザー|アカウント|管理)番号$/i;
   const JA_EMAIL = /メール/;
   const JA_PHONE = /電話|携帯/;
-  const PHONE_WORDS = new Set(['phone', 'tel', 'telephone', 'mobile', 'fax', 'cell']);
+  // Whole words only: a headphone model is not a phone number.
+  const PHONE_WORDS = new Set(['phone', 'tel', 'telephone', 'mobile', 'fax', 'cell', 'cellphone', 'mobilephone', 'phonenumber', 'telno']);
   const ID_WORDS = new Set(['id', 'ids', 'uid', 'uuid', 'guid', 'username', 'userid', 'loginid', 'login', 'account', 'handle', 'nickname']);
 
   /**
@@ -309,15 +315,16 @@
     const has = (list) => words.some((w) => list.includes(w));
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
     // Any name with card or cc in it (credit_card, cc-name, cardholder): card data is hidden whole.
-    if (JA_CARD.test(text) || has(['card', 'cc', 'credit', 'cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'securitycode', 'cardcode'])
-        || words.some((w) => /^(?:card|credit)/.test(w)) || pair(['card', 'cc'], 'number')
+    // card on its own (card_title) is not card data; with what names a card's data it is (card_number, card holder).
+    if (JA_CARD.test(text) || has(['cc', 'credit', 'cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
+        || pair(['card'], 'holder') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
         || pair(KEY_OWNERS, 'key') || pair(CODE_OWNERS, 'code') || words.some((w) => /^(?:pass|pwd|otp|pin)$/.test(w) && protocol)
         || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
     if (JA_EMAIL.test(text) || words.some((w) => w.includes('email') || /^mail(?:add?ress|addr)?$/.test(w)) || pair(['e'], 'mail')) return 'email';
-    if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w) || w.endsWith('phone'))) return 'phone';
+    if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w))) return 'phone';
     if (JA_ID.test(text.trim()) || ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
     return null;
   }
@@ -623,8 +630,8 @@
     // namedUnder: the contact or id kind of an argument key above ({ user_id: { value: ... } }), as maskArgs carries it.
     const walk = (v, path, key = '', under = null, args = false, namedUnder = null) => {
       // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only the recording's own, only numbers.
-      if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object'
-          && Object.values(v).every((n) => Number.isInteger(n))) return undefined;
+      if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object' && !Array.isArray(v)
+          && Object.entries(v).every(([k, n]) => /^[a-z]{1,16}$/.test(k) && Number.isInteger(n) && n >= 0 && n < 1e6)) return undefined;
       const inArgs = args || key === 'args';
       const kind = under || (key && credential(key, { protocol: args }) ? classifyKey(key, { protocol: args }) : null);
       // In WebMCP arguments, a contact or id key's value must be one this filter already hid (a***@e***.com, ab**23).
