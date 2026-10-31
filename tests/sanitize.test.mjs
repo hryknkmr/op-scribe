@@ -94,10 +94,14 @@ test('maskFieldValue: personal fields keep the length in commercial and are reda
     { treatment: 'redacted', field: 'pii', kind: 'personal' });
 });
 
-test('maskFieldValue: hidden fields are not recorded and empty values stay empty (row I1)', () => {
+test('maskFieldValue: hidden fields are not recorded; empty secret and personal fields are still redacted (rows I1-I4)', () => {
   assert.equal(S.maskFieldValue('x', { type: 'hidden' }, standard), null);
   assert.deepEqual(S.maskFieldValue('', { type: 'password' }, standard).value,
-    { treatment: 'kept', field: 'secret', text: '' });
+    { treatment: 'redacted', field: 'secret', kind: 'secret' });
+  assert.deepEqual(S.maskFieldValue('', { type: 'email' }, commercial).value,
+    { treatment: 'redacted', field: 'pii', kind: 'email' });
+  assert.deepEqual(S.maskFieldValue('', { type: 'text' }, commercial).value,
+    { treatment: 'kept', field: 'text', text: '' });
 });
 
 test('scrubText breaks up "[[" written by the page so only masking makes placeholders (row K1)', () => {

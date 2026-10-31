@@ -13,9 +13,11 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { scrubText, scrubUrl, hostAllowed, typed } = S;
+  const { scrubText, scrubUrl, hostAllowed, typed, classifyField } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
+  // What a step must carry to mean anything (row T6); without it the step is not recorded.
+  const REQUIRED = { navigate: 'url', input: 'value', select: 'value', check: 'checked', upload: 'value', tool: 'tool', note: 'note' };
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = { choice: 120, search: 120, text: 200, arg: 200 };
   const KIND = /^[a-z]{1,16}$/;
@@ -76,8 +78,8 @@
             : typed.redacted('arg', 'number');
         }
         const text = typeof value.text === 'string' ? value.text : '';
-        if (!text) return typed.kept(f, '');
         if (f === 'secret' || f === 'pii' || f === 'file') return fail(f);
+        if (!text) return typed.kept(f, '');
         if (env === 'commercial' && (f === 'text' || f === 'arg')) return fail(f);
         // Already escaped by the content script: keep its own placeholders.
         const r = scrubText(text, { keywords: settings.keywords, maxLength: KEPT_LIMIT[f], escape: false });
@@ -89,19 +91,25 @@
     }
   }
 
-  /** WebMCP arguments (rows W1-W5): same shape rules as maskArgs, values checked again. */
-  function cleanArgs(node, env, settings, kinds, depth = 0) {
+  /**
+   * WebMCP arguments (rows W1-W5): same shape rules as maskArgs, values checked
+   * again. key is the nearest object key above the value (arrays inherit it):
+   * under a credential or personal key nothing is kept, whatever arrives (W1).
+   */
+  function cleanArgs(node, env, settings, kinds, depth = 0, key = '') {
     if (node === null || typeof node === 'boolean') return node;
     if (node && typeof node === 'object' && typeof node.treatment === 'string') {
+      const cls = key ? classifyField({ name: key }) : null;
+      if (cls && (cls.kind === 'secret' || cls.kind === 'pii')) return typed.redacted('arg', cls.label);
       return cleanValue(node, env, settings, kinds, 'arg');
     }
     if (depth >= 3) return typed.redacted('arg', 'nested');
-    if (Array.isArray(node)) return node.slice(0, 10).map((v) => cleanArgs(v, env, settings, kinds, depth + 1));
+    if (Array.isArray(node)) return node.slice(0, 10).map((v) => cleanArgs(v, env, settings, kinds, depth + 1, key));
     if (node && typeof node === 'object') {
       const out = {};
       for (const [k, v] of Object.entries(node).slice(0, 20)) {
         const r = scrubText(k, { keywords: settings.keywords, maxLength: 40 });
-        out[r.kinds.length ? 'masked' : r.text] = cleanArgs(v, env, settings, kinds, depth + 1);
+        out[r.kinds.length ? 'masked' : r.text] = cleanArgs(v, env, settings, kinds, depth + 1, k);
       }
       return out;
     }
@@ -160,6 +168,9 @@
       if (raw.args !== undefined) step.args = cleanArgs(raw.args, env, settings, kinds);
     }
     if (type === 'note') step.note = text(raw.note, 300);
+    if (REQUIRED[type] && (step[REQUIRED[type]] === undefined || step[REQUIRED[type]] === '')) return null;
+    if (type === 'upload' && step.value.field !== 'file') step.value = typed.file(0);
+    if (type !== 'upload' && step.value?.field === 'file') step.value = typed.redacted('text', 'v');
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
       if (is(KIND, kind)) rec.redactions[kind] = (rec.redactions[kind] || 0) + 1;
     }

@@ -151,3 +151,50 @@ test('checkPayload is independent of the masking: it never calls shared/sanitize
   const source = readFileSync(new URL('../shared/payload.js', import.meta.url), 'utf8');
   assert.ok(!/OpScribeSanitize|sanitize\.js'\)/.test(source));
 });
+
+const regen = (p) => { p.reproduction.gherkin = D.toGherkin(p.recording); return p; };
+
+test('checkPayload checks the form of every URL value (rows U1-U4, U7, U8; review R1)', () => {
+  const cases = [
+    (p) => { p.recording.startUrl = 'javascript:alert(1)'; },
+    (p) => { p.recording.steps[0].url = 'not a url'; },
+    (p) => { p.recording.steps[0].url = 'https://name:pw@site-1.invalid/'; },
+    (p) => { p.recording.steps[0].url = 'https://site-1.invalid/?q=hello'; }, // commercial query kept
+    (p) => { p.recording.steps[0].url = 'https://site-1.invalid/#/route'; }, // commercial fragment kept
+    (p) => { p.recording.steps[1].target.href = 'data:text/html,x'; },
+    (p) => { p.recording.webmcpTools[0].site = 'https://site-1.invalid/path?x=1'; }
+  ];
+  for (const change of cases) {
+    const payload = clone(build());
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
+  }
+  const ok = clone(build());
+  ok.recording.steps[0].url = 'https://site-1.invalid/?q=[[v]]';
+  ok.recording.steps[1].url = '[[url:invalid]]';
+  assert.deepEqual(P.checkPayload(regen(ok)), []);
+});
+
+test('checkPayload checks what each kind of step must and may carry (row T6; review R1)', () => {
+  const cases = [
+    (p) => { delete p.recording.steps[1].value; }, // input without a value
+    (p) => { p.recording.steps[0].value = { treatment: 'kept', field: 'text', text: '' }; }, // navigate with a value
+    (p) => { delete p.recording.steps[0].url; }, // navigate without a URL
+    (p) => { p.recording.steps[5].checked = true; }, // note with checked
+    (p) => { p.recording.steps[4].source = 'user'; }, // tool not from agent
+    (p) => { p.recording.steps[1].value = { treatment: 'redacted', field: 'file', kind: 'file', count: 1 }; } // file outside upload
+  ];
+  for (const change of cases) {
+    const payload = clone(build());
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
+  }
+});
+
+test('checkPayload: an empty secret or personal value is not kept either (rows I2-I4; review R1)', () => {
+  for (const field of ['secret', 'pii']) {
+    const payload = clone(build());
+    payload.recording.steps[1].value = { treatment: 'kept', field, text: '' };
+    assert.notDeepEqual(P.checkPayload(regen(payload)), [], field);
+  }
+});

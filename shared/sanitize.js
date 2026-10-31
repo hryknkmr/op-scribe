@@ -185,8 +185,10 @@
     if (cls.kind === 'ignore') return null;
     const field = FIELD_OF[cls.kind];
     const text = raw == null ? '' : String(raw);
+    // Secret and personal fields are redacted even when empty: no exception to rows I2-I4.
+    if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: text ? [cls.label] : [] };
+    if (cls.kind === 'pii' && !text) return { value: typed.redacted(field, cls.label), kinds: [] };
     if (!text) return { value: typed.kept(field, ''), kinds: [] };
-    if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: [cls.label] };
     const commercial = opts.env === 'commercial';
     if (cls.kind === 'pii') {
       return commercial

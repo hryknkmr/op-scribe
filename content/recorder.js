@@ -169,8 +169,8 @@
       if (!el) return;
       // Fields and toggles are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
-      if (el.tagName === 'LABEL' && el.control
-          && (isToggle(el.control) || isTextField(el.control) || el.control.tagName === 'SELECT')) return;
+      // A label with a control: the browser forwards the click to the control, which records itself.
+      if (!el.matches(T.INTERACTIVE) && el.closest('label')?.control) return;
       emit('click', { target: describe(el) });
     },
 

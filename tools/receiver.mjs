@@ -4,6 +4,12 @@
  *
  *   pnpm receiver                      # http://localhost:8787/recordings
  *   OPSCRIBE_TOKEN=xyz pnpm receiver   # also require "Authorization: Bearer xyz"
+ *   OPSCRIBE_KEYWORDS_FILE=words.txt pnpm receiver
+ *                                      # also refuse the words and real host names listed
+ *                                      # (one per line, # for comments; keep the file local)
+ *
+ * The extension never sends its keyword list or the real hosts it aliased, so
+ * the receiver can only look for them when its operator lists them (ADR 0003, E6).
  *
  * Binds to 127.0.0.1 only. Runs the same two checks as the extension's exits:
  * the structural check against the one payload definition (shared/payload.js:
@@ -14,6 +20,7 @@
  */
 import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
@@ -25,6 +32,10 @@ const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
 const OUT_DIR = join(process.cwd(), 'recordings');
 const MAX_BYTES = 1024 * 1024;
+const KEYWORDS_FILE = process.env.OPSCRIBE_KEYWORDS_FILE || '';
+const KEYWORDS = KEYWORDS_FILE
+  ? readFileSync(KEYWORDS_FILE, 'utf8').split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
+  : [];
 
 const reply = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -57,7 +68,7 @@ createServer(async (req, res) => {
     console.warn('rejected: unexpected shape', problems);
     return reply(res, 422, { error: 'unexpected shape', problems });
   }
-  const findings = finalScan(payload);
+  const findings = finalScan(payload, { keywords: KEYWORDS });
   if (findings.length) {
     console.warn('rejected: still contains', findings);
     return reply(res, 422, { error: 'unmasked values', findings });
@@ -71,4 +82,7 @@ createServer(async (req, res) => {
   return reply(res, 201, { ok: true, id });
 }).listen(PORT, '127.0.0.1', () => {
   console.log(`op-scribe receiver on http://localhost:${PORT}/recordings${TOKEN ? ' (token required)' : ''}`);
+  if (!KEYWORDS.length) {
+    console.warn('keywords: none. Set OPSCRIBE_KEYWORDS_FILE to also refuse your keywords and real host names.');
+  }
 });

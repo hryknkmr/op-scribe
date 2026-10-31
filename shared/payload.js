@@ -194,8 +194,8 @@
         return undefined;
       }
       if (typeof v.text !== 'string' || v.number !== undefined) return bad('kept value is not text');
-      if (v.text === '') return undefined;
       if (v.field === 'secret' || v.field === 'pii' || v.field === 'file') return bad(`${v.field} kept`);
+      if (v.text === '') return undefined;
       if (env === 'commercial' && (v.field === 'text' || v.field === 'arg')) return bad('commercial free text kept');
       if ([...v.text].length > KEPT_MAX[v.field]) return bad('too long');
       return undefined;
@@ -298,6 +298,57 @@
     }
   }
 
+  // Row T6: what each kind of step must and may carry, besides n, type, t, env and source.
+  const STEP_RULES = {
+    navigate: { required: ['url'], allowed: ['url'] },
+    click: { required: [], allowed: ['url', 'target'] },
+    input: { required: ['value'], allowed: ['url', 'target', 'value'] },
+    select: { required: ['value'], allowed: ['url', 'target', 'value'] },
+    check: { required: ['checked'], allowed: ['url', 'target', 'checked'] },
+    upload: { required: ['value'], allowed: ['url', 'target', 'value'] },
+    key: { required: [], allowed: ['url', 'target', 'key'] },
+    submit: { required: [], allowed: ['url', 'target'] },
+    tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
+    note: { required: ['note'], allowed: ['url', 'note'] }
+  };
+  const BASE_FIELDS = ['n', 'type', 't', 'env', 'source'];
+
+  function checkStepKind(step, path, problems) {
+    const rule = STEP_RULES[step.type];
+    for (const f of rule.required) {
+      if (step[f] === undefined || step[f] === '') problems.push({ path: `${path}.${f}`, problem: `missing for ${step.type}` });
+    }
+    for (const f of Object.keys(step)) {
+      if (!BASE_FIELDS.includes(f) && !rule.allowed.includes(f)) problems.push({ path: `${path}.${f}`, problem: `not allowed for ${step.type}` });
+    }
+    const field = step.value?.field;
+    if (step.type === 'upload' && step.value !== undefined && field !== 'file') problems.push({ path: `${path}.value`, problem: 'upload is not a file value' });
+    if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
+    if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
+  }
+
+  const PLACEHOLDER_URL = /^\[\[url:[a-z0-9+.-]{1,16}\]\]$/;
+
+  /**
+   * Rows U1-U4, U7, U8: a URL value is either the placeholder for a URL that was
+   * redacted as a whole, or an http(s) URL without user:pass@. In a commercial
+   * step every query value is [[v]] and there is no fragment (the interim
+   * rule until ③). site (WebMCP) is an origin only.
+   */
+  function checkUrl(value, env, path, problems, { origin = false } = {}) {
+    const bad = (problem) => problems.push({ path, problem });
+    if (PLACEHOLDER_URL.test(value)) return;
+    let url;
+    try { url = new URL(value); } catch { return bad('not a URL'); }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return bad('not http(s)');
+    if (url.username || url.password) return bad('credentials in URL');
+    if (origin && (url.pathname !== '/' || url.search || url.hash || value !== url.origin)) return bad('not an origin');
+    if (env === 'commercial') {
+      for (const [, v] of url.searchParams) if (v && v !== '[[v]]') return bad('commercial query value kept');
+      if (url.hash) return bad('commercial fragment kept');
+    }
+  }
+
   /**
    * Problems with a payload as [{ path, problem }]; empty means it may leave.
    * Run on the exact object about to be sent, copied or saved, and on receipt.
@@ -308,9 +359,16 @@
     if (problems.length) return problems;
 
     const steps = payload.recording.steps;
+    // The start URL is the first navigation's URL; judge it by that step even if earlier steps were deleted.
+    const startEnv = steps.find((s) => s.url === payload.recording.startUrl)?.env;
+    checkUrl(payload.recording.startUrl, startEnv, 'recording.startUrl', problems);
+    payload.recording.webmcpTools.forEach((w, i) => checkUrl(w.site, 'standard', `recording.webmcpTools[${i}].site`, problems, { origin: true }));
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });
+      checkStepKind(step, path, problems);
+      if (step.url !== undefined) checkUrl(step.url, step.env, `${path}.url`, problems);
+      if (step.target?.href !== undefined) checkUrl(step.target.href, step.env, `${path}.target.href`, problems);
       if (step.value !== undefined) checkTyped(step.value, step.env, `${path}.value`, problems);
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
       if (step.args !== undefined) checkArgs(step.args, step.env, `${path}.args`, problems);

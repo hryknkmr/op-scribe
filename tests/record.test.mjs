@@ -51,8 +51,8 @@ test('secret and personal fields are never kept, whatever the environment (rows 
     const rec = newRec();
     assert.equal(R.cleanStep(input(typed.kept('secret', 'hunter2')), rec, settings, { tabUrl }).value.treatment, 'redacted');
     assert.equal(R.cleanStep(input(typed.kept('pii', 'Taro')), rec, settings, { tabUrl }).value.treatment, 'redacted');
-    // Empty means "cleared the field" and carries nothing.
-    assert.deepEqual(R.cleanStep(input(typed.kept('secret', '')), rec, settings, { tabUrl }).value, typed.kept('secret', ''));
+    // Even empty: no exception to the rows (R1).
+    assert.equal(R.cleanStep(input(typed.kept('secret', '')), rec, settings, { tabUrl }).value.treatment, 'redacted');
   }
 });
 
@@ -124,4 +124,24 @@ test('names, notes, tool names and selectors are one line (rows T1-T3, W6, #18)'
   assert.equal(note.note, 'a b c');
   const tool = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x\ny' }, rec, settings, { tabUrl: BETA });
   assert.equal(tool.tool, 'x y');
+});
+
+test('WebMCP arguments under a credential or personal key are redacted, whatever arrives (row W1; review R1)', () => {
+  const args = { email: typed.kept('arg', 'Alice'), list: { phone: [typed.kept('arg', '1'), typed.keptNumber(2)] }, q: typed.kept('arg', 'shoes') };
+  const step = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', args }, newRec(), settings, { tabUrl: BETA });
+  assert.deepEqual(step.args.email, { treatment: 'redacted', field: 'arg', kind: 'email' });
+  assert.deepEqual(step.args.list.phone, [
+    { treatment: 'redacted', field: 'arg', kind: 'phone' },
+    { treatment: 'redacted', field: 'arg', kind: 'phone' }
+  ]);
+  assert.deepEqual(step.args.q, typed.kept('arg', 'shoes'));
+});
+
+test('steps without what they must carry are not recorded (row T6; review R1)', () => {
+  const rec = newRec();
+  assert.equal(R.cleanStep({ type: 'input', pageUrl: BETA }, rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep({ type: 'navigate' }, rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep({ type: 'note' }, rec, settings), null);
+  const upload = R.cleanStep({ type: 'upload', pageUrl: BETA, value: typed.kept('text', 'a.txt') }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(upload.value, typed.file(0));
 });

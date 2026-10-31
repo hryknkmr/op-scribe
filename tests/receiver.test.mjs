@@ -3,7 +3,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -14,8 +14,13 @@ const P = require('../shared/payload.js');
 
 const dir = mkdtempSync(join(tmpdir(), 'opscribe-receiver-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
-const server = spawn(process.execPath, [new URL('../tools/receiver.mjs', import.meta.url).pathname],
-  { cwd: dir, env: { ...process.env, PORT: String(port), OPSCRIBE_TOKEN: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+// Fictional words only; a real list lives outside the repository.
+writeFileSync(join(dir, 'words.txt'), '# local list\nAcme Labs\nintranet.corp.invalid\n');
+const server = spawn(process.execPath, [new URL('../tools/receiver.mjs', import.meta.url).pathname], {
+  cwd: dir,
+  env: { ...process.env, PORT: String(port), OPSCRIBE_TOKEN: '', OPSCRIBE_KEYWORDS_FILE: join(dir, 'words.txt') },
+  stdio: ['ignore', 'pipe', 'pipe']
+});
 after(() => server.kill());
 
 await new Promise((resolve, reject) => {
@@ -62,6 +67,16 @@ test('a commercial value that was kept is refused (row E2)', async () => {
   const res = await post(payload);
   assert.equal(res.status, 422);
   assert.ok(res.body.problems.some((p) => p.problem === 'commercial free text kept'));
+});
+
+test('keywords and real host names from the operator list are refused (row E6)', async () => {
+  for (const markdown of ['# Acme Labs の手順', '1. https://intranet.corp.invalid/ を開く']) {
+    const payload = good();
+    payload.reproduction.markdown = markdown;
+    const res = await post(payload);
+    assert.equal(res.status, 422, markdown);
+    assert.equal(res.body.error, 'unmasked values');
+  }
 });
 
 test('a well-formed payload is stored, and the old checks still hold', async () => {

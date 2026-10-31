@@ -50,7 +50,7 @@ function el(tag, attrs = {}, text = '', children = []) {
 const SECRET_TEXT = '山田さんへの返信: 来週の打ち合わせは';
 
 test('page content that nobody operates is not named by its text (#15)', () => {
-  for (const tag of ['p', 'div', 'main', 'form', 'body', 'section', 'h2']) {
+  for (const tag of ['p', 'div', 'main', 'form', 'body', 'section', 'h2', 'label']) {
     const node = el(tag, {}, SECRET_TEXT);
     assert.equal(T.operated(node), null, tag);
     assert.equal(T.accessibleName(node), '', tag);
