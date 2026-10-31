@@ -94,13 +94,15 @@
     {
       // A credential written as key and value in text or JSON: otp=123456, "pin": "1234", backup code: ABCDEF.
       kind: 'secret',
-      re: /\b(token|api[_-]?key|secret|password|passwd|pwd|passcode|otp|pin|cvc|cvv|session|authorization|credentials?|(?:backup|recovery|verification|auth|one[_-]?time)[ _-]?code)(["']?\s*[:=]\s*["']?)(?!\[\[)[^\s"'&,}]{3,}/gi,
+      re: /\b(token|api[_-]?key|secret|password|passwd|pwd|passcode|otp|pin|cvc|cvv|session|authorization|credentials?|(?:backup|recovery|verification|auth|one[_-]?time)[ _-]?code)(["']?\s*[:=]\s*["']?)(?!\[\[)[^\s"'&,}]+/gi,
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'email', re: /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, replace: partialEmail },
+    // An address on a single-label (internal) domain: alice@intranet.
+    { kind: 'email', re: /(?<![\w.%+@*-])[\w.%+-]+@[A-Za-z][A-Za-z0-9-]*(?![\w.@*-])/g, replace: partialEmail },
     // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.
     // Words written right before such an address are taken with it: over-matching only hides more.
     { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
@@ -181,7 +183,7 @@
    */
   // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
   // a host with or without dots, in any letters, an IP address, [IPv6]). Over-matching only hides more.
-  const TEXT_URL = /https?:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
+  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
@@ -262,7 +264,7 @@
   const JA_EMAIL = /メール/;
   const JA_PHONE = /電話|携帯/;
   const PHONE_WORDS = new Set(['phone', 'tel', 'telephone', 'mobile', 'fax', 'cell']);
-  const ID_WORDS = new Set(['id', 'ids', 'uid', 'uuid', 'guid']);
+  const ID_WORDS = new Set(['id', 'ids', 'uid', 'uuid', 'guid', 'username', 'userid', 'loginid', 'login', 'account', 'handle', 'nickname']);
 
   /**
    * card | secret | email | phone | id | null. protocol: the key is a URL parameter or a protocol
@@ -282,7 +284,7 @@
         || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
     if (JA_EMAIL.test(text) || words.some((w) => w.includes('email') || /^mail(?:add?ress|addr)?$/.test(w)) || pair(['e'], 'mail')) return 'email';
     if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w) || w.endsWith('phone'))) return 'phone';
-    if (ID_WORDS.has(words[words.length - 1])) return 'id';
+    if (ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
     return null;
   }
 
@@ -304,6 +306,7 @@
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || found.has('secret')) return { kind: 'secret', label: 'secret' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
+    if (/\b(?:username|nickname)\b/.test(autocomplete)) return { kind: 'id' };
     const kind = RANK.find((k) => found.has(k));
     return { kind: kind || 'text' };
   }
@@ -508,22 +511,24 @@
         }
       }
     };
-    const walk = (v, path, key = '') => {
+    // under: the credential kind of a key above, which covers everything nested in it.
+    const walk = (v, path, key = '', under = null) => {
       // Counts of what this filter hid, keyed by kind (secret: 2): not values.
       if (key === 'redactions') return undefined;
+      const kind = under || (key && credential(key) ? classifyKey(key) : null);
       // A value under a key naming a credential is one, unless it is only a placeholder of this filter.
-      if (key && credential(key) && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
-        findings.push({ path: path || '(root)', kinds: [classifyKey(key)] });
+      if (kind && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
+        findings.push({ path: path || '(root)', kinds: [kind] });
       }
       if (typeof v === 'string') {
         urlParams(v, path);
         return check(v, path);
       }
-      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`));
+      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind));
       if (v && typeof v === 'object') {
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k, k);
+          walk(item, path ? `${path}.${k}` : k, k, kind);
         }
       }
       return undefined;

@@ -263,7 +263,7 @@ test('one key judge: the same name means the same in fields, URLs, WebMCP argume
   assert.deepEqual(S.maskArgs({ token: { value: 'abcd' }, authorization: 'Basic dXNlcjpwYXNz', user_id: 'abc123', nested: { order_id: { v: 'zz9' } } }),
     { token: '[[secret]]', authorization: '[[secret]]', user_id: 'ab**23', nested: { order_id: { v: 'z**' } } });
   assert.equal(S.scrubUrl('https://example.com/?authorization=Basic%20x&email=alice%40localhost&orderID=abc123', { hostAllowlist: ['example.com'] }).url,
-    'https://example.com/?authorization=[[secret]]&email=a******t&orderID=ab**23');
+    'https://example.com/?authorization=[[secret]]&email=a***%40l***&orderID=ab**23');
   assert.deepEqual(S.finalScan({ args: { token: 'abc' }, steps: [{ key: 'Enter', args: { otp: '[[secret]]' } }] }).map((f) => f.path), ['args.token']);
 });
 
@@ -291,4 +291,13 @@ test('finalScan stops credential URL parameters and numeric credentials, not the
     recording: { privacy: { redactions: { secret: 2, card: 1 } } }
   });
   assert.deepEqual(findings.map((f) => f.path), ['markdown', 'args.otp']);
+});
+
+test('short credentials, nested credentials, user names, internal addresses and other URL schemes', () => {
+  assert.equal(S.scrubText('password=x pin=12').text, 'password=[[secret]] pin=[[secret]]');
+  assert.deepEqual(S.finalScan({ args: { token: { value: 'x' }, list: [{ secret: 'y' }] } }).map((f) => f.path), ['args.token.value', 'args.list[0].secret']);
+  assert.equal(S.maskFieldValue('taro_y', { autocomplete: 'username' }).value, 'ta**_y');
+  assert.equal(S.maskFieldValue('taro_y', { name: 'username' }).value, 'ta**_y');
+  assert.equal(S.scrubText('alice@intranet or bob@example.com').text, 'a***@i*** or b***@e***.com');
+  assert.equal(S.scrubText('see ftp://private.internal.test/a', { hosts: { hostAllowlist: [], aliases: {} } }).text, 'see [[url:ftp]]');
 });

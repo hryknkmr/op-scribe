@@ -151,7 +151,8 @@ function cleanStep(raw, rec, settings) {
     if (t.selector) {
       const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: settings.hostAllowlist, aliases: {} } });
       // An id-like number or a host name inside the selector (#user-123456, [data-testid="x.example.test"]) too.
-      const identifying = /\/\/|@|\d{3,}|[0-9a-f]{8,}|["'][^"']*[\w-]\.[a-z]{2,}[^"']*["']/i.test(t.selector);
+      // A CSS-escaped dot (#private\.example\.test) is a host name in an id.
+      const identifying = /\/\/|@|\\|\d{3,}|[0-9a-f]{8,}|["'][^"']*[\w-]\.[a-z]{2,}[^"']*["']/i.test(t.selector);
       if (!r.kinds.length && !identifying) step.target.selector = r.text.slice(0, 160);
     }
     if (t.href) step.target.href = url(t.href);
