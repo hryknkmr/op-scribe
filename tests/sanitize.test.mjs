@@ -623,3 +623,13 @@ test('own partial masks pass the exit on production, a malformed escape does not
   assert.equal(S.finalScan({ raw }, { hostAllowlist: ['example.com'] }).length, 1);
   assert.equal(S.scrubText(`Basic ${btoa('a:b')} / Bearer abc123 / Basic auth を使う`).text, '[[secret]] / [[secret]] / Basic auth を使う');
 });
+
+test('Basic in any case, and http URLs written without // or with backslashes, and hosts with underscores', () => {
+  for (const t of [`basic ${'YT' + 'pi'}`, `BASIC ${'YT' + 'pi'}`]) assert.equal(S.scrubText(t).text, '[[secret]]', t);
+  const hosts = () => ({ hostAllowlist: [], aliases: {} });
+  assert.equal(S.scrubText('https:private.internal.test/a', { hosts: hosts() }).text, 'https://site-1.invalid/a');
+  assert.equal(S.scrubText('https:\\\\private.internal.test\\help', { hosts: hosts() }).text, 'https://site-1.invalid/help');
+  assert.equal(S.scrubText('see //internal_host.test/help', { hosts: hosts() }).text, 'see //site-1.invalid/help');
+  for (const t of ['https:private.internal.test/a', 'see //internal_host.test/help']) assert.equal(S.finalScan({ t }, { hostAllowlist: [] }).length, 1, t);
+  assert.equal(S.scrubText('時間: 10:30', { hosts: hosts() }).text, '時間: 10:30');
+});

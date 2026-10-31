@@ -118,8 +118,8 @@
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
     // Bearer and its token, at any length; Basic with what decodes to user:password, or a long token.
     { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi },
-    { kind: 'secret', re: /\bBasic\s+[A-Za-z0-9+/]+=*/g, accept: (m) => {
-      const token = m.replace(/^Basic\s+/, '');
+    { kind: 'secret', re: /\bBasic\s+[A-Za-z0-9+/]+=*/gi, accept: (m) => {
+      const token = m.replace(/^Basic\s+/i, '');
       let decoded = '';
       try { decoded = atob(token); } catch { /* not base64 */ }
       return decoded.includes(':') || token.length >= 8;
@@ -252,7 +252,7 @@
    */
   // With a scheme, or scheme-relative (//host/path, which a page or a link resolves against its own scheme;
   // a host with or without dots, in any letters, an IP address, [IPv6]). Over-matching only hides more.
-  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|\b(?:data|javascript|vbscript|mailto|file|blob):[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:[^\s/@<>"']+@)?(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
+  const TEXT_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|\bhttps?:[\\/]*(?=[\p{L}\p{N}])[^\s<>"'「」『』（）()、。]+|\b(?:data|javascript|vbscript|mailto|file|blob):[^\s<>"'「」『』（）()、。]+|(?<![\w/:])\/\/(?:[^\s/@<>"']+@)?(?:\[[0-9A-Fa-f:.]+\]|[\p{L}\p{N}\p{M}_-]+(?:\.[\p{L}\p{N}\p{M}_-]+)*)(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/giu;
 
   function scrubText(input, opts = {}) {
     const kinds = [];
