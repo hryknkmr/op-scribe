@@ -2,6 +2,7 @@
   "name": "op-scribe",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Chrome extension that records browser operations with privacy masking and renders them as reproduction steps (natural language + Gherkin).",
   "engines": {
     "node": ">=20"
