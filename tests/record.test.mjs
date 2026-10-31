@@ -172,3 +172,11 @@ test('the worker classifies the field names again and redacts what the content s
   const plain = R.cleanStep({ ...input(typed.kept('text', 'hello')), pageUrl: BETA, field: { name: 'comment' } }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(plain.value, typed.kept('text', 'hello'));
 });
+
+test('a listed IDN production host matches the Punycode host a URL yields (rows I8, U4; review new R3)', () => {
+  const policy = R.policyOf({ commercialHosts: ['例え.invalid', '*.ドメイン.invalid'] });
+  assert.equal(R.envOf(['https://例え.invalid/x'], policy), 'commercial');
+  assert.equal(R.envOf(['https://xn--r8jz45g.invalid/x'], policy), 'commercial');
+  assert.equal(R.envOf(['https://www.ドメイン.invalid/'], policy), 'commercial');
+  assert.equal(R.envOf(['https://例.invalid/'], policy), 'standard');
+});

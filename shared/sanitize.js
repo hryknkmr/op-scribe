@@ -268,10 +268,20 @@
 
   // -------------------------------------------------------------------- URLs
 
+  /**
+   * A host as the URL parser writes it (lowercase, IDN as Punycode), so a
+   * listed "例え.invalid" matches the "xn--r8jz45g.invalid" a URL yields.
+   */
+  function parsedHost(host) {
+    const h = String(host).trim().toLowerCase();
+    try { return new URL(`http://${h}/`).hostname; } catch { return h; }
+  }
+
   function hostAllowed(host, list) {
     return (list || []).some((raw) => {
-      const p = String(raw).trim().toLowerCase();
-      if (!p) return false;
+      const entry = String(raw).trim().toLowerCase();
+      if (!entry) return false;
+      const p = entry.startsWith('*.') ? `*.${parsedHost(entry.slice(2))}` : parsedHost(entry);
       if (p.startsWith('*.')) return host === p.slice(2) || host.endsWith(p.slice(1));
       return host === p;
     });
