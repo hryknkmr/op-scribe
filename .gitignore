@@ -8,6 +8,10 @@ tmp/
 recordings/
 *.opscribe.json
 
+# 実サイトでの評価の作業場と、Playwright の出力。
+local/
+test-results/
+
 # 社名・実ホスト名などの denylist。公開しない（scripts/pii-guard.patterns.local.example.txt 参照）。
 scripts/pii-guard.patterns.local.txt
 

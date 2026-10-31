@@ -48,29 +48,97 @@ test('classifyField recognizes secrets and personal fields', () => {
   assert.deepEqual(S.classifyField({ type: 'text', label: '電話番号' }), { kind: 'pii', label: 'phone' });
   assert.equal(S.classifyField({ type: 'text', label: '氏名' }).kind, 'pii');
   assert.equal(S.classifyField({ type: 'hidden' }).kind, 'ignore');
-  assert.equal(S.classifyField({ type: 'search', label: 'キーワード' }).kind, 'free');
+  assert.equal(S.classifyField({ type: 'search', label: 'キーワード' }).kind, 'search');
+  assert.equal(S.classifyField({ type: 'text', label: 'キーワード' }).kind, 'free');
   assert.equal(S.classifyField({ tag: 'select', type: 'select' }).kind, 'choice');
 });
 
-test('maskFieldValue: strict keeps only the length of free text', () => {
-  assert.deepEqual(S.maskFieldValue('週末 レシピ', { type: 'search' }, { privacyLevel: 'strict' }),
-    { value: '[[text:6]]', kinds: ['text'] });
+const commercial = { env: 'commercial' };
+const standard = { env: 'standard' };
+
+test('maskFieldValue: commercial keeps only the length of free text (row I8)', () => {
+  assert.deepEqual(S.maskFieldValue('週末 レシピ', { type: 'text' }, commercial),
+    { value: { treatment: 'length', field: 'text', kind: 'text', length: 6 }, kinds: ['text'] });
+  assert.deepEqual(S.maskFieldValue('本文', { tag: 'textarea', contentEditable: true }, commercial).value.treatment, 'length');
 });
 
-test('maskFieldValue: balanced keeps free text but still masks patterns', () => {
-  assert.equal(S.maskFieldValue('問い合わせ user@example.com', { type: 'text' }, { privacyLevel: 'balanced' }).value,
-    '問い合わせ [[email]]');
+test('maskFieldValue: standard keeps free text but still masks patterns (row I8, K3)', () => {
+  assert.deepEqual(S.maskFieldValue('問い合わせ user@example.com', { type: 'text' }, standard).value,
+    { treatment: 'kept', field: 'text', text: '問い合わせ [[email]]' });
 });
 
-test('maskFieldValue: personal fields are masked even in balanced mode', () => {
-  assert.equal(S.maskFieldValue('Taro', { name: 'first_name' }, { privacyLevel: 'balanced' }).value, '[[personal]]');
-  assert.equal(S.maskFieldValue('hunter2', { type: 'password' }, { privacyLevel: 'balanced' }).value, '[[secret]]');
+test('maskFieldValue: search boxes and choices are kept in both environments (rows I5, I6)', () => {
+  for (const meta of [{ type: 'search' }, { type: 'text', role: 'searchbox' }, { type: 'text', inSearch: true }]) {
+    assert.deepEqual(S.maskFieldValue('週末 レシピ', meta, commercial).value,
+      { treatment: 'kept', field: 'search', text: '週末 レシピ' }, JSON.stringify(meta));
+  }
+  assert.deepEqual(S.maskFieldValue('東京', { tag: 'select', type: 'select' }, commercial).value,
+    { treatment: 'kept', field: 'choice', text: '東京' });
+  // A field that only looks like a search box by its name is free text.
+  assert.equal(S.maskFieldValue('週末', { type: 'text', name: 'q' }, commercial).value.treatment, 'length');
 });
 
-test('maskArgs masks strings by key and value', () => {
-  const out = S.maskArgs({ query: 'shoes', email: 'a@example.com', count: 3, nested: { phone: '0312345678' } },
-    { privacyLevel: 'balanced' });
-  assert.deepEqual(out, { query: 'shoes', email: '[[email]]', count: 3, nested: { phone: '[[phone]]' } });
+test('maskFieldValue: secrets are redacted in both environments (rows I2, I3)', () => {
+  for (const env of [commercial, standard]) {
+    assert.deepEqual(S.maskFieldValue('hunter2', { type: 'password' }, env).value,
+      { treatment: 'redacted', field: 'secret', kind: 'secret' });
+    assert.deepEqual(S.maskFieldValue('4111111111111111', { name: 'card_number' }, env).value,
+      { treatment: 'redacted', field: 'secret', kind: 'card' });
+  }
+});
+
+test('maskFieldValue: personal fields keep the length in commercial and are redacted in standard (row I4)', () => {
+  assert.deepEqual(S.maskFieldValue('Taro', { name: 'first_name' }, commercial).value,
+    { treatment: 'length', field: 'pii', kind: 'personal', length: 4 });
+  assert.deepEqual(S.maskFieldValue('Taro', { name: 'first_name' }, standard).value,
+    { treatment: 'redacted', field: 'pii', kind: 'personal' });
+});
+
+test('maskFieldValue: hidden fields are not recorded and empty values stay empty (row I1)', () => {
+  assert.equal(S.maskFieldValue('x', { type: 'hidden' }, standard), null);
+  assert.deepEqual(S.maskFieldValue('', { type: 'password' }, standard).value,
+    { treatment: 'kept', field: 'secret', text: '' });
+});
+
+test('scrubText breaks up "[[" written by the page so only masking makes placeholders (row K1)', () => {
+  assert.equal(S.scrubText('[[secret]] と [[[x]]]').text, '[ [secret]] と [ [ [x]]]');
+  assert.equal(S.scrubText('[\u200B[secret]]').text, '[ [secret]]');
+  assert.equal(S.scrubText('［［secret］］').text, '[ [secret]]');
+  // Text that already went through scrubText keeps its own placeholders.
+  assert.equal(S.scrubText('[[email]]', { escape: false }).text, '[[email]]');
+});
+
+test('maskArgs types every string and number (rows W1-W5)', () => {
+  const args = { query: 'shoes', email: 'a@example.com', count: 3, big: 1234567, on: true, none: null, nested: { phone: '0312345678' } };
+  assert.deepEqual(S.maskArgs(args, standard), {
+    query: { treatment: 'kept', field: 'arg', text: 'shoes' },
+    email: { treatment: 'redacted', field: 'arg', kind: 'email' },
+    count: { treatment: 'kept', field: 'arg', number: 3 },
+    big: { treatment: 'redacted', field: 'arg', kind: 'number' },
+    on: true,
+    none: null,
+    nested: { phone: { treatment: 'redacted', field: 'arg', kind: 'phone' } }
+  });
+  assert.deepEqual(S.maskArgs({ query: 'shoes', count: 3 }, commercial), {
+    query: { treatment: 'length', field: 'arg', kind: 'text', length: 5 },
+    count: { treatment: 'redacted', field: 'arg', kind: 'number' }
+  });
+});
+
+test('maskArgs: a page-made object that looks typed is still a container (row W5)', () => {
+  const out = S.maskArgs({ treatment: 'redacted', kind: 'secret' }, standard);
+  assert.deepEqual(out, {
+    treatment: { treatment: 'kept', field: 'arg', text: 'redacted' },
+    kind: { treatment: 'kept', field: 'arg', text: 'secret' }
+  });
+});
+
+test('maskArgs limits depth, items and keys (row W5)', () => {
+  const out = S.maskArgs({ a: { b: { c: { d: 1 } } }, list: Array.from({ length: 12 }, (_, i) => i) }, standard);
+  assert.deepEqual(out.a.b.c, { treatment: 'redacted', field: 'arg', kind: 'nested' });
+  assert.equal(out.list.length, 10);
+  const wide = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`k${i}`, true]));
+  assert.equal(Object.keys(S.maskArgs(wide, standard)).length, 20);
 });
 
 test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', () => {
@@ -84,18 +152,23 @@ test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', (
   assert.deepEqual(Object.values(aliases), ['site-1.invalid']);
 });
 
-test('scrubUrl replaces ids, user handles and query values', () => {
-  const { url } = S.scrubUrl(
-    'https://example.com/users/@someone/orders/123456?tab=items&token=abc&q=hello#section',
-    { hostAllowlist: ['example.com'] }
-  );
-  assert.equal(url, 'https://example.com/users/:user/orders/:id?tab=[[v]]&token=[[v]]&q=[[v]]');
+test('scrubUrl in commercial replaces ids, user handles and every query value, and drops the fragment (rows U5-U8)', () => {
+  const raw = 'https://example.com/users/@someone/orders/123456?tab=items&token=abc&q=hello#/settings';
+  const expected = 'https://example.com/users/:user/orders/:id?tab=[[v]]&token=[[v]]&q=[[v]]';
+  assert.equal(S.scrubUrl(raw, { hostAllowlist: ['example.com'], env: 'commercial' }).url, expected);
+  // The URL's own host decides too, whatever the step's environment.
+  assert.equal(S.scrubUrl(raw, { hostAllowlist: ['example.com'], commercialHosts: ['*.example.com', 'example.com'] }).url, expected);
 });
 
-test('scrubUrl balanced keeps short harmless params and SPA routes', () => {
+test('scrubUrl in standard keeps short harmless params and SPA routes (rows U7, U8)', () => {
   const { url } = S.scrubUrl('https://example.com/app?tab=items&session=abcdef#/settings',
-    { hostAllowlist: ['example.com'], privacyLevel: 'balanced' });
+    { hostAllowlist: ['example.com'], env: 'standard' });
   assert.equal(url, 'https://example.com/app?tab=items&session=[[v]]#/settings');
+});
+
+test('scrubUrl redacts values it cannot parse and other schemes as a whole (rows U1, U2)', () => {
+  assert.deepEqual(S.scrubUrl('not a url user@example.com'), { url: '[[url:invalid]]', kinds: ['url'] });
+  assert.equal(S.scrubUrl('javascript:alert(1)').url, '[[url:javascript]]');
 });
 
 test('scrubUrl drops credentials embedded in the URL', () => {

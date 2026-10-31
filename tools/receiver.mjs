@@ -5,9 +5,12 @@
  *   pnpm receiver                      # http://localhost:8787/recordings
  *   OPSCRIBE_TOKEN=xyz pnpm receiver   # also require "Authorization: Bearer xyz"
  *
- * Binds to 127.0.0.1 only. Runs the same final scan as the extension and
- * rejects (422) anything that still looks personal, so a filter regression is
- * caught on both sides. Accepted payloads go to ./recordings/ (gitignored).
+ * Binds to 127.0.0.1 only. Runs the same two checks as the extension's exits:
+ * the structural check against the one payload definition (shared/payload.js:
+ * unknown fields, types, treatments, Gherkin rebuilt from the steps) and the
+ * best-effort pattern scan. Anything that fails either is rejected (422), so a
+ * filter regression is caught on both sides. Accepted payloads go to
+ * ./recordings/ (gitignored).
  */
 import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -16,6 +19,7 @@ import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { finalScan } = require('../shared/sanitize.js');
+const { SCHEMA, checkPayload } = require('../shared/payload.js');
 
 const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
@@ -46,8 +50,13 @@ createServer(async (req, res) => {
   } catch {
     return reply(res, 400, { error: 'invalid json' });
   }
-  if (payload?.schema !== 'op-scribe.recording/v1') return reply(res, 422, { error: 'unknown schema' });
+  if (payload?.schema !== SCHEMA) return reply(res, 422, { error: 'unknown schema' });
 
+  const problems = checkPayload(payload);
+  if (problems.length) {
+    console.warn('rejected: unexpected shape', problems);
+    return reply(res, 422, { error: 'unexpected shape', problems });
+  }
   const findings = finalScan(payload);
   if (findings.length) {
     console.warn('rejected: still contains', findings);

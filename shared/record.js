@@ -1,0 +1,172 @@
+/**
+ * op-scribe - turns what a content script or the panel reports into a stored step.
+ *
+ * Runs in the service worker. Whatever the content script already did, every
+ * step is sanitized again here: the environment is decided again from where
+ * the message came from (ADR 0001), typed values are checked and re-masked,
+ * URLs are aliased, user keywords masked, and redactions counted.
+ *
+ * No chrome.* here so the node tests can drive it. Classic script for the
+ * same reasons as shared/sanitize.js.
+ */
+(function (root) {
+  'use strict';
+
+  const S = root.OpScribeSanitize || require('./sanitize.js');
+  const { scrubText, scrubUrl, hostAllowed, typed } = S;
+
+  const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
+  const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
+  const KEPT_LIMIT = { choice: 120, search: 120, text: 200, arg: 200 };
+  const KIND = /^[a-z]{1,16}$/;
+  // ADR 0003 rows T4 and T5.
+  const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
+  const KEY = /^(?:(?:ctrl|meta|alt)\+){0,3}Enter$|^Escape$/;
+  // RegExp#test(undefined) tests the string "undefined".
+  const is = (re, value) => typeof value === 'string' && re.test(value);
+
+  /** The recording's fixed host lists, taken from the settings when it started. */
+  function policyOf(settings) {
+    return {
+      commercialHosts: [...(settings.commercialHosts || [])],
+      hostAllowlist: [...(settings.hostAllowlist || [])]
+    };
+  }
+
+  const hostOf = (url) => {
+    try { return new URL(url).hostname.toLowerCase(); } catch { return ''; }
+  };
+
+  /** 'commercial' when any of the URLs (top page, frame) is on a listed production host. */
+  function envOf(urls, policy) {
+    return urls.some((url) => url && hostAllowed(hostOf(url), policy.commercialHosts)) ? 'commercial' : 'standard';
+  }
+
+  /**
+   * Names, notes and tool names are one line (rows T1, T2, W6): a line break
+   * from the page could otherwise forge a Gherkin step or a Markdown heading (#18).
+   */
+  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+
+  const hasCommercial = (rec) => (rec.steps || []).some((s) => s.env === 'commercial');
+
+  /**
+   * A typed value from the content script, checked and masked again. Anything
+   * that is not a well-formed typed value is redacted, never kept.
+   */
+  function cleanValue(value, env, settings, kinds, field = null) {
+    const fail = (f) => {
+      kinds.push('v');
+      return typed.redacted(f, 'v');
+    };
+    if (!value || typeof value !== 'object' || typeof value.treatment !== 'string') return fail(field || 'text');
+    const f = field || (FIELDS.has(value.field) ? value.field : 'text');
+    const kind = is(KIND, value.kind) ? value.kind : 'v';
+    switch (value.treatment) {
+      case 'redacted':
+        if (f === 'file') return typed.file(Number.isInteger(value.count) && value.count >= 0 ? Math.min(value.count, 999) : 0);
+        return typed.redacted(f, kind);
+      case 'length':
+        if (!Number.isInteger(value.length) || value.length < 0) return fail(f);
+        return { treatment: 'length', field: f, kind, length: Math.min(value.length, 1e6) };
+      case 'kept': {
+        if (f === 'arg' && typeof value.number === 'number') {
+          return env !== 'commercial' && Number.isFinite(value.number) && Math.abs(value.number) < 1e6
+            ? typed.keptNumber(value.number)
+            : typed.redacted('arg', 'number');
+        }
+        const text = typeof value.text === 'string' ? value.text : '';
+        if (!text) return typed.kept(f, '');
+        if (f === 'secret' || f === 'pii' || f === 'file') return fail(f);
+        if (env === 'commercial' && (f === 'text' || f === 'arg')) return fail(f);
+        // Already escaped by the content script: keep its own placeholders.
+        const r = scrubText(text, { keywords: settings.keywords, maxLength: KEPT_LIMIT[f], escape: false });
+        kinds.push(...r.kinds);
+        return typed.kept(f, r.text);
+      }
+      default:
+        return fail(f);
+    }
+  }
+
+  /** WebMCP arguments (rows W1-W5): same shape rules as maskArgs, values checked again. */
+  function cleanArgs(node, env, settings, kinds, depth = 0) {
+    if (node === null || typeof node === 'boolean') return node;
+    if (node && typeof node === 'object' && typeof node.treatment === 'string') {
+      return cleanValue(node, env, settings, kinds, 'arg');
+    }
+    if (depth >= 3) return typed.redacted('arg', 'nested');
+    if (Array.isArray(node)) return node.slice(0, 10).map((v) => cleanArgs(v, env, settings, kinds, depth + 1));
+    if (node && typeof node === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(node).slice(0, 20)) {
+        const r = scrubText(k, { keywords: settings.keywords, maxLength: 40 });
+        out[r.kinds.length ? 'masked' : r.text] = cleanArgs(v, env, settings, kinds, depth + 1);
+      }
+      return out;
+    }
+    // A raw string or number never comes from maskArgs.
+    kinds.push('v');
+    return typed.redacted('arg', 'v');
+  }
+
+  /**
+   * raw: what the content script, the panel or the tab listener reported.
+   * from: { tabUrl, frameUrl } as Chrome reports the sender; empty for the panel.
+   * Returns the step to store, or null when it is not a step this recorder knows.
+   */
+  function cleanStep(raw, rec, settings, from = {}) {
+    const type = String(raw.type);
+    if (!STEP_TYPES.has(type)) return null;
+    const policy = rec.policy;
+    const env = from.tabUrl || from.frameUrl
+      ? envOf([from.tabUrl, from.frameUrl], policy)
+      : (hasCommercial(rec) ? 'commercial' : 'standard');
+    const ctx = { ...policy, aliases: rec.aliases, keywords: settings.keywords, env };
+    const kinds = [];
+    const text = (value, maxLength) => {
+      const r = scrubText(oneLine(value), { keywords: settings.keywords, maxLength });
+      kinds.push(...r.kinds);
+      return r.text;
+    };
+    const url = (value) => {
+      const r = scrubUrl(value, ctx);
+      kinds.push(...r.kinds.filter((k) => k !== 'host'));
+      return r.url;
+    };
+
+    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: raw.source === 'agent' ? 'agent' : 'user' };
+    if (raw.pageUrl) step.url = url(raw.pageUrl);
+    if (raw.target) {
+      const t = raw.target;
+      step.target = {};
+      if (is(TOKEN, t.role)) step.target.role = t.role;
+      if (is(TOKEN, t.tag)) step.target.tag = t.tag;
+      if (t.name) step.target.name = text(t.name, 80);
+      // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
+      if (t.selector) {
+        const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
+        if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
+      }
+      if (t.href) step.target.href = url(t.href);
+    }
+    if (raw.value !== undefined) step.value = cleanValue(raw.value, env, settings, kinds);
+    if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
+    if (is(KEY, raw.key)) step.key = raw.key;
+    if (type === 'tool') {
+      step.tool = text(raw.tool, 80);
+      step.ok = raw.ok !== false;
+      step.source = 'agent';
+      if (raw.args !== undefined) step.args = cleanArgs(raw.args, env, settings, kinds);
+    }
+    if (type === 'note') step.note = text(raw.note, 300);
+    for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
+      if (is(KIND, kind)) rec.redactions[kind] = (rec.redactions[kind] || 0) + 1;
+    }
+    return step;
+  }
+
+  const api = { policyOf, envOf, oneLine, cleanStep };
+  root.OpScribeRecord = api;
+  if (typeof module === 'object' && module.exports) module.exports = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);

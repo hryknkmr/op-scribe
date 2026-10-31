@@ -10,10 +10,12 @@ import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
 const D = globalThis.OpScribeDescribe;
+const P = globalThis.OpScribePayload;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const DRAFT_KEY = 'opsDraft';
+const NOTICE_KEY = 'opsNotice';
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -23,6 +25,8 @@ const ui = {
   stop: el('rec-stop'),
   clear: el('rec-clear'),
   originGate: el('origin-gate'),
+  policyNotice: el('policy-notice'),
+  policyNoticeOk: el('policy-notice-ok'),
   addOrigin: el('add-origin'),
   stepCount: el('step-count'),
   steps: el('steps'),
@@ -56,13 +60,25 @@ let activeTab = null;
 let recording = null;
 /** Who produced the Markdown currently in the textarea (it may have been edited since). */
 let generator = 'none';
+/**
+ * The recording revision the Markdown was generated (or first hand-written)
+ * from. When the steps change after that - a step deleted, more recorded - the
+ * Markdown may still hold what was deleted, so no exit takes it until it is
+ * generated again or cleared (#16, ADR 0003 row E4).
+ */
+let basis = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
+let previewedRevision = null;
+
+const STALE = '記録が変わったため（ステップの削除・追加）、この再現手順は出力できません。作り直すか、手順の欄を空にしてください';
+const isStale = (rec) => Boolean(ui.repro.value.trim()) && basis !== (rec?.revision ?? 0);
 
 const KIND_LABELS = {
   text: '自由入力', secret: '秘匿値', email: 'メール', phone: '電話', card: 'カード', personal: '個人情報',
   keyword: '指定語', postal: '郵便番号', id: 'ID', ip: 'IP', number: '番号', query: 'クエリ値',
-  hash: 'フラグメント', user: 'ユーザー名', host: 'ホスト'
+  hash: 'フラグメント', user: 'ユーザー名', host: 'ホスト', v: '値', url: 'URL', masked: '伏せ字',
+  nested: '入れ子の値', value: '値', file: 'ファイル'
 };
 
 // ------------------------------------------------------------------ helpers
@@ -99,6 +115,16 @@ function scanKeywords(rec) {
 }
 
 const scanWith = (rec) => (value) => S.finalScan(value, { keywords: scanKeywords(rec) });
+
+/**
+ * Every exit runs both checks on the exact payload (ADR 0003, rows E1-E6):
+ * the structural check, which does not share any judgment with the masking,
+ * and the best-effort pattern scan.
+ */
+function exitFindings(rec, payload) {
+  const shape = P.checkPayload(payload).map((p) => ({ path: p.path, kinds: [`形: ${p.problem}`] }));
+  return [...shape, ...scanWith(rec)(payload)];
+}
 
 function describeFindings(findings) {
   return findings.slice(0, 8).map((f) => `${f.path}: ${f.kinds.map((k) => KIND_LABELS[k] || k).join(', ')}`);
@@ -176,6 +202,9 @@ function render() {
     ui.steps.append(li);
   });
 
+  ui.gherkin.value = rec ? D.toGherkin(rec) : '';
+  if (isStale(rec)) ui.genStatus.textContent = STALE;
+
   const redactions = Object.entries(rec?.redactions || {});
   ui.redactions.textContent = redactions.length
     ? `伏せた箇所: ${redactions.map(([k, n]) => `${KIND_LABELS[k] || k} ${n}`).join(' / ')}`
@@ -204,8 +233,8 @@ ui.start.addEventListener('click', () => {
     const result = await send('START', { tabId: tab.id, url: tab.url });
     if (!result?.ok) ui.tabStatus.textContent = `記録を開始できません (${result?.error || 'unknown'})`;
     ui.repro.value = '';
-    ui.gherkin.value = '';
     generator = 'none';
+    basis = null;
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
@@ -231,7 +260,7 @@ ui.clear.addEventListener('click', async () => {
   if (!confirm('記録を破棄します。元に戻せません。')) return;
   await send('CLEAR');
   ui.repro.value = '';
-  ui.gherkin.value = '';
+  basis = null;
   generator = 'none';
   await chrome.storage.session.remove(DRAFT_KEY);
   await refresh();
@@ -248,14 +277,14 @@ ui.noteForm.addEventListener('submit', async (event) => {
 // ------------------------------------------------------------ reproduction
 
 const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, gherkin: ui.gherkin.value, generator }
+  [DRAFT_KEY]: { markdown: ui.repro.value, generator, basis }
 });
 
-/** Markdown may come from the model; Gherkin is always rebuilt from the recording. */
+/** Markdown may come from the model; Gherkin is always rebuilt from the recording (render). */
 async function setRepro(rec, markdown, by) {
   ui.repro.value = markdown;
-  ui.gherkin.value = D.toGherkin(rec);
   generator = by;
+  basis = rec.revision ?? 0;
   await saveDraft();
 }
 
@@ -306,8 +335,12 @@ async function generateAi() {
 
 ui.genAi.addEventListener('click', generateAi);
 ui.genTemplate.addEventListener('click', () => generateTemplate());
-ui.repro.addEventListener('input', saveDraft);
-ui.gherkin.addEventListener('input', saveDraft);
+ui.repro.addEventListener('input', () => {
+  // Hand-written from scratch: it describes the recording as it is now.
+  if (basis === null) basis = recording?.revision ?? 0;
+  if (!ui.repro.value.trim()) basis = null;
+  saveDraft();
+});
 
 // ------------------------------------------------------------------ output
 
@@ -315,15 +348,14 @@ ui.gherkin.addEventListener('input', saveDraft);
 async function preparePayload() {
   const rec = await loadRecording();
   if (!rec) return { error: '記録がありません' };
+  if (isStale(rec)) return { error: STALE };
   const reproduction = {
     generator: ui.repro.value.trim() ? (generator === 'none' ? 'manual' : generator) : 'none',
-    markdown: ui.repro.value,
-    // Empty means "not generated yet": buildPayload then renders it from the recording.
-    gherkin: ui.gherkin.value
+    markdown: ui.repro.value
   };
-  const payload = D.buildPayload(rec, reproduction, environment());
-  const findings = scanWith(rec)(payload);
-  return { rec, payload, findings };
+  // The Gherkin in the payload is rebuilt from the recording here, never taken from the panel.
+  const payload = P.buildPayload(rec, reproduction, environment());
+  return { rec, payload, findings: exitFindings(rec, payload) };
 }
 
 function blockedMessage(findings) {
@@ -337,6 +369,7 @@ ui.preview.addEventListener('click', async () => {
     return;
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
+  previewedRevision = prepared.rec.revision ?? 0;
   ui.payload.textContent = previewed;
   ui.findings.replaceChildren();
   for (const line of describeFindings(prepared.findings)) {
@@ -373,7 +406,11 @@ ui.send.addEventListener('click', () => {
       }
       // Re-check the exact bytes about to leave, not a rebuilt object.
       const rec = await loadRecording();
-      const findings = scanWith(rec)(JSON.parse(body));
+      if ((rec?.revision ?? 0) !== previewedRevision) {
+        ui.sendStatus.textContent = 'プレビューの後に記録が変わりました。もう一度プレビューしてください';
+        return;
+      }
+      const findings = exitFindings(rec, JSON.parse(body));
       if (findings.length) {
         ui.sendStatus.textContent = blockedMessage(findings);
         return;
@@ -399,23 +436,28 @@ ui.send.addEventListener('click', () => {
   })();
 });
 
-async function copyText(label, text) {
-  const rec = await loadRecording();
+/** Copies one rendering of the payload, after the same checks as sending it. */
+async function copyFromPayload(label, pick) {
+  const prepared = await preparePayload();
+  if (prepared.error) {
+    ui.outputStatus.textContent = prepared.error;
+    return;
+  }
+  const text = pick(prepared.payload);
   if (!text.trim()) {
     ui.outputStatus.textContent = '再現手順がまだありません（「再現手順」で生成してください）';
     return;
   }
-  const findings = scanWith(rec)({ [label]: text });
-  if (findings.length) {
-    ui.outputStatus.textContent = blockedMessage(findings);
+  if (prepared.findings.length) {
+    ui.outputStatus.textContent = blockedMessage(prepared.findings);
     return;
   }
   await navigator.clipboard.writeText(text);
   ui.outputStatus.textContent = `${label} をコピーしました`;
 }
 
-ui.copyMd.addEventListener('click', () => copyText('Markdown', ui.repro.value));
-ui.copyGherkin.addEventListener('click', () => copyText('Gherkin', ui.gherkin.value));
+ui.copyMd.addEventListener('click', () => copyFromPayload('Markdown', (p) => p.reproduction.markdown));
+ui.copyGherkin.addEventListener('click', () => copyFromPayload('Gherkin', (p) => p.reproduction.gherkin));
 
 ui.download.addEventListener('click', async () => {
   const prepared = await preparePayload();
@@ -440,7 +482,7 @@ ui.download.addEventListener('click', async () => {
 
 function fillSettingsForm() {
   const form = ui.settingsForm.elements;
-  for (const radio of form.privacyLevel) radio.checked = radio.value === settings.privacyLevel;
+  form.commercialHosts.value = settings.commercialHosts.join('\n');
   form.hostAllowlist.value = settings.hostAllowlist.join('\n');
   form.keywords.value = settings.keywords.join('\n');
   form.endpoint.value = settings.endpoint;
@@ -459,7 +501,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   // Ask for the endpoint now, while we still hold the click.
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }) : Promise.resolve(true);
   const next = {
-    privacyLevel: form.privacyLevel.value === 'balanced' ? 'balanced' : 'strict',
+    commercialHosts: lines(form.commercialHosts.value).map((h) => h.toLowerCase()),
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),
     keywords: [...new Set(lines(form.keywords.value))],
     endpoint,
@@ -468,12 +510,20 @@ ui.settingsForm.addEventListener('submit', (event) => {
   (async () => {
     await chrome.storage.local.set({ [SETTINGS_KEY]: next });
     settings = { ...S.defaults(), ...next };
+    if (next.commercialHosts.length) await dismissNotice();
     const short = next.keywords.filter((k) => k.length < 2);
     ui.settingsStatus.textContent = (await granted)
       ? `保存しました${short.length ? '（1 文字の語は誤検出が多いため無視します）' : ''}`
       : '保存しました（送信先へのアクセスは未許可です）';
   })();
 });
+
+async function dismissNotice() {
+  await chrome.storage.local.remove(NOTICE_KEY);
+  ui.policyNotice.hidden = true;
+}
+
+ui.policyNoticeOk.addEventListener('click', dismissNotice);
 
 // ------------------------------------------------------------------ wiring
 
@@ -501,9 +551,10 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     const draft = (await chrome.storage.session.get(DRAFT_KEY))[DRAFT_KEY];
     if (draft) {
       ui.repro.value = draft.markdown || '';
-      ui.gherkin.value = draft.gherkin || '';
       generator = draft.generator;
+      basis = draft.basis ?? null;
     }
+    ui.policyNotice.hidden = !(await chrome.storage.local.get(NOTICE_KEY))[NOTICE_KEY];
     await refresh();
   } catch (error) {
     reportFatal('init failed', error);
