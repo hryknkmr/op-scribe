@@ -229,6 +229,14 @@ test('a value split by a newline in a file name is still found', () => {
   assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 1);
 });
 
+test('a file name with bytes that are not UTF-8 does not stop the scan', () => {
+  const { dir, guard } = repo();
+  // In the index only: some file systems refuse such a name.
+  execFileSync('bash', ['-c', `git update-index --add --cacheinfo 100644,$(git rev-parse HEAD:r.txt),$'x\\xff.txt'`], { cwd: dir });
+  assert.equal(guard('scan-staged').status, 0);
+  assert.equal(guard('scan-tree').status, 0);
+});
+
 const hook = (dir, name, args = [], input = '') =>
   spawnSync('bash', [join(ROOT, '.githooks', name), ...args], { cwd: dir, input, encoding: 'utf8' });
 
