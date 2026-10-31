@@ -30,7 +30,7 @@
     value: '値'
   };
 
-  /** [[text:12]] → ‹任意の文字列 12文字›, [[email]] → ‹メールアドレス› */
+  /** [[secret]] → ‹秘匿値›, [[card]] → ‹カード番号› (older recordings: [[text:12]] → ‹任意の文字列 12文字›) */
   function humanize(text) {
     return String(text ?? '').replace(/\[\[([a-z]+)(?::([\w-]+))?\]\]/gi, (match, kind, arg) => {
       if (kind === 'text') return `‹任意の文字列 ${arg}文字›`;

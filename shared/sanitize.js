@@ -301,7 +301,9 @@
     if (!words.length) return null;
     const has = (list) => words.some((w) => list.includes(w));
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
-    if (JA_CARD.test(text) || has(['cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'securitycode', 'cardcode']) || pair(['card', 'cc'], 'number')
+    // Any name with card or cc in it (credit_card, cc-name, cardholder): card data is hidden whole.
+    if (JA_CARD.test(text) || has(['card', 'cc', 'credit', 'cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'securitycode', 'cardcode'])
+        || words.some((w) => /^(?:card|credit)/.test(w)) || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
@@ -487,7 +489,8 @@
       if (v) {
         // The key decides first (classifyKey); a value shaped like an id is partly hidden whatever its key.
         const decoded = decodeDeep(v);
-        const meaning = classifyKey(k, { protocol: true }) || (ID_SEGMENT.test(decoded) ? 'id' : null);
+        // The key is decoded like the value: %2574oken is token.
+        const meaning = classifyKey(decodeDeep(k), { protocol: true }) || (ID_SEGMENT.test(decoded) ? 'id' : null);
         const r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
         kinds.push(...r.kinds);
         value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
@@ -512,7 +515,8 @@
       return { url: mark('url:invalid'), kinds: ['host'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds };
+      // Hidden whole; the kind tells the final scan an unhidden one (ftp://, file://) is there.
+      return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds: ['url'] };
     }
     // example.test. (the DNS root dot) is the same host as example.test: one alias, and found in text without the dot.
     if (url.hostname.endsWith('.')) url.hostname = url.hostname.replace(/\.+$/, '');

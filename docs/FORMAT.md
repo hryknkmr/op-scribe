@@ -37,13 +37,13 @@ Feature: 記録された操作の再現
       | href     | https://site-1.invalid/login |
     Then "https://site-1.invalid/login" に遷移する
       | url | https://site-1.invalid/login |
-    When 「メールアドレス」入力欄に ‹メールアドレス› を入力する
+    When 「メールアドレス」入力欄に 「t***@e***.com」 を入力する
       | action   | input |
       | url      | https://site-1.invalid/login |
       | role     | textbox |
       | name     | メールアドレス |
       | selector | #email |
-      | value    | [[email]] |
+      | value    | t***@e***.com |
     And 「ログインする」ボタンをクリックする
       | action   | click |
       | url      | https://site-1.invalid/login |

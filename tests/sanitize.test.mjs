@@ -419,3 +419,11 @@ test('single-label addresses in any letters, fragment routes, relative URLs at t
   assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'meeting_session' }).value, 'Morning');
   assert.equal(S.maskFieldValue('x', { name: 'session' }).value, '[[secret]]');
 });
+
+test('other URL schemes are stopped at the exit, parameter keys are decoded, and card names are card data', () => {
+  assert.deepEqual(S.finalScan({ a: 'ftp://private.internal.test/a', b: 'file://private.internal.test/share', c: '[[url:ftp]]' }, { hostAllowlist: [] })
+    .map((f) => f.path), ['a', 'b']);
+  assert.equal(S.scrubUrl('https://example.com/?%2574oken=Abc123', { hostAllowlist: ['example.com'] }).url, 'https://example.com/?%2574oken=[[secret]]');
+  for (const name of ['credit_card', 'creditCard', 'cc-name', 'cardholder']) assert.equal(S.maskFieldValue('4111111111111112', { name }).value, '[[card]]', name);
+  for (const name of ['discard', 'postcard']) assert.equal(S.classifyKey(name), null, name);
+});
