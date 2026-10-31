@@ -13,7 +13,7 @@
 #                          指定範囲のコミットの author/committer email を allowlist 照合
 #   check-config           現在の git user.email が allowlist に合致するか
 #   scan-range <base> <tip>
-#                          base..tip のコミット内容 + identity を走査（pre-push 用）
+#                          base..tip の各コミットの内容・メッセージと identity を走査（pre-push 用）
 #   scan-commits <rev-range>
 #                          範囲の各コミットについて、追加行とコミットメッセージを 1 件ずつ走査（CI 用）。
 #                          途中で足して後で消した内容も、差分の合計では消えて見えるため 1 件ずつ見る。
@@ -55,7 +55,9 @@ fi
 # denylist（PII/痕跡）に加え、高シグナルな secret パターンを組み込みで付加する
 # （第三者 action に依存せず secret 流入も同じ経路で遮断するため）。
 CLEAN_PATTERNS="$(mktemp)"
-trap 'rm -f "$CLEAN_PATTERNS"' EXIT
+# git の -z 出力の置き場。改行を含むファイル名もそのまま扱う。
+PATH_LIST="$(mktemp)"
+trap 'rm -f "$CLEAN_PATTERNS" "$PATH_LIST"' EXIT
 load_patterns() {
   local rc=0
   grep -vE '^[[:space:]]*(#|$)' "$1" >> "$CLEAN_PATTERNS" || rc=$?
@@ -101,7 +103,7 @@ is_excluded() {
 # AGENTS.md の例外を消す: AI ツールの共著者行が行全体のもの（差分の + は可）と、AGENTS.md の説明の表記。
 # 名前を限るのは、実在の人名を同じ形で通さないため。
 strip_coauthor() {
-  sed -E -e 's/^\+?[[:space:]]*[Cc]o-[Aa]uthored-[Bb]y: Claude[ A-Za-z0-9.-]* <noreply@anthropic\.com>[[:space:]]*$//' \
+  sed -E -e 's/^\+?[[:space:]]*[Cc]o-[Aa]uthored-[Bb]y: Claude( Code| (Fable|Opus|Sonnet|Haiku)( [0-9.]+)?)? <noreply@anthropic\.com>[[:space:]]*$//' \
     -e 's/`Co-Authored-By: … <noreply@anthropic\.com>`//g'
 }
 
@@ -126,14 +128,13 @@ grep_text() {
 }
 
 scan_staged() {
-  local found=0 f content out names
+  local found=0 f content out
   # R も含める（リネームと同時に足した内容を見逃さない）。-z で core.quotepath に関係なく実名で受け取る。
-  if ! names="$(git diff --cached --name-only --diff-filter=ACMR -z | tr '\0' '\n')"; then
+  if ! git diff --cached --name-only --diff-filter=ACMR -z > "$PATH_LIST"; then
     echo "pii-guard: staged のファイル一覧を取得できません" >&2
     return 2
   fi
-  while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
+  while IFS= read -r -d '' f; do
     is_excluded "$f" && continue
     if ! content="$(git show ":$f")"; then
       echo "pii-guard: staged の内容を読めません: $f" >&2
@@ -144,7 +145,7 @@ scan_staged() {
       echo "  ✗ $f"; echo "$out" | sed 's/^/      /'
       found=1
     fi
-  done <<< "$names"
+  done < "$PATH_LIST"
   return $found
 }
 
@@ -163,7 +164,7 @@ scan_message() {
 scan_tree() {
   local args=() p
   for p in "${EXCLUDE_PATHS[@]}"; do args+=(":(exclude)$p"); done
-  local rc=0 status=0 files f out line
+  local rc=0 status=0 f out line
   git grep -inEi -f "$CLEAN_PATTERNS" -- . "${args[@]}" || status=$?
   case "$status" in
     0) rc=1 ;;
@@ -171,18 +172,17 @@ scan_tree() {
     *) echo "pii-guard: tracked ファイルを走査できません" >&2; return 2 ;;
   esac
   status=0
-  files="$(git grep -lzE "$EMAIL_RE" -- . "${args[@]}" | tr '\0' '\n')" || status=$?
+  git grep -lzE "$EMAIL_RE" -- . "${args[@]}" > "$PATH_LIST" || status=$?
   if (( status > 1 )); then
     echo "pii-guard: tracked ファイルを走査できません" >&2
     return 2
   fi
-  while IFS= read -r f; do
-    [[ -z "$f" ]] && continue
+  while IFS= read -r -d '' f; do
     out="$(grep_emails < "$f")"
     [[ -z "$out" ]] && continue
     while IFS= read -r line; do echo "$f:$line"; done <<< "$out"
     rc=1
-  done <<< "$files"
+  done < "$PATH_LIST"
   return $rc
 }
 
@@ -217,30 +217,21 @@ check_config() {
 }
 
 scan_range() {
-  local base="$1" tip="$2" rc=0 status=0
-  # identity
+  local base="$1" tip="$2" range rc=0 status=0
   # pre-push は root からの push で base に空ツリーを渡す。ツリーは範囲の始点にできない。
   if [[ "$(git cat-file -t "$base" 2>/dev/null)" == "tree" ]]; then
-    check_identities "$tip" || status=$?
+    range="$tip"
   else
-    check_identities "${base}..${tip}" || status=$?
+    range="${base}..${tip}"
   fi
+  check_identities "$range" || status=$?
   if (( status > 1 )); then return 2; fi
   if (( status == 1 )); then rc=1; fi
-  # 内容（範囲の差分追加行を走査）。除外パスは self-match を避けるため diff から外す。
-  local exargs=() p
-  for p in "${EXCLUDE_PATHS[@]}"; do exargs+=(":(exclude)$p"); done
-  local diff out
-  # git diff の失敗は「検出なし」と区別して止める。追加行が 0 件（削除だけ）は正常。
-  if ! diff="$(git diff "${base}" "${tip}" -- . "${exargs[@]}")"; then
-    echo "pii-guard: ${base}..${tip} の差分を取得できません" >&2
-    return 2
-  fi
-  out="$(printf '%s\n' "$diff" | { grep -E '^\+' || true; } | { grep -vE '^\+\+\+' || true; } | grep_text)"
-  if [[ -n "$out" ]]; then
-    echo "  ✗ push 範囲の追加内容に痕跡:"; echo "$out" | sed 's/^/      /'
-    rc=1
-  fi
+  # 差分の合計では、途中で足して消した内容とコミットメッセージが見えない。
+  status=0
+  scan_commits "$range" || status=$?
+  if (( status > 1 )); then return 2; fi
+  if (( status == 1 )); then rc=1; fi
   return $rc
 }
 

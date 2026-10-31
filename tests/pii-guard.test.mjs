@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,7 +103,7 @@ test('content added in one commit and removed in a later one is found commit by 
   write('b.txt', 'unrelated\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'remove');
-  assert.equal(guard('scan-range', 'HEAD~2', 'HEAD').status, 0, 'the summed diff hides it');
+  assert.equal(guard('scan-range', 'HEAD~2', 'HEAD').status, 1, 'the push check goes commit by commit too');
   const r = guard('scan-commits', 'HEAD~2..HEAD');
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stdout, /の追加内容/);
@@ -136,13 +136,14 @@ test('the co-author exception covers the trailer form, not the address', () => {
   git('add', '-A');
   assert.equal(guard('scan-staged').status, 0);
   assert.equal(guard('scan-tree').status, 0);
-  git('commit', '-q', '--allow-empty', '-m', `message\n\n${trailer}`);
+  git('commit', '-q', '--allow-empty', '-m', `message\n\n${trailer}\nCo-Authored-By: Claude Opus 5.5 <noreply@${domain}>`);
   assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 0);
   const lines = [
     `noreply@${domain}`,
     `someone@${domain}`,
     `Co-Authored-By: Claude <x.noreply@${domain}>`,
     `Co-Authored-By: Some Person <noreply@${domain}>`,
+    `Co-Authored-By: Claude Person <noreply@${domain}>`,
     `see ${trailer}`,
     `Co-Authored-By: ${address()} <noreply@${domain}>`,
     `${trailer} ${address()}`
@@ -203,4 +204,41 @@ test('a message with only comment lines passes', () => {
   const file = join(dir, 'msg.txt');
   writeFileSync(file, '# comment\n');
   assert.equal(guard('scan-message', file).status, 0);
+});
+
+test('a file name with a newline is scanned', () => {
+  const { git, guard, write } = repo();
+  write('a\nb.txt', 'ok\n');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 0);
+  write('a\nb.txt', `${address()}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+});
+
+const hook = (dir, name, args = [], input = '') =>
+  spawnSync('bash', [join(ROOT, '.githooks', name), ...args], { cwd: dir, input, encoding: 'utf8' });
+
+test('every hook stops when the guard is missing', () => {
+  const { dir } = repo();
+  rmSync(join(dir, 'scripts', 'pii-guard.sh'));
+  const msg = join(dir, 'msg.txt');
+  writeFileSync(msg, 'subject\n');
+  assert.equal(hook(dir, 'pre-commit').status, 1);
+  assert.equal(hook(dir, 'commit-msg', [msg]).status, 1);
+  assert.equal(hook(dir, 'pre-push', ['origin', 'https://example.com/r.git'], 'x\n').status, 1);
+});
+
+test('pre-push scans a new branch that only another remote already has', () => {
+  const { dir, git, write } = repo();
+  write('a.txt', `${address()}\n`);
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  const sha = git('rev-parse', 'HEAD').trim();
+  git('update-ref', 'refs/remotes/other/main', sha);
+  const input = `refs/heads/main ${sha} refs/heads/main ${'0'.repeat(40)}\n`;
+  const r = hook(dir, 'pre-push', ['origin', 'https://example.com/r.git'], input);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(hook(dir, 'pre-push', ['other', 'https://example.com/r.git'], input).status, 0);
 });

@@ -3,7 +3,7 @@
 # bash 3.2 (macOS 既定) 互換。
 set -euo pipefail
 GUARD="$(git rev-parse --show-toplevel)/scripts/pii-guard.sh"
-[ -x "$GUARD" ] || exit 0
+[ -x "$GUARD" ] || { echo "pre-push: pii-guard.sh が無い/実行不可のため中止します" >&2; exit 1; }
 if [ "${PII_GUARD_SKIP:-}" = "1" ]; then
   echo "⚠ pre-push: PII_GUARD_SKIP=1 によりバイパス（CI では遮断されます）" >&2
   exit 0
@@ -14,7 +14,12 @@ fail=0
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue
   if [ "$remote_sha" = "$ZERO" ]; then
-    revs="$(git rev-list "$local_sha" --not --remotes 2>/dev/null || true)"
+    # 別の remote にあるコミットも、push 先には初めて届くので走査する。
+    if ! revs="$(git rev-list "$local_sha" --not --glob="refs/remotes/${1}/*")"; then
+      echo "pre-push: コミットの一覧を取得できません" >&2
+      fail=1
+      continue
+    fi
     [ -z "$revs" ] && continue
     oldest="$(printf '%s\n' "$revs" | tail -1)"
     if parent="$(git rev-parse "${oldest}^" 2>/dev/null)"; then

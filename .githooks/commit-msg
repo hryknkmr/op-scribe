@@ -2,7 +2,7 @@
 # commit-msg: コミットメッセージに PII/内部痕跡が無いか検査。
 set -euo pipefail
 GUARD="$(git rev-parse --show-toplevel)/scripts/pii-guard.sh"
-[[ -x "$GUARD" ]] || exit 0
+[[ -x "$GUARD" ]] || { echo "commit-msg: pii-guard.sh が無い/実行不可のため中止します" >&2; exit 1; }
 if [[ "${PII_GUARD_SKIP:-}" == "1" ]]; then exit 0; fi
 
 if ! "$GUARD" scan-message "$1"; then
