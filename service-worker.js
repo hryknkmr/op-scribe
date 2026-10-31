@@ -220,7 +220,12 @@ function cleanStep(raw, rec, settings, origin = null) {
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
   }
-  if (raw.note) step.note = text(raw.note, 300);
+  if (raw.note) {
+    step.note = text(raw.note, 300);
+    // A note belongs to a page: the asking page's (WebMCP), else the page of the step before it (the panel).
+    // WebMCP returns a page only the notes of its own site, so a note without a page is never returned.
+    if (!step.url) step.url = [...rec.steps].reverse().find((s) => s.url)?.url;
+  }
   bump(rec, [...kinds, ...(raw.valueKinds || [])]);
   return step;
 }
@@ -312,7 +317,7 @@ async function webmcpRequest(rec, sender, { op, args }) {
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
   // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`));
 
   if (op === 'status') {
     return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
@@ -328,7 +333,7 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     // Judged by the asking page itself, not by the step before it.
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, sender.origin || sender.url));
+    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent', pageUrl: `${sender.origin}/` }, rec, settings, sender.origin || sender.url));
     return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };

@@ -15,7 +15,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { finalScan } = require('../shared/sanitize.js');
+const { finalScan, hostAllowed, isPlaceholder } = require('../shared/sanitize.js');
 const { STEP_FIELDS, TARGET_FIELDS } = require('../shared/describe.js');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -60,6 +60,18 @@ function structureProblem(payload) {
     || (step.target && Object.values(step.target).some((v) => typeof v !== 'string'))
     || (step.args !== undefined && (typeof step.args !== 'object' || step.args === null)));
   if (badType) return 'a step field of the wrong type';
+  // Every URL field holds an http(s) URL on an allowed host or an alias (site-N.invalid), or a placeholder; a bare host
+  // name or another scheme is not accepted. A site is an origin.
+  const urlProblem = (value, originOnly = false) => {
+    if (value === undefined || value === null || isPlaceholder(value)) return false;
+    let url;
+    try { url = new URL(value); } catch { return true; }
+    if (!['http:', 'https:'].includes(url.protocol)) return true;
+    if (originOnly && value !== url.origin) return true;
+    return !hostAllowed(url.hostname, HOST_ALLOWLIST) && !/^site-\d+\.invalid$/.test(url.hostname);
+  };
+  if (urlProblem(recording.startUrl) || recording.steps.some((step) => urlProblem(step.url) || urlProblem(step.target?.href))
+      || (recording.webmcpTools || []).some((entry) => urlProblem(entry.site, true))) return 'a URL field not on an allowed or aliased host';
   if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';
   const commercial = recording.steps.filter((step) => step.privacy.profile === 'commercial').length;
   const standard = recording.steps.length - commercial;
