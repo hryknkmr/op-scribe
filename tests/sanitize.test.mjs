@@ -596,3 +596,11 @@ test('on production every typed value but a search box and a chosen option is it
   ] });
   assert.deepEqual(findings.map((f) => f.path), ['steps[0].value', 'steps[1].value']);
 });
+
+test('a card number set apart by any one separator is a card number', () => {
+  for (const t of ['4111*1111*1111*1111', '4111_1111_1111_1111', '4111/1111/1111/1111']) {
+    assert.equal(S.maskFieldValue(t, { type: 'text' }).value, '[[card]]', t);
+    assert.equal(S.finalScan({ t }).length, 1, t);
+  }
+  assert.equal(S.scrubText('41******11').text, '41******11');
+});

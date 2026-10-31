@@ -153,8 +153,8 @@
     { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
-    // Digits set apart by spaces, hyphens, dots, tabs or line breaks are still one card number.
-    { kind: 'card', re: /(?<!\d)\d(?:[ \t\n.-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // Digits set apart by any one separator (space, tab, line break, - . * _ / : , |) are still one card number.
+    { kind: 'card', re: /(?<!\d)\d(?:[ \t\n.*_/:,|-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     // National ids by their form, whatever the field: a US social security number, a Japanese My Number (check digit).
     { kind: 'secret', re: /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g },
     { kind: 'secret', re: /(?<!\d)\d{4}[ -]?\d{4}[ -]?\d{4}(?!\d)/g, accept: (m) => myNumber(m.replace(/\D/g, '')) },

@@ -31,6 +31,14 @@ function structureProblem(payload) {
   const recording = payload.recording;
   const privacy = recording?.privacy;
   if (privacy?.policy !== 'tiered-commercial/v1') return 'unknown privacy policy';
+  // The shape first, so nothing below runs on a missing or malformed part.
+  const isObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  if (!Array.isArray(recording.steps) || !recording.steps.every(isObject)) return 'steps missing or malformed';
+  if (!isObject(payload.reproduction)) return 'reproduction missing';
+  if (recording.environment !== undefined && !isObject(recording.environment)) return 'environment malformed';
+  if (recording.steps.some((step) => (step.target !== undefined && !isObject(step.target)) || !isObject(step.privacy))) {
+    return 'step target or privacy malformed';
+  }
   // Only the fields buildPayload writes: anything else (a host table, a tab id) is not accepted.
   const extra = (object, allowed) => Object.keys(object || {}).find((key) => !allowed.includes(key));
   const unknown = extra(payload, ['schema', 'recording', 'reproduction', 'sentAt'])
@@ -52,8 +60,6 @@ function structureProblem(payload) {
     || (step.target && Object.values(step.target).some((v) => typeof v !== 'string'))
     || (step.args !== undefined && (typeof step.args !== 'object' || step.args === null)));
   if (badType) return 'a step field of the wrong type';
-  if (!Array.isArray(recording.steps)) return 'steps missing';
-  if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';
   if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';
   const commercial = recording.steps.filter((step) => step.privacy.profile === 'commercial').length;
   const standard = recording.steps.length - commercial;
@@ -71,7 +77,7 @@ const reply = (res, status, body) => {
   res.end(JSON.stringify(body));
 };
 
-createServer(async (req, res) => {
+async function handle(req, res) {
   if (req.method !== 'POST' || req.url !== '/recordings') return reply(res, 404, { error: 'POST /recordings only' });
   if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return reply(res, 401, { error: 'unauthorized' });
   if (!String(req.headers['content-type']).startsWith('application/json')) return reply(res, 415, { error: 'json only' });
@@ -105,6 +111,14 @@ createServer(async (req, res) => {
   await writeFile(file, JSON.stringify(payload, null, 2));
   console.log(`accepted ${id}: ${payload.recording.steps.length} steps, generator=${payload.reproduction.generator} -> ${file}`);
   return reply(res, 201, { ok: true, id });
+}
+
+createServer((req, res) => {
+  // Whatever goes wrong with one request is that request's error, never the server's end.
+  handle(req, res).catch((error) => {
+    console.warn('request failed', error);
+    if (!res.headersSent) reply(res, 400, { error: 'bad request' });
+  });
 }).listen(PORT, '127.0.0.1', () => {
   console.log(`op-scribe receiver on http://localhost:${PORT}/recordings${TOKEN ? ' (token required)' : ''}`);
 });
