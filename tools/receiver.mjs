@@ -68,7 +68,8 @@ createServer(async (req, res) => {
     console.warn('rejected: unexpected shape', problems);
     return reply(res, 422, { error: 'unexpected shape', problems });
   }
-  const findings = finalScan(payload, { keywords: KEYWORDS });
+  // The list holds keywords and real host names alike; hosts are matched at any length (row K5).
+  const findings = finalScan(payload, { keywords: KEYWORDS, hosts: KEYWORDS });
   if (findings.length) {
     console.warn('rejected: still contains', findings);
     return reply(res, 422, { error: 'unmasked values', findings });

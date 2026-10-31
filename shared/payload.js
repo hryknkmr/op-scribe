@@ -209,12 +209,12 @@
     if (v.treatment === 'length') {
       if (!hasOnly(v, ['treatment', 'field', 'kind', 'length'])) return bad('unknown field');
       if (v.field === 'secret' || v.field === 'file') return bad(`${v.field} not redacted`);
-      if (!Number.isInteger(v.length) || v.length < 0) return bad('bad length');
+      if (!Number.isInteger(v.length) || v.length < 0 || v.length > LIMITS.typedLength) return bad('bad length');
       return undefined;
     }
     if (v.field === 'file') {
       if (v.kind !== 'file' || !hasOnly(v, ['treatment', 'field', 'kind', 'count'])) return bad('bad file value');
-      if (!Number.isInteger(v.count) || v.count < 0) return bad('bad count');
+      if (!Number.isInteger(v.count) || v.count < 0 || v.count > LIMITS.fileCount) return bad('bad count');
       return undefined;
     }
     if (!hasOnly(v, ['treatment', 'field', 'kind'])) return bad('unknown field');

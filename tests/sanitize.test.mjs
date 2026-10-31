@@ -218,3 +218,19 @@ test('a URL longer than the limit after masking is redacted as a whole (row U1; 
   const long = `https://example.com/${'a/'.repeat(1200)}`;
   assert.deepEqual(S.scrubUrl(long, { hostAllowlist: ['example.com'] }), { url: '[[url:long]]', kinds: ['url'] });
 });
+
+test('argument keys stay distinct after the cut and after masking (row W5; review new R1)', () => {
+  const a = `${'k'.repeat(45)}a`;
+  const b = `${'k'.repeat(45)}b`;
+  const out = S.maskArgs({ [a]: 1, [b]: 2, 'masked-1': 3, Acme: 4 }, { env: 'standard', keywords: ['Acme'] });
+  const keys = Object.keys(out);
+  assert.equal(new Set(keys).size, 4, keys.join(' / '));
+  assert.ok(keys.every((k) => [...k].length <= 41), keys.join(' / '));
+  assert.deepEqual(Object.values(out).map((v) => v.number).sort(), [1, 2, 3, 4]);
+});
+
+test('finalScan finds real host names of any length, only as whole hosts (row K5; review new R1)', () => {
+  assert.deepEqual(S.finalScan({ markdown: 'http://x/ を開いた。x に移動' }, { hosts: ['x'] }).map((f) => f.kinds), [['host']]);
+  assert.deepEqual(S.finalScan({ markdown: 'box と xylophone と x-ray' }, { hosts: ['x'] }), []);
+  assert.deepEqual(S.finalScan({ markdown: 'see intranet.corp.invalid now' }, { hosts: ['intranet.corp.invalid'] }).length, 1);
+});

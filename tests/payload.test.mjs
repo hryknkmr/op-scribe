@@ -264,3 +264,13 @@ test('what the masking cuts, the check accepts: a 41-character argument key (row
   assert.equal([...Object.keys(standardRec.steps[4].args)[0]].length, 41);
   assert.deepEqual(P.checkPayload(build(standardRec)), []);
 });
+
+test('checkPayload bounds typed lengths and file counts like the masking does (row E2; review new R1)', () => {
+  const big = clone(build());
+  big.recording.steps[3].value = { treatment: 'length', field: 'text', kind: 'text', length: Number.MAX_SAFE_INTEGER };
+  assert.notDeepEqual(P.checkPayload(regen(big)), []);
+  const files = clone(build());
+  files.recording.steps.push({ n: files.recording.steps.length + 1, type: 'upload', t: 9, env: 'commercial', source: 'user',
+    value: { treatment: 'redacted', field: 'file', kind: 'file', count: Number.MAX_SAFE_INTEGER } });
+  assert.notDeepEqual(P.checkPayload(regen(files)), []);
+});

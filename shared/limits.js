@@ -24,6 +24,8 @@
     argKeys: 20,
     argDepth: 3,
     keptNumber: 1e6,
+    typedLength: 1e6,
+    fileCount: 999,
     url: 2048,
     scheme: 16,
     environment: 60,

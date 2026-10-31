@@ -65,11 +65,11 @@
     const kind = is(KIND, value.kind) ? value.kind : 'v';
     switch (value.treatment) {
       case 'redacted':
-        if (f === 'file') return typed.file(Number.isInteger(value.count) && value.count >= 0 ? Math.min(value.count, 999) : 0);
+        if (f === 'file') return typed.file(Number.isInteger(value.count) && value.count >= 0 ? Math.min(value.count, LIMITS.fileCount) : 0);
         return typed.redacted(f, kind);
       case 'length':
         if (!Number.isInteger(value.length) || value.length < 0) return fail(f);
-        return { treatment: 'length', field: f, kind, length: Math.min(value.length, 1e6) };
+        return { treatment: 'length', field: f, kind, length: Math.min(value.length, LIMITS.typedLength) };
       case 'kept': {
         if (f === 'arg' && typeof value.number === 'number') {
           return env !== 'commercial' && Number.isFinite(value.number) && Math.abs(value.number) < LIMITS.keptNumber

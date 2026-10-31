@@ -17,7 +17,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, cut } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
@@ -173,9 +173,9 @@
   const typed = {
     kept: (field, text) => ({ treatment: 'kept', field, text }),
     keptNumber: (number) => ({ treatment: 'kept', field: 'arg', number }),
-    length: (field, kind, text) => ({ treatment: 'length', field, kind, length: lengthOf(text) }),
+    length: (field, kind, text) => ({ treatment: 'length', field, kind, length: Math.min(lengthOf(text), LIMITS.typedLength) }),
     redacted: (field, kind) => ({ treatment: 'redacted', field, kind }),
-    file: (count) => ({ treatment: 'redacted', field: 'file', kind: 'file', count })
+    file: (count) => ({ treatment: 'redacted', field: 'file', kind: 'file', count: Math.min(count, LIMITS.fileCount) })
   };
 
   /**
@@ -220,12 +220,19 @@
     if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk);
     const out = {};
     let masked = 0;
+    // Masked keys are numbered, and a name already taken (after the cut or
+    // NFKC) gets -2, -3 ..., so no value overwrites another (W5). The suffix
+    // replaces the end of the name, so the name stays within its limit.
+    const unique = (base) => {
+      let name = base;
+      for (let n = 2; Object.hasOwn(out, name); n += 1) name = `${[...base].slice(0, cut(LIMITS.argKey) - `-${n}`.length).join('')}-${n}`;
+      return name;
+    };
     for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
       const name = scrubText(k, { keywords, maxLength: LIMITS.argKey });
       const cls = classifyField({ name: k });
-      // Masked keys are numbered so two of them do not collapse into one (W5).
       // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
-      Object.defineProperty(out, name.kinds.length ? `masked-${masked += 1}` : name.text, {
+      Object.defineProperty(out, unique(name.kinds.length ? `masked-${masked += 1}` : name.text), {
         value: cls.kind === 'secret' || cls.kind === 'pii' ? typed.redacted('arg', cls.label) : walk(v),
         enumerable: true,
         writable: true,
@@ -357,10 +364,24 @@
    * still mask. Run on the exact payload right before it leaves the browser;
    * a non-empty result blocks sending.
    */
+  /**
+   * Real host names (row K5), apart from keywords: any length, matched only
+   * as a whole host label sequence, so a one-letter host "x" is found but the
+   * x in "box" is not.
+   */
+  function hostPattern(hosts) {
+    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase()).filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-])`, 'iu') : null;
+  }
+
   function finalScan(value, opts = {}) {
     const findings = [];
+    const hosts = hostPattern(opts.hosts);
     const check = (text, path) => {
-      const { kinds } = scrubText(String(text).replace(OWN_PLACEHOLDER, ' '), { keywords: opts.keywords });
+      const plain = String(text).replace(OWN_PLACEHOLDER, ' ');
+      const { kinds } = scrubText(plain, { keywords: opts.keywords });
+      if (hosts?.test(plain.normalize('NFKC'))) kinds.push('host');
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {

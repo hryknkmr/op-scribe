@@ -64,7 +64,7 @@ function gen(seed) {
     const size = (over) => (r() < 0.1 ? over : int(4));
     if (roll < 0.5) return Array.from({ length: size(14) }, () => args(depth + 1));
     const out = {};
-    for (let i = size(24); i > 0; i -= 1) Object.defineProperty(out, pick([text(50), 'password', 'email', 'Acme1', 'Acme2', 'q', '__proto__']), { value: args(depth + 1), enumerable: true, configurable: true });
+    for (let i = size(24); i > 0; i -= 1) Object.defineProperty(out, pick([text(50), 'password', 'email', 'Acme1', 'Acme2', 'q', '__proto__', 'masked-1', `${'k'.repeat(45)}a`, `${'k'.repeat(45)}b`, `${'k'.repeat(40)}`]), { value: args(depth + 1), enumerable: true, configurable: true });
     return out;
   };
   return { r, pick, int, text, url, meta, args };
