@@ -13,7 +13,7 @@
  */
 importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
-const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
+const { cleanLine, scrubUrl, finalScan, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 const { policyOf, envOf, cleanStep } = self.OpScribeRecord;
@@ -226,9 +226,18 @@ async function webmcpRequest(rec, sender, { op, args }) {
   }
   if (op === 'reproduction') {
     const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    return {
-      reply: { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) }
-    };
+    // A panel note's environment comes from the whole recording, not this site's part of it.
+    const markdown = toMarkdown(buildReproduction(scoped));
+    const gherkin = toGherkin(scoped, { envSteps: rec.steps });
+    // This is an exit too: the keywords added since and the real hosts behind the aliases
+    // stop it like the panel's send, copy and save (E6, W8; review R36).
+    const hosts = Object.keys(rec.aliases || {}).map((origin) => {
+      try { return new URL(origin).hostname; } catch { return ''; }
+    }).filter(Boolean);
+    if (finalScan({ markdown, gherkin }, { keywords: settings.keywords, hosts }).length) {
+      return { reply: { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } };
+    }
+    return { reply: { ok: true, site, steps: own.length, markdown, gherkin } };
   }
   if (op === 'expect') {
     const note = String(args?.text || '').trim();

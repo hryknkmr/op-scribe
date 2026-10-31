@@ -95,6 +95,16 @@
     return (steps || []).some((s) => !isPanelNote(s) && s.env === 'commercial') ? 'commercial' : 'standard';
   }
 
+  /**
+   * The steps with every panel note's environment decided again from the
+   * recording (all: its whole step list, when steps is a part of it), so each
+   * output reads one environment for the same recording (review R36).
+   */
+  function withPanelNoteEnv(steps, all = steps) {
+    const env = panelNoteEnv(all);
+    return (steps || []).map((s) => (isPanelNote(s) && s.env !== env ? { ...s, env } : s));
+  }
+
   /** commercial | standard | mixed | none, from the environment of each step. */
   function coverageOf(steps) {
     const envs = new Set((steps || []).map((s) => s.env));
@@ -313,9 +323,9 @@
    *   When   - each operation, with its attribute table
    *   Then   - navigation it caused, and notes / expected results
    */
-  function toGherkin(rec) {
+  function toGherkin(rec, { envSteps } = {}) {
     const steps = rec?.steps || [];
-    const coverage = coverageOf(steps);
+    const coverage = coverageOf(withPanelNoteEnv(steps, envSteps || steps));
     const out = [
       '# op-scribe: Gherkin + attributes',
       `# recording: ${rec?.id || 'unknown'} / environments: ${coverage}`,
@@ -360,7 +370,7 @@
     return `${out.map(line).join('\n')}\n`;
   }
 
-  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
