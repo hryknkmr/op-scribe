@@ -100,14 +100,17 @@
    * a placeholder name. A keyword such as "mail" cannot tell a real [[email]]
    * from one written by hand, so it is not used rather than used half way.
    */
+  /** A keyword as the text it is matched against: NFKC and without hidden characters (K2; review R35). */
+  const keywordForm = (raw) => String(raw).normalize('NFKC').replace(INVISIBLE, '').trim();
+
   function usableKeyword(raw) {
-    const k = String(raw).normalize('NFKC').trim();
+    const k = keywordForm(raw);
     return [...k].length >= 2 && !PLACEHOLDER_WORDS.some((w) => w.includes(k.toLowerCase()));
   }
 
   function keywordPattern(keywords) {
     const list = (keywords || [])
-      .map((k) => String(k).normalize('NFKC').trim())
+      .map(keywordForm)
       .filter(usableKeyword)
       .sort((a, b) => b.length - a.length);
     // u: case is folded for every character, outside the BMP too ("𐐀" and "𐐨"; review R33).

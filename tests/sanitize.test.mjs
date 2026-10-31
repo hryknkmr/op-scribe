@@ -406,3 +406,12 @@ test('keywords fold case outside the BMP, and a local part keeps none of its ASC
   assert.equal(S.scrubText('sales!ops@example.com').text, '[[email]]');
   assert.equal(S.scrubText("o'brien+tag@example.com").text, '[[email]]');
 });
+
+test('a keyword is normalized like the text it is matched against (K2, E6; review R35)', () => {
+  for (const hidden of ['\u200B', '\u2060', '\u00AD']) {
+    const keyword = `Ac${hidden}me`;
+    assert.deepEqual(S.scrubText(`${keyword} の件`, { keywords: [keyword] }), { text: '[[masked]] の件', kinds: ['keyword'] }, JSON.stringify(hidden));
+    assert.deepEqual(S.finalScan({ s: 'Acme' }, { keywords: [keyword] }), [{ path: 's', kinds: ['keyword'] }]);
+  }
+  assert.equal(S.usableKeyword('a\u200B'), false, 'one character once the hidden one is gone');
+});
