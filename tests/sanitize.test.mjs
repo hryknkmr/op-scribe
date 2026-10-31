@@ -387,3 +387,16 @@ test('a keyword never breaks a placeholder the patterns made (K2; review R31)', 
   assert.equal(r.text, 'to [[email]]');
   assert.equal(S.scrubText('x [[ y', { keywords: ['[['] }).text, 'x [ [ y', 'a page "[[" is broken first (K1), so the word never appears');
 });
+
+test('the host of a URL is left out of the patterns only: an allowed IP host passes, user info and keywords do not (U4, E6; review R32)', () => {
+  assert.deepEqual(S.finalScan({ u: 'https://10.0.0.1/a', g: 'Given "https://10.0.0.1:8080/x" を開いている' }), []);
+  assert.deepEqual(S.finalScan({ n: 'メモ 10.0.0.1' }), [{ path: 'n', kinds: ['ip'] }]);
+  // Built here so no credential-shaped URL sits in the file (AGENTS.md).
+  const withUser = [`https://user:${'pa'}ss`, '10.0.0.1/'].join('@');
+  assert.ok(S.finalScan({ u: withUser }).length);
+  assert.deepEqual(S.finalScan({ u: 'https://acme.example.com/' }, { keywords: ['acme'] }), [{ path: 'u', kinds: ['keyword'] }]);
+});
+
+test('an address with an IP domain literal is one email (K3; review R32)', () => {
+  assert.equal(S.scrubText('alice@[127.0.0.1] x').text, '[[email]] x');
+});

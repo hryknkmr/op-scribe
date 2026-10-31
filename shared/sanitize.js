@@ -74,7 +74,7 @@
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
     // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
-    { kind: 'email', re: /(?:"[^"\r\n]{1,64}"|[\w.%+-]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*/g },
+    { kind: 'email', re: /(?:"[^"\r\n]{1,64}"|[\w.%+-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
@@ -489,6 +489,9 @@
     return code === 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(code);
   });
 
+  // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
+  const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
+
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
@@ -498,8 +501,19 @@
       // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
       const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
       // As written and with CSS escapes undone: a selector carries them (review R23).
-      const kinds = [plain, cssUnescape(plain)].flatMap((t) => [...scrubText(t, { keywords: opts.keywords }).kinds,
-        ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])]);
+      const kinds = [plain, cssUnescape(plain)].flatMap((t) => {
+        // The host of a URL is left out of the patterns (K3) only: it is an alias or a host the
+        // user allowed by name, an IP host too (U4; review R32). Keywords and real hosts still apply.
+        const urlHosts = [];
+        const body = t.replace(URL_HOST, (m, scheme, host) => {
+          urlHosts.push(host.normalize('NFKC'));
+          return `${scheme} `;
+        });
+        const keywords = keywordPattern(opts.keywords);
+        return [...scrubText(body, { keywords: opts.keywords }).kinds,
+          ...(keywords && urlHosts.some((h) => h.match(keywords)) ? ['keyword'] : []),
+          ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
+      });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {
