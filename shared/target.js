@@ -99,6 +99,7 @@
       const text = [...el.labels].map(textOf).join(' ');
       if (text) return text;
     }
+    if (el.tagName === 'INPUT' && el.type === 'image') return oneLine(el.alt) || declared;
     if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return oneLine(el.value || el.type);
     if (el.matches('input, textarea, select') || isTextField(el) || implicitRole(el) === 'combobox') {
       return oneLine(el.getAttribute('placeholder') || declared || el.getAttribute('name'));

@@ -74,6 +74,8 @@ test('operated elements are named by the text they show', () => {
   assert.equal(T.accessibleName(el('a', { href: '/x' }, '  次へ\n  進む ')), '次へ 進む');
   assert.equal(T.accessibleName(el('div', { role: 'button' }, '保存')), '保存');
   assert.equal(T.accessibleName(el('a', { href: '/' }, '', [el('img', { alt: 'ホーム' })])), 'ホーム');
+  assert.equal(T.accessibleName(el('input', { type: 'image', alt: '注文を送信' })), '注文を送信');
+  assert.equal(T.accessibleName(el('input', { type: 'image', title: '送信' })), '送信');
 });
 
 test('fields are never named by what was typed into them', () => {
