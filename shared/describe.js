@@ -143,7 +143,9 @@
    * line break from the page, a kept textarea value or the model would
    * otherwise start a new Gherkin step or Markdown item.
    */
-  const line = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+  // Zero-width and bidi controls hide or reorder text for the reader (E7): never rendered.
+  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/gu;
+  const line = (text) => String(text ?? '').replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
 
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
 
@@ -263,13 +265,14 @@
       if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
     });
     if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${line(n)}`));
-    return `${lines.join('\n')}\n`;
+    // Every line one line, whatever field it came from (E7; review R27).
+    return `${lines.map(line).join('\n')}\n`;
   }
 
   // ------------------------------------------------------------ Gherkin + α
 
   const cell = (value) => String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, '\\n')
-    .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ');
+    .replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ');
 
   /**
    * Attributes an agent needs to find the same element and screen again.
@@ -354,7 +357,8 @@
       previous = step;
     }
     if (!steps.length || (steps.length === 1 && start)) out.push('    # (操作はまだ記録されていません)');
-    return `${out.join('\n')}\n`;
+    // Every line one line, whatever field it came from: a URL, an argument key or a value (E7; review R27).
+    return `${out.map(line).join('\n')}\n`;
   }
 
   const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };

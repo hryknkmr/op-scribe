@@ -288,11 +288,11 @@ test('an argument tree far too deep is refused without rendering it (rows E1, E3
 test('the largest recording the limits allow, with the worst characters, passes and fits the totals (rows E1, E3, E4; review R13)', () => {
   const { LIMITS, TOTALS } = require('../shared/limits.js');
   // Characters that escapes make longest: a control character (\u0001 in JSON), a quote,
-  // a backslash and a pipe (doubled again in a Gherkin cell). Names and notes are one line.
+  // a backslash and a pipe (doubled again in a Gherkin cell). Names, notes and argument keys are one line.
   const worst = (n, control = true) => Array.from({ length: n }, (_, i) => (control ? '\u0001"\\|' : '"\\|')[i % (control ? 4 : 3)]).join('');
   const url = `https://site-1.invalid/${'a/'.repeat(LIMITS.url)}`.slice(0, LIMITS.url);
   const args = Object.fromEntries(Array.from({ length: LIMITS.argLeaves }, (_, i) => [
-    `${String(i).padStart(2, '0')}${worst(LIMITS.argKey - 2)}…`,
+    `${String(i).padStart(2, '0')}${worst(LIMITS.argKey - 2, false)}…`,
     { treatment: 'kept', field: 'arg', text: `${worst(LIMITS.kept.arg)}…` }
   ]));
   const kinds = [
@@ -437,10 +437,10 @@ test('one-line fields refuse a line break, a control or an invisible character a
     toolList: (r, v) => { r.webmcpTools['https://site-1.invalid'] = [v]; }
   };
   for (const [field, put] of Object.entries(set)) {
-    for (const bad of ['a\nThen b', 'a\u0007b', 'a b', 'a​b', 'a‮b']) {
+    for (const bad of ['a\nThen b', 'a\u0007b', 'a\u2028b', 'a\u200Bb', 'a\u202Eb']) {
       const r = clone(rec);
       put(r, bad);
-      assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'not one line'), `${field} ${JSON.stringify(bad)}`);
+      assert.ok(P.checkPayload(regen(build(r))).some((p) => ['not one line', 'hidden character'].includes(p.problem)), `${field} ${JSON.stringify(bad)}`);
     }
   }
   const env = P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser: 'Chrome\n141' });
@@ -467,4 +467,25 @@ test('checkCanonical finds what is safe but not what the masking writes (E8; rev
   for (const problem of ['http placeholder', 'key suffix past the key count', 'not NFKC', 'not the parsed URL', 'site twice']) {
     assert.ok(problems.includes(problem), problem);
   }
+});
+
+test('a line break in a URL or a hidden character in an argument is refused, and never renders as a line (E7; review R27)', () => {
+  const url = clone(rec);
+  url.steps[2].url = 'https://site-1.invalid/\n    Then injected';
+  assert.ok(P.checkPayload(regen(build(url))).some((p) => p.path === 'recording.steps[2].url' && p.problem === 'not one line'));
+  assert.ok(!/^\s*Then injected/m.test(D.toGherkin(url)), 'the renderer keeps it on one line even past the gate');
+
+  const arg = clone(rec);
+  arg.steps[4].args = { 'a\u202Eb': typed.kept('arg', 'x'), q: typed.kept('arg', 'c\u202Ed') };
+  arg.steps.forEach((s) => { s.env = 'standard'; });
+  const problems = P.checkPayload(regen(build(arg)));
+  assert.ok(problems.some((p) => p.problem === 'key not one line'));
+  assert.ok(problems.some((p) => p.path.endsWith('.q.text') && p.problem === 'hidden character'));
+  assert.ok(!/\u202E/.test(D.toGherkin(arg)) && !/\u202E/.test(D.toMarkdown(D.buildReproduction(arg))));
+
+  // A person's line breaks in a kept text are theirs: allowed, and rendered on one line.
+  const typedText = clone(rec);
+  typedText.steps[3] = { ...typedText.steps[3], env: 'standard', value: typed.kept('text', '一行目\n二行目') };
+  typedText.steps.forEach((s) => { s.env = 'standard'; });
+  assert.ok(!P.checkPayload(regen(build(typedText))).some((p) => p.problem === 'not one line'));
 });

@@ -26,7 +26,7 @@ function rng(seed) {
 
 const settings = { keywords: ['Acme', 'Brand'], commercialHosts: ['shop.example.com'], hostAllowlist: ['beta.example.com'] };
 const PIECES = ['a', 'Z', '0', '9', ' ', '\n', '\t', '[[', ']]', '[', '|', '\\', '"', '%', '%2', '#', '?', '&', '=', '/', '@',
-  '.', '-', '_', 'あ', '漢', '🙂', '​', ' ', 'Acme', 'brand', 'token', 'password', 'email', '__proto__', 'constructor',
+  '.', '-', '_', 'あ', '漢', '🙂', '\u200B', '\u2028', 'Acme', 'brand', 'token', 'password', 'email', '__proto__', 'constructor',
   'user@example.com', '090-1234-5678', '[[secret]]', '[[url:none]]', '…'];
 
 function gen(seed) {

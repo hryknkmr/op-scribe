@@ -336,8 +336,8 @@ test('finalScan undoes CSS escapes before it looks (E6; review R23)', () => {
 });
 
 test('field names are classified after invisible characters are removed (rows I3, I4; review R24)', () => {
-  assert.equal(S.classifyField({ type: 'text', name: 'pa​ssword' }).kind, 'secret');
-  assert.equal(S.classifyField({ type: 'text', label: 'メー⁠ル' }).kind, 'pii');
+  assert.equal(S.classifyField({ type: 'text', name: 'pa\u200Bssword' }).kind, 'secret');
+  assert.equal(S.classifyField({ type: 'text', label: 'メー\u2060ル' }).kind, 'pii');
 });
 
 test('undefined and BigInt arguments are redacted as values, never dropped or made null (row W4; review R24)', () => {
@@ -356,4 +356,9 @@ test('a host with a trailing dot is the same site (row U4; review R24)', () => {
   assert.equal(new URL(a).host, new URL(b).host);
   assert.equal(Object.keys(aliases).length, 1);
   assert.equal(S.scrubUrl('https://example.com.:8443/', { hostAllowlist: ['example.com'] }).url, 'https://example.com:8443/');
+});
+
+test('argument keys are one line before they are kept (E7; review R27)', () => {
+  const args = S.maskArgs({ 'a\tb\nc': 'x' }, { env: 'standard' });
+  assert.deepEqual(Object.keys(args), ['a b c']);
 });

@@ -30,8 +30,32 @@
   // A text the masking cuts at n: longer than n only with the "…" the cut appends.
   // Always one line, with nothing hidden (E7, safety): a line break forges a Gherkin step
   // or a Markdown heading, and an invisible or bidi control hides text from the reviewer.
-  const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n, line: true });
-  const NOT_ONE_LINE = /[\p{Cc}\p{Zl}\p{Zp}\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/u;
+  const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
+  const BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/u;
+
+  /**
+   * Row E7 at the gate, for every string of the recording rather than a list of
+   * fields (review R27): no invisible or bidi control anywhere, and no line break
+   * or control character but in the text a person typed (a kept typed value).
+   */
+  function checkLines(node, path, problems, inKept = false) {
+    if (typeof node === 'string') {
+      if (HIDDEN.test(node)) problems.push({ path, problem: 'hidden character' });
+      else if (!inKept && BREAKS.test(node)) problems.push({ path, problem: 'not one line' });
+      return;
+    }
+    if (Array.isArray(node)) {
+      node.forEach((v, i) => checkLines(v, `${path}[${i}]`, problems));
+      return;
+    }
+    if (!isObject(node)) return;
+    const kept = node.treatment === 'kept';
+    for (const [k, v] of Object.entries(node)) {
+      if (HIDDEN.test(k) || BREAKS.test(k)) problems.push({ path: `${path}.${k}`, problem: 'key not one line' });
+      checkLines(v, `${path}.${k}`, problems, kept && k === 'text');
+    }
+  }
   const overCut = (text, n) => [...text].length > n && !text.endsWith('…');
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   const URL_VALUE = str('U1', LIMITS.url);
@@ -300,7 +324,6 @@
         if (value === null && node.nullable) return undefined;
         if (typeof value !== 'string') return bad('not a string');
         if ([...value].length > node.max || (node.cutAt && overCut(value, node.cutAt))) return bad('too long');
-        if (node.line && NOT_ONE_LINE.test(value)) return bad('not one line');
         if (node.re && !node.re.test(value)) return bad('unexpected form');
         // A date must exist, not only have the right digits (row M2).
         if (node.re === ISO) {
@@ -402,6 +425,8 @@
       }
     });
     // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.
+    if (problems.length) return problems;
+    checkLines(payload.recording, 'recording', problems);
     if (problems.length) return problems;
     if (payload.privacy.coverage !== D.coverageOf(steps)) {
       problems.push({ path: 'privacy.coverage', problem: 'does not match the steps' });

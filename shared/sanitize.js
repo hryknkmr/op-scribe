@@ -294,7 +294,8 @@
       return name;
     };
     for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
-      const name = scrubText(k, { keywords, maxLength: LIMITS.argKey });
+      // A key is rendered like a name: one line, masked, then cut (cleanLine; E7, review R27).
+      const name = cleanLine(k, { keywords, maxLength: LIMITS.argKey });
       const cls = classifyField({ name: k });
       const value = cls.kind === 'secret' || cls.kind === 'pii' ? (spend() ? typed.redacted('arg', cls.label) : DROP) : walk(v);
       if (value === DROP) continue;
