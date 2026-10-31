@@ -85,6 +85,8 @@
     return steps.find((s) => s.url)?.url || '[[url:none]]';
   }
 
+  const NOTE_KIND_LABELS = { bug: '不具合', question: '疑問', idea: '気づき', next: '次に試す' };
+
   /**
    * A note written in the side panel has no URL and no page to belong to. It is
    * commercial while the recording has any commercial step (ADR 0001), decided
@@ -183,7 +185,7 @@
         return `WebMCP ツール「${step.tool}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':
-        return `（確認）${step.note}`;
+        return `（${NOTE_KIND_LABELS[step.kind] || '確認'}）${step.note}`;
       default:
         return `${step.type} 操作`;
     }
@@ -200,9 +202,15 @@
     const steps = rec?.steps || [];
     const out = [];
     const notes = [];
+    const findings = [];
     let previous = null;
 
     for (const step of steps) {
+      // What the tester noticed is not an expected result: it stays out of the steps.
+      if (step.type === 'note' && step.kind) {
+        findings.push({ kind: step.kind, note: step.note, afterStep: out.length });
+        continue;
+      }
       if (step.type === 'note') {
         const last = out[out.length - 1];
         if (last && !last.expected) last.expected = step.note;
@@ -250,7 +258,8 @@
       title: `操作の再現手順（${out.length} ステップ）`,
       preconditions,
       steps: out,
-      notes
+      notes,
+      findings
     };
   }
 
@@ -264,6 +273,12 @@
       lines.push(`${i + 1}. ${line(step.action)}`);
       if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
     });
+    if (repro.findings?.length) {
+      lines.push('', '## 探索メモ', ...repro.findings.map((f) => {
+        const where = f.afterStep ? `（手順 ${f.afterStep} の後）` : '';
+        return `- [${NOTE_KIND_LABELS[f.kind]}] ${line(f.note)}${where}`;
+      }));
+    }
     if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${line(n)}`));
     // Every line one line, whatever field it came from (E7; review R27).
     return `${lines.map(line).join('\n')}\n`;
@@ -345,7 +360,9 @@
 
     for (const step of steps) {
       if (step === start) { previous = step; continue; }
-      if (step.type === 'note') {
+      if (step.type === 'note' && step.kind) {
+        out.push(`    # [${NOTE_KIND_LABELS[step.kind]}] ${line(humanize(step.note))}`);
+      } else if (step.type === 'note') {
         push('Then', line(humanize(step.note)), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;

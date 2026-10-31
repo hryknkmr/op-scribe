@@ -64,3 +64,14 @@ test('a restart that fails does not leave the earlier recording saved as recordi
   assert.equal(reply.ok, false);
   assert.equal(session.opsRecording.state, 'stopped');
 });
+
+test('a note keeps a known kind and drops any other', async () => {
+  const { send, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a', kind: 'bug' } });
+  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'b', kind: 'other' } });
+  const notes = session.opsRecording.steps.filter((s) => s.type === 'note');
+  assert.equal(notes[0].kind, 'bug');
+  assert.equal(notes[1].kind, undefined);
+});
+

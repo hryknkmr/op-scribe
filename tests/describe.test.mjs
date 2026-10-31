@@ -120,3 +120,31 @@ test('argument strings are one line before they become JSON (row E7; review R13)
   const sentence = D.describeStep({ type: 'tool', tool: 't', args: { q: typed.kept('arg', 'a\nb\u0000c') } });
   assert.equal(sentence, 'WebMCP ツール「t」を実行する（引数: {"q":"a b c"}）');
 });
+
+const explored = {
+  id: 'rec-notes',
+  steps: [
+    { type: 'click', t: 0, env: 'standard', source: 'user', target: { role: 'button', name: '保存' } },
+    { type: 'note', t: 1, env: 'standard', source: 'user', note: '保存が2回走る', kind: 'bug' },
+    { type: 'note', t: 2, env: 'standard', source: 'user', note: '保存できる' }
+  ]
+};
+
+test('notes with a kind stay out of the expected results and Then', () => {
+  const repro = D.buildReproduction(explored);
+  assert.equal(repro.steps[0].expected, '保存できる');
+  assert.deepEqual(repro.findings, [{ kind: 'bug', note: '保存が2回走る', afterStep: 1 }]);
+  const markdown = D.toMarkdown(repro);
+  assert.match(markdown, /## 探索メモ\n- \[不具合\] 保存が2回走る（手順 1 の後）/);
+  assert.doesNotMatch(markdown, /期待結果: .*2回走る/);
+  const feature = D.toGherkin(explored);
+  assert.match(feature, /^ {4}# \[不具合\] 保存が2回走る$/m);
+  assert.doesNotMatch(feature, /(Then|And) 保存が2回走る/);
+  assert.match(feature, /Then 保存できる/);
+});
+
+test('a note with a kind cannot add a line to the Gherkin', () => {
+  const feature = D.toGherkin({ id: 'x', steps: [{ type: 'note', t: 0, kind: 'idea', note: 'a\nThen 偽の手順' }] });
+  assert.doesNotMatch(feature, /^ *Then 偽の手順/m);
+});
+

@@ -301,7 +301,8 @@ test('the largest recording the limits allow, with the worst characters, passes 
       target: { role: 'button', tag: 'button', name: `${worst(LIMITS.name, false)}…`, selector: worst(LIMITS.selector, false), href: url } }),
     (i) => ({ type: 'input', t: i, env: 'standard', source: 'user', url, target: { role: 'textbox', name: `${worst(LIMITS.name, false)}…` },
       value: { treatment: 'kept', field: 'text', text: `${worst(LIMITS.kept.text)}…` } }),
-    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…` })
+    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…` }),
+    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…`, kind: 'next' })
   ];
   const steps = Array.from({ length: LIMITS.steps }, (_, i) => kinds[i % kinds.length](i));
   const big = { ...clone(rec), startUrl: url, steps, webmcpTools: {} };

@@ -33,6 +33,7 @@ const ui = {
   steps: el('steps'),
   noteForm: el('note-form'),
   noteInput: el('note-input'),
+  noteKind: el('note-kind'),
   redactions: el('redactions'),
   aiState: el('ai-state'),
   genAi: el('gen-ai'),
@@ -285,7 +286,7 @@ ui.noteForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = ui.noteInput.value.trim();
   if (!text) return;
-  const result = await send('ADD_NOTE', { text });
+  const result = await send('ADD_NOTE', { text, kind: ui.noteKind.value || undefined });
   if (result?.ok) ui.noteInput.value = '';
 });
 
@@ -338,7 +339,9 @@ async function generateAi() {
       title: output.title,
       preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
       steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])]
+      notes: [...new Set([...(output.notes || []), ...base.notes])],
+      // The AI may merge steps, so a step number would no longer point at the right one.
+      findings: base.findings.map(({ kind, note }) => ({ kind, note }))
     };
     await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
     ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';
