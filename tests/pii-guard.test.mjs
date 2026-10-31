@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -103,7 +103,7 @@ test('content added in one commit and removed in a later one is found commit by 
   write('b.txt', 'unrelated\n');
   git('add', '-A');
   git('commit', '-q', '-m', 'remove');
-  assert.equal(guard('scan-range', 'HEAD~2', 'HEAD').status, 0, 'the summed diff hides it');
+  assert.equal(guard('scan-range', 'HEAD~2', 'HEAD').status, 1, 'the push check goes commit by commit too');
   const r = guard('scan-commits', 'HEAD~2..HEAD');
   assert.equal(r.status, 1, r.stdout);
   assert.match(r.stdout, /の追加内容/);
@@ -126,4 +126,169 @@ test('the root commit is scanned when the whole history is given', () => {
   git('commit', '-q', '-m', 'root');
   assert.equal(guard('scan-commits', 'HEAD').status, 1);
   assert.equal(guard('scan-commits', 'no-such-ref').status, 2);
+});
+
+test('the co-author exception covers the trailer form, not the address', () => {
+  const domain = ['anthropic', 'com'].join('.');
+  const trailer = `Co-Authored-By: Claude <noreply@${domain}>`;
+  const { git, guard, write } = repo();
+  write('ok.txt', `${trailer}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 0);
+  assert.equal(guard('scan-tree').status, 0);
+  git('commit', '-q', '--allow-empty', '-m', `message\n\n${trailer}\nCo-Authored-By: Claude Opus 5.5 <noreply@${domain}>`);
+  assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 0);
+  const lines = [
+    `noreply@${domain}`,
+    `someone@${domain}`,
+    `Co-Authored-By: Claude <x.noreply@${domain}>`,
+    `Co-Authored-By: Some Person <noreply@${domain}>`,
+    `Co-Authored-By: Claude Person <noreply@${domain}>`,
+    `see ${trailer}`,
+    `Co-Authored-By: ${address()} <noreply@${domain}>`,
+    `${trailer} ${address()}`
+  ];
+  for (const line of lines) {
+    write('ok.txt', `${line}\n`);
+    git('add', '-A');
+    assert.equal(guard('scan-staged').status, 1, line);
+    assert.equal(guard('scan-tree').status, 1, line);
+  }
+});
+
+test('a range git cannot read is an error for identity and push checks', () => {
+  const { guard } = repo();
+  assert.equal(guard('check-identities', 'no-such-ref..HEAD').status, 2);
+  assert.equal(guard('scan-range', 'no-such-ref', 'HEAD').status, 2);
+});
+
+test('a push from the root compares with the empty tree, as pre-push does', () => {
+  const { git, guard } = repo();
+  const empty = git('hash-object', '-t', 'tree', '/dev/null').trim();
+  const r = guard('scan-range', empty, 'HEAD');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  git('config', 'user.email', address());
+  git('commit', '-q', '--allow-empty', '-m', 'bad identity');
+  assert.equal(guard('scan-range', empty, 'HEAD').status, 1);
+});
+
+test('a malformed pattern stops every scan instead of finding nothing', () => {
+  const { dir, git, guard, write } = repo();
+  write('t.txt', `${address()}\n`);
+  git('add', '-A');
+  writeFileSync(join(dir, 'scripts', 'pii-guard.patterns.local.txt'), '(\n');
+  for (const args of [['scan-tree'], ['scan-staged'], ['scan-commits', 'HEAD']]) {
+    const r = guard(...args);
+    assert.equal(r.status, 2, args[0]);
+    assert.match(r.stderr, /パターンに誤り/);
+  }
+});
+
+test('the wording of the exception in AGENTS.md passes', () => {
+  const domain = ['anthropic', 'com'].join('.');
+  const { git, guard, write } = repo();
+  write('a.md', `共著者行（\`Co-Authored-By: … <noreply@${domain}>\`）は対象外\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-tree').status, 0);
+});
+
+test('the guard itself is scanned', () => {
+  const { dir, git, guard } = repo();
+  appendFileSync(join(dir, 'scripts', 'pii-guard.sh'), `# ${address()}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+});
+
+test('a message with only comment lines passes', () => {
+  const { dir, guard } = repo();
+  const file = join(dir, 'msg.txt');
+  writeFileSync(file, '# comment\n');
+  assert.equal(guard('scan-message', file).status, 0);
+});
+
+test('a file name with a newline is scanned', () => {
+  const { git, guard, write } = repo();
+  write('a\nb.txt', 'ok\n');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 0);
+  write('a\nb.txt', `${address()}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+});
+
+const hook = (dir, name, args = [], input = '') =>
+  spawnSync('bash', [join(ROOT, '.githooks', name), ...args], { cwd: dir, input, encoding: 'utf8' });
+
+test('every hook stops when the guard is missing', () => {
+  const { dir } = repo();
+  rmSync(join(dir, 'scripts', 'pii-guard.sh'));
+  const msg = join(dir, 'msg.txt');
+  writeFileSync(msg, 'subject\n');
+  assert.equal(hook(dir, 'pre-commit').status, 1);
+  assert.equal(hook(dir, 'commit-msg', [msg]).status, 1);
+  assert.equal(hook(dir, 'pre-push', ['origin', 'https://example.com/r.git'], 'x\n').status, 1);
+});
+
+test('pre-push scans a new branch that only another remote already has', () => {
+  const { dir, git, write } = repo();
+  write('a.txt', `${address()}\n`);
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  const sha = git('rev-parse', 'HEAD').trim();
+  git('update-ref', 'refs/remotes/other/main', sha);
+  const input = `refs/heads/main ${sha} refs/heads/main ${'0'.repeat(40)}\n`;
+  const r = hook(dir, 'pre-push', ['origin', 'https://example.com/r.git'], input);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.equal(hook(dir, 'pre-push', ['other', 'https://example.com/r.git'], input).status, 0);
+});
+
+test('binary content added and then removed is found commit by commit', () => {
+  const { dir, git, guard } = repo();
+  writeFileSync(join(dir, 'b.bin'), Buffer.concat([Buffer.from([0, 1, 255, 254, 10]), Buffer.from(`${address()}\n`)]));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  git('rm', '-q', 'b.bin');
+  git('commit', '-q', '-m', 'remove');
+  assert.equal(guard('scan-tree').status, 0);
+  assert.equal(guard('scan-commits', 'HEAD~2..HEAD').status, 1);
+});
+
+test('file names are scanned at every stage', () => {
+  const name = `${address()}.txt`;
+  const { git, guard, write } = repo();
+  write(name, '');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+  git('commit', '-q', '-m', 'add');
+  git('rm', '-q', name);
+  git('commit', '-q', '-m', 'remove');
+  assert.equal(guard('scan-tree').status, 0);
+  assert.equal(guard('scan-commits', 'HEAD~2..HEAD').status, 1);
+});
+
+test('only users.noreply is allowed on the GitHub noreply domain', () => {
+  const domain = ['noreply', 'github', 'com'].join('.');
+  const { git, guard, write } = repo();
+  write('a.txt', `someone@${domain}\n`);
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+});
+
+test('grep failing during a scan is an error, not a clean result', () => {
+  const { dir, git, guard, write } = repo();
+  write('a.txt', 'ok\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'add');
+  const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
+  const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+  writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "-anoE" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
+  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+  for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
+    if (args[0] === 'scan-staged') { write('a.txt', 'changed\n'); git('add', '-A'); }
+    const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
+    assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
+  }
+  assert.equal(guard('scan-staged').status, 0);
 });
