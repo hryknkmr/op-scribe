@@ -323,8 +323,9 @@
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
     // Any name with card or cc in it (credit_card, cc-name, cardholder): card data is hidden whole.
     // card on its own (card_title) is not card data; with what names a card's data it is (card_number, card holder).
-    if (JA_CARD.test(text) || has(['cc', 'credit', 'cvc', 'cvv', 'csc', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
-        || pair(['card'], 'holder') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
+    // Verification values too, by any of their names: cvv2, cv2, cid, cvn, cav2, card verification value.
+    if (JA_CARD.test(text) || has(['cc', 'credit', 'cvc', 'cvv', 'csc', 'cv', 'cid', 'cvn', 'cav', 'cvd', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
+        || pair(['card'], 'holder') || pair(['verification'], 'value') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
@@ -450,12 +451,24 @@
 
   // -------------------------------------------------------------------- URLs
 
+  /** A host as the browser writes it: lowercase, Punycode for other letters (münich.example), no root dot. */
+  function canonicalHost(value) {
+    const raw = String(value || '').trim().replace(/\.+$/, '');
+    if (!raw) return '';
+    try { return new URL(`http://${raw}`).hostname.replace(/\.+$/, ''); } catch { return raw.toLowerCase(); }
+  }
+
+  /** Whether a host is on a list (exact, or *.example.com for it and its subdomains), both written in any form. */
   function hostAllowed(host, list) {
+    const h = canonicalHost(host);
     return (list || []).some((raw) => {
-      const p = String(raw).trim().toLowerCase();
+      const p = String(raw).trim();
       if (!p) return false;
-      if (p.startsWith('*.')) return host === p.slice(2) || host.endsWith(p.slice(1));
-      return host === p;
+      if (p.startsWith('*.')) {
+        const base = canonicalHost(p.slice(2));
+        return Boolean(base) && (h === base || h.endsWith(`.${base}`));
+      }
+      return h === canonicalHost(p);
     });
   }
 
@@ -715,6 +728,10 @@
         // A step recorded on production: a typed value must be only its length unless it was a search box or a
         // chosen option (valueClass), or a contact or id field's partial mask.
         const onProduction = commercial || v.privacy?.profile === 'commercial';
+        // A value from a credential or card field is only ever a placeholder, on any host.
+        if (['secret', 'card'].includes(v.valueClass) && typeof v.value === 'string' && v.value && !isPlaceholder(v.value)) {
+          findings.push({ path: path ? `${path}.value` : 'value', kinds: [v.valueClass] });
+        }
         if (v.privacy?.profile === 'commercial' && typeof v.value === 'string' && v.value
             && !['search', 'choice'].includes(v.valueClass) && !isPlaceholder(v.value) && !alreadyHidden(v.value.trim())) {
           findings.push({ path: path ? `${path}.value` : 'value', kinds: ['text'] });

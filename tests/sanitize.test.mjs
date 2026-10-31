@@ -497,3 +497,12 @@ test('a card number or a token in a path is hidden whole; production arguments a
   assert.deepEqual(S.finalScan({ steps: [{ privacy: { profile: 'commercial' }, args: { items: ['Taro Yamada'], email: 'a***@e***.com', ok: '[[text:3]]' } }] })
     .map((f) => f.path), ['steps[0].args.items[0]', 'steps[0].args.email']);
 });
+
+test('card verification names, host lists in any written form, and credential field values at the exit', () => {
+  for (const name of ['cardVerificationValue', 'cid', 'cvn', 'cv2', 'cav2']) assert.equal(S.maskFieldValue('123', { name }).value, '[[card]]', name);
+  assert.equal(S.hostAllowed('xn--mnich-kva.example', ['münich.example']), true);
+  assert.equal(S.hostAllowed('www.xn--mnich-kva.example', ['*.münich.example']), true);
+  assert.equal(S.hostAllowed('www.example.com.', ['WWW.Example.com.']), true);
+  assert.equal(S.hostAllowed('evil-example.com', ['*.example.com']), false);
+  assert.deepEqual(S.finalScan({ steps: [{ valueClass: 'card', value: '123' }, { valueClass: 'card', value: '[[card]]' }] }).map((f) => f.path), ['steps[0].value']);
+});
