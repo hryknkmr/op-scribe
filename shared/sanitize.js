@@ -112,7 +112,8 @@
     // Long opaque strings mixing letters and digits are session ids or signed parameters.
     { kind: 'secret', re: /(?<![\w-])(?=[\w-]{32,}(?![\w-]))(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]+/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
-    { kind: 'email', re: /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, replace: partialEmail },
+    // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
+    { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
     // An address on a single-label (internal) domain: alice@intranet.
     { kind: 'email', re: /(?<![\w.%+@*-])[\w.%+-]+@[A-Za-z][A-Za-z0-9-]*(?![\w.@*-])/g, replace: partialEmail },
     // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.
@@ -175,7 +176,7 @@
     const out = [];
     for (const [origin, alias] of Object.entries(aliases)) {
       let host;
-      try { host = new URL(origin).hostname; } catch { continue; }
+      try { host = new URL(origin).hostname.replace(/\.+$/, ''); } catch { continue; }
       out.push([host, alias]);
       const shown = host.split('.').map(punyLabel).join('.');
       if (shown !== host) out.push([shown, alias]);
@@ -319,15 +320,17 @@
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     if (type === 'hidden') return { kind: 'ignore' };
+    // A chosen option is the page's own text (Japan from country_id, Morning from session): kept, except card data
+    // (an expiry month chosen from a list).
+    const chosen = meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type);
     const found = new Set([meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel].map((h) => classifyKey(h)));
     if (/\bcc-/.test(autocomplete) || found.has('card')) return { kind: 'secret', label: 'card' };
+    if (chosen) return { kind: 'text' };
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || found.has('secret')) return { kind: 'secret', label: 'secret' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
     if (/\b(?:username|nickname)\b/.test(autocomplete)) return { kind: 'id' };
     const kind = RANK.find((k) => found.has(k));
-    // A chosen option is the page's own text (Japan from country_id), not an id typed by the person.
-    if (kind === 'id' && (meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type))) return { kind: 'text' };
     return { kind: kind || 'text' };
   }
 
@@ -340,8 +343,12 @@
     || /^[^\s@*]?\*{3}@[^\s@*]?\*{3}(?:\.[^\s@*]+)?$/.test(value) || /^[+\s()*-]*\*[+\d\s()*-]*$/.test(value);
 
   function maskByKind(kind, text, opts = {}) {
+    // A credential is replaced whatever it looks like (ab**cd may be a password); only this filter's own
+    // placeholder passes again unchanged.
+    if (kind === 'secret' || kind === 'card') {
+      return new RegExp(`^${PLACEHOLDER.source}$`).test(String(text).trim()) ? { value: text, kinds: [] } : { value: mark(kind), kinds: [kind] };
+    }
     if (kind && alreadyHidden(String(text).trim())) return { value: text, kinds: [] };
-    if (kind === 'secret' || kind === 'card') return { value: mark(kind), kinds: [kind] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: opts.maxLength, hosts: opts.hosts });
     // A contact field keeps its value only when the whole of it was recognized as one address or number
     // (and so partly hidden). Nothing recognized in it (someone): partly hidden as a whole. Something else
@@ -480,6 +487,8 @@
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds };
     }
+    // example.test. (the DNS root dot) is the same host as example.test: one alias, and found in text without the dot.
+    if (url.hostname.endsWith('.')) url.hostname = url.hostname.replace(/\.+$/, '');
 
     const host = url.hostname.toLowerCase();
     let origin;

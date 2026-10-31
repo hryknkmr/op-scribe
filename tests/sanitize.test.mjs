@@ -361,3 +361,17 @@ test('compound credential names, unclosed quotes, and URLs in text checked at th
   assert.equal(S.scrubUrl(once, ctx).url, once);
   assert.deepEqual(S.finalScan({ once }), []);
 });
+
+test('a credential is replaced whatever it looks like, and a chosen option is kept unless it is card data', () => {
+  for (const value of ['ab**cd', '[[hunter2]]']) assert.equal(S.maskFieldValue(value, { type: 'password' }).value, '[[secret]]', value);
+  assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'session' }).value, 'Morning');
+  assert.equal(S.maskFieldValue('Work', { tag: 'select', type: 'select', name: 'email' }).value, 'Work');
+  assert.equal(S.maskFieldValue('12', { tag: 'select', type: 'select', name: 'exp_month' }).value, '[[card]]');
+});
+
+test('an address with a non-ASCII local part is one address, and a host with the root dot is the same host', () => {
+  assert.equal(S.scrubText('名taro@example.com').text, '名***@e***.com');
+  const ctx = { hostAllowlist: [], aliases: {} };
+  assert.equal(S.scrubUrl('https://private.internal.test./a', ctx).url, 'https://site-1.invalid/a');
+  assert.equal(S.scrubText('host private.internal.test here', { hosts: ctx }).text, 'host site-1.invalid here');
+});
