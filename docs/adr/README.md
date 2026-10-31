@@ -6,7 +6,6 @@
 | --- | --- | --- |
 | [0001](0001-commercial-environment-policy.md) | 商用環境だけを厳格に扱う伏せ方 | 採用 |
 | [0002](0002-why-review-did-not-converge.md) | 伏せる規則のレビューが収束しなかった真因と対策 | 採用 |
-| [0003](0003-privacy-guarantee-matrix.md) | 伏せ方の保証の表（受け入れの表） | 提案 |
 
 書き方:
 
