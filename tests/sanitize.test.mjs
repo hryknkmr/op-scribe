@@ -559,3 +559,12 @@ test('card numbers with any separator, national ids by their form, and what the 
     assert.deepEqual(S.finalScan({ out }), [], `${input} -> ${out}`);
   }
 });
+
+test('a scheme-relative URL inside a path or a fragment is read as a URL, and escaped quotes stay inside a value', () => {
+  const ctx = () => ({ hostAllowlist: ['example.com', 'www.example.com'], productionHosts: ['www.example.com'], aliases: {} });
+  assert.equal(S.scrubUrl('https://example.com/#/redirect//private.internal.test/login', ctx()).url, 'https://example.com/#/redirect//site-1.invalid/login');
+  assert.equal(S.scrubUrl('https://www.example.com/#/redirect//private.internal.test/login', ctx()).url, 'https://www.example.com/#[[v]]');
+  assert.equal(S.scrubUrl('https://example.com/redirect//private.internal.test/login', ctx()).url, 'https://example.com/redirect//site-1.invalid/login');
+  assert.equal(S.finalScan({ u: 'https://example.com/#/redirect//private.internal.test/login' }, { hostAllowlist: ['example.com'] }).length, 1);
+  assert.equal(S.scrubText('{"password":"abc\\"suffix","q":"x"}').text, '{"password":"[[secret]]","q":"x"}');
+});

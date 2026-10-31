@@ -42,7 +42,9 @@ function structureProblem(payload) {
     || extra(payload.reproduction, ['generator', 'markdown', 'gherkin', 'summary'])
     || (Array.isArray(recording.steps) && recording.steps.map((step) => extra(step, ['n', ...STEP_FIELDS, 'privacy', 'target'])
       || extra(step?.target, TARGET_FIELDS) || extra(step?.privacy, ['profile'])).find(Boolean))
-    || (Array.isArray(recording.webmcpTools) && recording.webmcpTools.map((entry) => extra(entry, ['site', 'tools'])).find(Boolean));
+    || (recording.webmcpTools !== undefined && !Array.isArray(recording.webmcpTools) && 'webmcpTools')
+    || (Array.isArray(recording.webmcpTools) && recording.webmcpTools.map((entry) => extra(entry, ['site', 'tools'])
+      || (typeof entry?.site !== 'string' || !Array.isArray(entry.tools) || entry.tools.some((t) => typeof t !== 'string') ? 'webmcpTools[]' : '')).find(Boolean));
   if (deeper) return `unknown field: ${deeper}`;
   if (!Array.isArray(recording.steps)) return 'steps missing';
   if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';

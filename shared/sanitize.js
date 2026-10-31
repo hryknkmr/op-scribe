@@ -118,7 +118,7 @@
       // An unquoted value is taken up to the next space.
       kind: 'secret',
       // Keys in any letters: 認証コード: 123456.
-      re: /(?<![\p{L}\p{N}_.-])([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)((?:Basic|Bearer)\s+[^\s"'&,}]+|"[^"]*"?|'[^']*'?|[^\s"'&,}]+)/giu,
+      re: /(?<![\p{L}\p{N}_.-])([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)((?:Basic|Bearer)\s+[^\s"'&,}]+|"(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|[^\s"'&,}]+)/giu,
       accept: (match) => {
         const [, key, , value] = match.match(/^([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)([\s\S]*)$/u);
         return ['secret', 'card'].includes(classifyKey(key)) && !isPlaceholder(value.replace(/^["']|["']$/g, ''));
@@ -126,7 +126,7 @@
       replace: (match, key, sep, value) => {
         // An unclosed quote (password="hunter) takes the rest of the text: it is all the value as far as can be told.
         const quote = /^["']/.test(value) ? value[0] : '';
-        const closed = quote && value.length > 1 && value.endsWith(quote);
+        const closed = quote && value.length > 1 && value.endsWith(quote) && !value.endsWith(`\\${quote}`);
         return `${key}${sep}${quote}${mark('secret')}${closed ? quote : ''}`;
       }
     },
@@ -633,7 +633,16 @@
     // only short plain values. The same aliases object is shared, so nested hosts get the recording's aliases.
     const strict = Boolean(ctx.strict) || hostAllowed(host, ctx.productionHosts);
     const sctx = { ...ctx, strict };
-    const path = url.pathname.split('/').map((seg) => (seg ? scrubSegment(seg, sctx, kinds) : seg)).join('/');
+    // A path holding //host/... (a URL pasted after a route) has that part read as a URL, so its host is aliased.
+    const pathname = url.pathname;
+    const inner = pathname.search(/(?<!^)\/\/(?=[^/])/);
+    const head = inner > 0 ? pathname.slice(0, inner) : pathname;
+    let path = head.split('/').map((seg) => (seg ? scrubSegment(seg, sctx, kinds) : seg)).join('/');
+    if (inner > 0) {
+      const r = scrubText(decodeDeep(pathname.slice(inner)), { keywords: ctx.keywords, hosts: hostsOf(sctx) });
+      kinds.push(...r.kinds);
+      path += strict || !r.kinds.length ? `/${mark('v')}` : r.text;
+    }
 
     const params = scrubParams(url.searchParams, sctx, kinds);
 
@@ -645,7 +654,8 @@
     const fragment = url.hash.slice(1);
     const route = (part) => part.split('/').map((seg) => (seg ? scrubSegment(seg, sctx, kinds) : seg)).join('/');
     const decodedFragment = decodeDeep(fragment);
-    const nested = decodedFragment.search(/[a-z][a-z0-9+.-]*:\/\//i);
+    // A URL inside: with a scheme, or scheme-relative (#/redirect//host/login), found before anything is split at /.
+    const nested = decodedFragment.search(/[a-z][a-z0-9+.-]*:\/\/|(?<!:)\/\/(?=[^/])/i);
     if (fragment && (overEncoded(fragment) || (strict && nested >= 0))) {
       kinds.push('query');
       hash = `#${mark('v')}`;
@@ -653,6 +663,8 @@
       const r = scrubText(decodedFragment.slice(nested), { keywords: ctx.keywords, hosts: hostsOf(sctx) });
       kinds.push(...r.kinds);
       hash = `#${route(decodedFragment.slice(0, nested))}${r.text}`;
+      // Text that is not a URL after all (#/a//b with no host form) is not kept on trust: anything not aliased is hidden.
+      if (!r.kinds.length) hash = `#${route(decodedFragment.slice(0, nested))}${mark('v')}`;
     } else if (decodedFragment.includes('?')) {
       // Judged on the decoded fragment: #/route%3Fcode%3Dabc is a route with parameters too.
       const at = decodedFragment.indexOf('?');

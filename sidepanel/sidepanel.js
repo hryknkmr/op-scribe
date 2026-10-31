@@ -42,6 +42,7 @@ const ui = {
   outputStatus: el('output-status'),
   settingsForm: el('settings-form'),
   settingsStatus: el('settings-status'),
+  policyNotice: el('policy-notice'),
   dialog: el('preview-dialog'),
   findings: el('findings'),
   payload: el('payload'),
@@ -475,6 +476,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   };
   (async () => {
     await chrome.storage.local.set({ [SETTINGS_KEY]: next });
+    ui.policyNotice.hidden = true;
     settings = { ...S.defaults(), ...next };
     const short = next.keywords.filter((k) => k.length < 2);
     ui.settingsStatus.textContent = (await granted)
@@ -507,8 +509,11 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     settings = { ...S.defaults(), ...(stored[SETTINGS_KEY] || {}) };
     fillSettingsForm();
     // Settings saved before production hosts existed were strict everywhere: say once that this changed.
+    // Shown in the recording section, which is open, until the settings are saved once.
     if (stored[SETTINGS_KEY] && !('productionHosts' in stored[SETTINGS_KEY])) {
-      ui.settingsStatus.textContent = '入力の扱いが変わりました。自由入力を文字数だけにするのは「商用環境のホスト」に登録したホストだけです。登録して保存してください';
+      ui.policyNotice.textContent = '入力の扱いが変わりました。以前は全サイトで自由入力を文字数だけにしていましたが、今は「商用環境のホスト」に登録したホストだけです。'
+        + '「プライバシーと送信先」で登録して保存してください';
+      ui.policyNotice.hidden = false;
     }
     const draft = (await chrome.storage.session.get(DRAFT_KEY))[DRAFT_KEY];
     if (draft) {

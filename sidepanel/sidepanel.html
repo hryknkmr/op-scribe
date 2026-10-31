@@ -16,9 +16,10 @@
       <summary>記録 <span id="rec-state" class="pill">停止中</span></summary>
       <div class="body">
         <p class="hint">
-          開始すると、このタブのサイトに対する記録許可を求めます。入力値は既定で文字数だけを残し、
-          記録データはブラウザを閉じると消えます。
+          開始すると、このタブのサイトに対する記録許可を求めます。入力した文字は、パスワードやカード情報を伏せて残します。
+          「商用環境のホスト」に登録したホストでは、自由入力は文字数だけを残します。記録データはブラウザを閉じると消えます。
         </p>
+        <p id="policy-notice" class="hint" hidden></p>
         <div class="row">
           <button id="rec-start" type="button">記録開始</button>
           <button id="rec-stop" type="button" class="secondary" disabled>停止</button>
