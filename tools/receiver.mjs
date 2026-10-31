@@ -30,6 +30,12 @@ function structureProblem(payload) {
   const recording = payload.recording;
   const privacy = recording?.privacy;
   if (privacy?.policy !== 'tiered-commercial/v1') return 'unknown privacy policy';
+  // Only the fields buildPayload writes: anything else (a host table, a tab id) is not accepted.
+  const extra = (object, allowed) => Object.keys(object || {}).find((key) => !allowed.includes(key));
+  const unknown = extra(payload, ['schema', 'recording', 'reproduction', 'sentAt'])
+    || extra(recording, ['id', 'startedAt', 'endedAt', 'startUrl', 'privacy', 'environment', 'steps', 'webmcpTools'])
+    || extra(privacy, ['policy', 'coverage', 'commercialSteps', 'standardSteps', 'hostsAliased', 'redactions']);
+  if (unknown) return `unknown field: ${unknown}`;
   if (!Array.isArray(recording.steps)) return 'steps missing';
   if (!payload.reproduction || typeof payload.reproduction !== 'object') return 'reproduction missing';
   if (recording.steps.some((step) => !PROFILES.has(step?.privacy?.profile))) return 'step without a privacy profile';

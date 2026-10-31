@@ -353,7 +353,7 @@ test('an id inside a path segment is partly hidden, and WebMCP argument keys are
 test('compound credential names, unclosed quotes, and URLs in text checked at the exit like scrubUrl', () => {
   for (const name of ['pass', 'userpass', 'verificationcode']) assert.equal(S.maskFieldValue('hunter2', { type: 'text', name }).value, '[[secret]]', name);
   assert.equal(S.maskFieldValue('123', { name: 'securitycode' }).value, '[[card]]');
-  for (const name of ['compass', 'passport']) assert.equal(S.maskFieldValue('x', { name }).value, 'x', name);
+  for (const name of ['compass', 'bypass']) assert.equal(S.maskFieldValue('x', { name }).value, 'x', name);
   assert.equal(S.scrubText('password="hunter').text, 'password="[[secret]]');
   for (const t of ['https://example.com/users/@someone/orders/123456', 'https://example.com/?id=abc123', 'https://example.com/?phone=1234']) {
     assert.equal(S.finalScan({ t }).length, 1, t);
@@ -528,4 +528,13 @@ test('relative URLs of any form at the exit, domain-literal addresses, and range
   assert.equal(S.scrubText('someone@[192.168.1.1] other@[IPv6:2001:db8::1]').text, 's***@[***] o***@[***]');
   assert.equal(S.maskFieldValue('50', { type: 'range' }, { strict: true }).value, '50');
   assert.equal(S.maskFieldValue('#ff0000', { type: 'color' }, { strict: true }).value, '#ff0000');
+});
+
+test('more credential and id names: auth and recovery keys, national ids, bank and document numbers; keys are checked as URLs', () => {
+  for (const name of ['auth_key', 'recovery_key', 'ssn', 'social_security_number', 'マイナンバー']) assert.equal(S.classifyKey(name), 'secret', name);
+  for (const name of ['iban', 'account_number', 'passport', 'order_number']) assert.equal(S.classifyKey(name), 'id', name);
+  for (const name of ['author', 'keyword', 'number']) assert.equal(S.classifyKey(name), null, name);
+  assert.equal(S.scrubText('auth_key=ABCD-EFGH ssn=123-45-6789').text, 'auth_key=[[secret]] ssn=[[secret]]');
+  assert.deepEqual(S.finalScan({ recording: { aliases: { 'https://private.internal.test': 'site-1.invalid' } } }, { hostAllowlist: [] })
+    .map((f) => f.kinds), [['host']]);
 });

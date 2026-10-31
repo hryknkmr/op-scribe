@@ -296,7 +296,10 @@
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
   // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
   const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)|^pass$|^(?:user|login|admin|account|new|old|current|confirm|db)pass$|^(?:verification|verify|confirm|confirmation|auth|access|login|sms|backup|recovery|onetime|otp|mfa|pin)code$/;
-  const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session'];
+  const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session', 'auth', 'recovery', 'backup',
+    'master', 'encryption', 'shared', 'product', 'activation'];
+  // National ids are hidden whole, like credentials: ssn, social security number, マイナンバー.
+  const NATIONAL_IDS = /^(?:ssn|sin|nin|itin|mynumber)$/;
   const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
     'sms', 'backup', 'recovery', 'time', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'pin', 'ログイン', '確認', '認証', 'セキュリティ'];
   // Only in URLs and protocol arguments: OAuth and signed-URL parameters. A form field named "state" or "code" is a
@@ -329,11 +332,16 @@
         || pair(['card'], 'holder') || pair(['verification'], 'value') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
-    if (JA_SECRET.test(text) || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
+    if (JA_SECRET.test(text) || /マイナンバー|個人番号/.test(text) || words.some((w) => NATIONAL_IDS.test(w))
+        || words.join(' ').includes('social security') || pair(['my'], 'number')
+        || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
         || pair(KEY_OWNERS, 'key') || pair(CODE_OWNERS, 'code') || words.some((w) => /^(?:pass|pwd|otp|pin)$/.test(w) && protocol)
         || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
     if (JA_EMAIL.test(text) || words.some((w) => w.includes('email') || /^mail(?:add?ress|addr)?$/.test(w)) || pair(['e'], 'mail')) return 'email';
     if (JA_PHONE.test(text) || words.some((w) => PHONE_WORDS.has(w))) return 'phone';
+    // Bank and document numbers are ids: iban, account number, routing number, passport number.
+    if (has(['iban', 'bic', 'swift', 'passport']) || pair(['account', 'bank', 'routing', 'passport', 'member', 'customer', 'order', 'tax'], 'number')
+        || /(?:口座|会員|顧客|注文|旅券)番号/.test(text)) return 'id';
     if (JA_ID.test(text.trim()) || ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
     return null;
   }
@@ -748,6 +756,7 @@
         }
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
+          urlParams(k, `${path}{key}`, onProduction);
           walk(item, path ? `${path}.${k}` : k, k, kind, inArgs, carried, onProduction);
         }
       }

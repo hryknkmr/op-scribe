@@ -382,6 +382,19 @@ async function handle(message, sender) {
   return undefined;
 }
 
+// A word listed while recording stays listed for that recording, even if it is removed from the settings later.
+chrome.storage.onChanged.addListener((changes, area) => {
+  const next = changes[SETTINGS_KEY]?.newValue;
+  if (area !== 'local' || !next) return;
+  mutate(async (rec) => {
+    if (rec?.state !== 'recording' || !rec.policy) return null;
+    const keywords = [...new Set([...(rec.policy.keywords || []), ...(next.keywords || [])])];
+    if (keywords.length === (rec.policy.keywords || []).length) return null;
+    rec.policy.keywords = keywords;
+    return { save: rec };
+  });
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.from !== 'op-scribe/panel' && message?.from !== 'op-scribe/content') return false;
   (async () => {

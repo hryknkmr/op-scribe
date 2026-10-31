@@ -506,6 +506,10 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     const stored = await chrome.storage.local.get(SETTINGS_KEY);
     settings = { ...S.defaults(), ...(stored[SETTINGS_KEY] || {}) };
     fillSettingsForm();
+    // Settings saved before production hosts existed were strict everywhere: say once that this changed.
+    if (stored[SETTINGS_KEY] && !('productionHosts' in stored[SETTINGS_KEY])) {
+      ui.settingsStatus.textContent = '入力の扱いが変わりました。自由入力を文字数だけにするのは「商用環境のホスト」に登録したホストだけです。登録して保存してください';
+    }
     const draft = (await chrome.storage.session.get(DRAFT_KEY))[DRAFT_KEY];
     if (draft) {
       ui.repro.value = draft.markdown || '';
