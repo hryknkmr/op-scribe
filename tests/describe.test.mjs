@@ -163,3 +163,16 @@ test('a note with a kind does not change how the next steps read', () => {
   assert.deepEqual(D.buildReproduction({ id: 'x', steps: [steps[0], note, steps[1]] }).steps, D.buildReproduction({ id: 'x', steps }).steps);
 });
 
+test('a note counts the opening step added in front of the steps', () => {
+  const repro = D.buildReproduction({
+    id: 'x',
+    startUrl: 'https://example.com/',
+    steps: [
+      { type: 'click', t: 0, env: 'standard', source: 'user', url: 'https://example.com/', target: { role: 'button', name: '保存' } },
+      { type: 'note', t: 1, env: 'standard', source: 'user', note: '遅い', kind: 'bug' }
+    ]
+  });
+  assert.equal(repro.steps[1].action, '「保存」ボタンをクリックする');
+  assert.equal(repro.findings[0].afterStep, 2);
+});
+

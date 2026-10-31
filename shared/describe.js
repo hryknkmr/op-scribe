@@ -236,6 +236,7 @@
     const first = steps.find((s) => s.url)?.url;
     if (startUrl !== '[[url:none]]' && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
       out.unshift({ action: `${startUrl} を開く` });
+      for (const finding of findings) finding.afterStep += 1;
     }
 
     const preconditions = [];
