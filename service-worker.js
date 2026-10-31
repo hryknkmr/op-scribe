@@ -174,8 +174,14 @@ async function start({ tabId, url }) {
     const env = envOf([url], rec.policy);
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
-    await syncContentScripts(rec.grantedPatterns);
-    await setBadge(true);
+    try {
+      await syncContentScripts(rec.grantedPatterns);
+      await setBadge(true);
+    } catch (error) {
+      if (previous?.state !== 'recording') throw error;
+      // stopTab has already ended it: do not leave it saved as still recording.
+      return { save: { ...previous, state: 'stopped', endedAt: Date.now() }, reply: { ok: false, error: String(error?.message || error) } };
+    }
     // After the save: the injected script asks at once whether this tab is recording.
     return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
   });

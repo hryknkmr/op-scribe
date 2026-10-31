@@ -12,6 +12,7 @@ function worker() {
   const listeners = {};
   const on = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
   const seen = [];
+  const control = {};
   const noop = async () => {};
   const chrome = {
     storage: {
@@ -27,9 +28,12 @@ function worker() {
     scripting: {
       getRegisteredContentScripts: async () => [],
       unregisterContentScripts: noop,
-      registerContentScripts: noop,
+      registerContentScripts: async () => { if (control.failRegister) throw new Error('register failed'); },
       // What an injected recorder sees when it says HELLO straight away.
-      executeScript: async () => { seen.push(await send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' })); }
+      executeScript: async ({ files }) => {
+        if (!files.includes('content/recorder.js')) return;
+        seen.push(await send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' }));
+      }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
     tabs: { onUpdated: on('updated'), onRemoved: on('removed'), sendMessage: noop },
@@ -40,7 +44,7 @@ function worker() {
   context.self = context;
   context.importScripts = (...files) => { for (const f of files) vm.runInContext(read(f), context, { filename: f }); };
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });
-  return { send, seen };
+  return { send, seen, control, session };
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
@@ -49,4 +53,14 @@ test('the page open at the start of a recording is told it is being recorded', a
   assert.equal(reply.ok, true, JSON.stringify(reply));
   assert.ok(seen.length > 0, 'the recorder was injected');
   assert.equal(seen[0].active, true);
+});
+
+test('a restart that fails does not leave the earlier recording saved as recording', async () => {
+  const { send, control, session } = worker();
+  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
+  await send(start);
+  control.failRegister = true;
+  const reply = await send(start);
+  assert.equal(reply.ok, false);
+  assert.equal(session.opsRecording.state, 'stopped');
 });
