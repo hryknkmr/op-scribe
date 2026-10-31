@@ -67,6 +67,7 @@ function mutate(fn) {
     if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
+    await result?.after?.();
     return result?.reply;
   });
   queue = run.catch(() => {});
@@ -174,9 +175,9 @@ async function start({ tabId, url }) {
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
     await syncContentScripts(rec.grantedPatterns);
-    await injectNow(tabId);
     await setBadge(true);
-    return { save: rec, reply: { ok: true } };
+    // After the save: the injected script asks at once whether this tab is recording.
+    return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
   });
 }
 
