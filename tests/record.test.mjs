@@ -198,3 +198,9 @@ test('the worker does not keep as a search box what its names say is free text (
   const real = R.cleanStep({ ...input(search), field: { type: 'text', inSearch: true } }, rec, settings, { tabUrl: PROD });
   assert.deepEqual(real.value, search);
 });
+
+test('the worker counts only the known redaction kinds (row M1; review R16)', () => {
+  const rec = newRec();
+  R.cleanStep({ ...input(typed.kept('text', 'x')), pageUrl: BETA, valueKinds: ['email', 'made-up', 'zzz'] }, rec, settings, { tabUrl: BETA });
+  assert.deepEqual(Object.keys(rec.redactions), ['email']);
+});

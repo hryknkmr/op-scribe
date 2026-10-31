@@ -13,7 +13,7 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { LIMITS, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, STEP_RULES, REDACTION_KINDS } = root.OpScribeLimits || require('./limits.js');
   const { scrubText, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
@@ -192,7 +192,8 @@
     if (type === 'upload' && step.value.field !== 'file') step.value = typed.file(0);
     if (type !== 'upload' && step.value?.field === 'file') step.value = typed.redacted('text', 'v');
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
-      if (is(KIND, kind)) rec.redactions[kind] = (rec.redactions[kind] || 0) + 1;
+      // Only the kinds the payload may count (row M1), and never past the limit.
+      if (REDACTION_KINDS.includes(kind)) rec.redactions[kind] = Math.min((rec.redactions[kind] || 0) + 1, LIMITS.redactionCount);
     }
     return step;
   }

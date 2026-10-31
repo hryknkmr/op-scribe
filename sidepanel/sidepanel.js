@@ -70,10 +70,15 @@ let generator = 'none';
 let basis = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
-let previewedRevision = null;
+let previewedBasis = null;
 
 const STALE = '記録が変わったため（ステップの削除・追加）、この再現手順は出力できません。作り直すか、手順の欄を空にしてください';
-const isStale = (rec) => Boolean(ui.repro.value.trim()) && basis !== (rec?.revision ?? 0);
+/**
+ * The recording and revision something was made from. The recording id matters: another
+ * window's panel can start a new recording, whose revisions count from 0 again.
+ */
+const basisOf = (rec) => (rec ? `${rec.id}@${rec.revision ?? 0}` : null);
+const isStale = (rec) => Boolean(ui.repro.value.trim()) && basis !== basisOf(rec);
 
 const KIND_LABELS = {
   text: '自由入力', secret: '秘匿値', email: 'メール', phone: '電話', card: 'カード', personal: '個人情報',
@@ -141,6 +146,11 @@ function environment() {
 }
 
 // ------------------------------------------------------------------- render
+
+async function loadSettings() {
+  settings = { ...S.defaults(), ...((await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY] || {}) };
+  return settings;
+}
 
 async function loadRecording() {
   recording = (await chrome.storage.session.get(REC_KEY))[REC_KEY] || null;
@@ -284,7 +294,7 @@ const saveDraft = () => chrome.storage.session.set({
 async function setRepro(rec, markdown, by) {
   ui.repro.value = markdown;
   generator = by;
-  basis = rec.revision ?? 0;
+  basis = basisOf(rec);
   await saveDraft();
 }
 
@@ -340,7 +350,7 @@ ui.genTemplate.addEventListener('click', () => generateTemplate());
 ui.repro.maxLength = TOTALS.markdown;
 ui.repro.addEventListener('input', () => {
   // Hand-written from scratch: it describes the recording as it is now.
-  if (basis === null) basis = recording?.revision ?? 0;
+  if (basis === null) basis = basisOf(recording);
   if (!ui.repro.value.trim()) basis = null;
   saveDraft();
 });
@@ -349,6 +359,8 @@ ui.repro.addEventListener('input', () => {
 
 /** Builds the payload and runs the final gate. Every exit (send, copy, save) goes through here. */
 async function preparePayload() {
+  // Keywords added in another window's panel apply now (row K2): read the settings at every exit.
+  await loadSettings();
   const rec = await loadRecording();
   if (!rec) return { error: '記録がありません' };
   if (isStale(rec)) return { error: STALE };
@@ -372,7 +384,7 @@ ui.preview.addEventListener('click', async () => {
     return;
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
-  previewedRevision = prepared.rec.revision ?? 0;
+  previewedBasis = basisOf(prepared.rec);
   ui.payload.textContent = previewed;
   ui.findings.replaceChildren();
   for (const line of describeFindings(prepared.findings)) {
@@ -409,7 +421,8 @@ ui.send.addEventListener('click', () => {
       }
       // Re-check the exact bytes about to leave, not a rebuilt object.
       const rec = await loadRecording();
-      if ((rec?.revision ?? 0) !== previewedRevision) {
+      await loadSettings();
+      if (basisOf(rec) !== previewedBasis) {
         ui.sendStatus.textContent = 'プレビューの後に記録が変わりました。もう一度プレビューしてください';
         return;
       }
@@ -532,6 +545,10 @@ ui.policyNoticeOk.addEventListener('click', dismissNotice);
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.from === 'op-scribe/worker' && message.type === 'REC_CHANGED') refresh();
+});
+// Settings saved in another window's panel.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[SETTINGS_KEY]) settings = { ...S.defaults(), ...(changes[SETTINGS_KEY].newValue || {}) };
 });
 chrome.tabs.onActivated.addListener(refresh);
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {

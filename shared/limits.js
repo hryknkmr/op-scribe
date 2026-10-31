@@ -31,8 +31,13 @@
     url: 2048,
     scheme: 16,
     environment: 60,
-    steps: 500
+    steps: 500,
+    redactionCount: 1e9
   });
+
+  /** The kinds counted in privacy.redactions (row M1): only these, each a count up to redactionCount. */
+  const REDACTION_KINDS = Object.freeze(['secret', 'card', 'email', 'phone', 'personal', 'postal', 'id', 'ip', 'number',
+    'keyword', 'text', 'query', 'hash', 'user', 'url', 'v']);
 
   /** The longest text a cut to n can produce. */
   const cut = (n) => n + 1;
@@ -76,11 +81,12 @@
   const MARKDOWN = LIMITS.steps * STEP.markdown + 4096;
   const GHERKIN = LIMITS.steps * STEP.gherkin + 4096;
   const TOOLS_JSON = LIMITS.toolList * (6 * LIMITS.url + LIMITS.toolList * 6 * cut(LIMITS.tool));
+  const REDACTIONS_JSON = REDACTION_KINDS.length * 32;
   const TOTALS = Object.freeze({
     markdown: MARKDOWN,
     gherkin: GHERKIN,
     // The recording, plus the Markdown and the Gherkin as JSON strings: 6 bytes a character at worst.
-    payloadBytes: LIMITS.steps * STEP.json + TOOLS_JSON + 6 * (MARKDOWN + GHERKIN) + 4096
+    payloadBytes: LIMITS.steps * STEP.json + TOOLS_JSON + REDACTIONS_JSON + 6 * (MARKDOWN + GHERKIN) + 4096
   });
 
   /** WAI-ARIA 1.2 roles that are not abstract: the ones an element can take. */
@@ -95,7 +101,7 @@
   /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
   const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
 
-  const api = { LIMITS, TOTALS, cut, STEP_RULES, ARIA_ROLES, primaryRole };
+  const api = { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, ARIA_ROLES, primaryRole };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

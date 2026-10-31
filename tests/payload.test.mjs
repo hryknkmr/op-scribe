@@ -352,3 +352,14 @@ test('a value longer than its limit passes only with the "…" the cut appends (
   ok.recording.steps[2].value = { treatment: 'kept', field: 'search', text: `${'a'.repeat(120)}…` };
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
+
+test('privacy.redactions counts only the known kinds, within the limit (row M1; review R16)', () => {
+  for (const change of [
+    (p) => { p.privacy.redactions.made = 1; },
+    (p) => { p.privacy.redactions.text = 1e10; }
+  ]) {
+    const payload = clone(build());
+    change(payload);
+    assert.notDeepEqual(P.checkPayload(payload), [], change.toString());
+  }
+});

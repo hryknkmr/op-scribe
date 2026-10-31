@@ -108,7 +108,7 @@
 
 | ID | 欄 | 扱い | 強さ | 実装 |
 | --- | --- | --- | --- | --- |
-| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` と `policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは `^[a-z]{1,16}$` | 構造 | ② |
+| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` と `policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
 | M2 | `recording.id`・`startedAt`・`endedAt`・`sentAt` | `kept`。ID は `^rec-[a-z0-9-]{1,40}$`、日時は ISO 8601（`endedAt` は `null` も可） | 構造 | ② |
 | M3 | `recording.environment`（ブラウザ・プラットフォーム・言語） | `kept`（60 字） | 構造（型と長さ）・できる限り（中） | ② |
 | M4 | `reproduction.generator` | `template`・`on-device-ai`・`manual`・`none` のどれか | 構造 | ② |

@@ -19,7 +19,7 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, TOTALS, cut, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -75,7 +75,7 @@
           policy: { type: 'const', row: 'M1', value: POLICY },
           coverage: { type: 'enum', row: 'M1', values: ['commercial', 'standard', 'mixed', 'none'] },
           hostsAliased: { type: 'int', row: 'M1', min: 0 },
-          redactions: { type: 'map', row: 'M1', key: /^[a-z]{1,16}$/, of: { type: 'int', row: 'M1', min: 0 } }
+          redactions: { type: 'map', row: 'M1', keys: REDACTION_KINDS, of: { type: 'int', row: 'M1', min: 0, max: LIMITS.redactionCount } }
         }
       },
       recording: {
@@ -286,7 +286,7 @@
       case 'map':
         if (!isObject(value)) return bad('not an object');
         for (const [k, v] of Object.entries(value)) {
-          if (!node.key.test(k)) bad('bad key');
+          if (!node.keys.includes(k)) bad('unknown kind');
           checkNode(node.of, v, `${path}.${k}`, problems);
         }
         return undefined;
@@ -306,7 +306,7 @@
       case 'enum':
         return node.values.includes(value) ? undefined : bad('unexpected value');
       case 'int':
-        return Number.isInteger(value) && value >= node.min ? undefined : bad('not an integer');
+        return Number.isInteger(value) && value >= node.min && value <= (node.max ?? Infinity) ? undefined : bad('not an integer in range');
       case 'bool':
         return typeof value === 'boolean' ? undefined : bad('not a boolean');
       // typed and args need the step's environment; checkPayload does them.
