@@ -31,7 +31,9 @@ const { SCHEMA, checkPayload } = require('../shared/payload.js');
 const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
 const OUT_DIR = join(process.cwd(), 'recordings');
-const MAX_BYTES = 1024 * 1024;
+// Derived from the per-field limits: any payload the extension can build fits (shared/limits.js).
+const { TOTALS } = require('../shared/limits.js');
+const MAX_BYTES = TOTALS.payloadBytes;
 const KEYWORDS_FILE = process.env.OPSCRIBE_KEYWORDS_FILE || '';
 const KEYWORDS = KEYWORDS_FILE
   ? readFileSync(KEYWORDS_FILE, 'utf8').split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))

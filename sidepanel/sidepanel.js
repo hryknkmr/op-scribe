@@ -9,6 +9,7 @@
 import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
+const { TOTALS } = globalThis.OpScribeLimits;
 const D = globalThis.OpScribeDescribe;
 const P = globalThis.OpScribePayload;
 
@@ -334,6 +335,8 @@ async function generateAi() {
 
 ui.genAi.addEventListener('click', generateAi);
 ui.genTemplate.addEventListener('click', () => generateTemplate());
+// The same bound the payload check applies to the Markdown (shared/limits.js).
+ui.repro.maxLength = TOTALS.markdown;
 ui.repro.addEventListener('input', () => {
   // Hand-written from scratch: it describes the recording as it is now.
   if (basis === null) basis = recording?.revision ?? 0;

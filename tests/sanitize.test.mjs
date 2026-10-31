@@ -261,3 +261,16 @@ test('cutting never splits a character or leaves half a placeholder (review new 
     assert.ok(!/\[…$/.test(cut), cut);
   }
 });
+
+test('finalScan still scans what a placeholder carries (rows E4, E6; review new R5)', () => {
+  assert.deepEqual(S.finalScan({ markdown: '[[url:acme]] を開く' }, { keywords: ['acme'] }).map((f) => f.kinds), [['keyword']]);
+  assert.deepEqual(S.finalScan({ markdown: '[[url:x]] を開く' }, { hosts: ['x'] }).map((f) => f.kinds), [['host']]);
+  assert.deepEqual(S.finalScan({ markdown: '[[text:12]] [[url:invalid]]' }, { keywords: ['acme'], hosts: ['x'] }), []);
+});
+
+test('one call keeps at most 100 argument values (row W5)', () => {
+  const wide = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, Array.from({ length: 10 }, (_, j) => j)]));
+  const out = S.maskArgs(wide, { env: 'standard' });
+  const leaves = Object.values(out).reduce((n, list) => n + list.length, 0);
+  assert.equal(leaves, 100);
+});

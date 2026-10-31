@@ -19,7 +19,7 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, cut, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -108,8 +108,9 @@
         type: 'object',
         fields: {
           generator: { type: 'enum', row: 'M4', values: ['template', 'on-device-ai', 'manual', 'none'] },
-          markdown: str('E4', 100000),
-          gherkin: str('E3', 400000)
+          markdown: str('E4', TOTALS.markdown),
+          // No limit of its own: it must equal the Gherkin rebuilt from the recording (E3).
+          gherkin: str('E3', Infinity)
         }
       },
       sentAt: str('M2', 24, ISO)
@@ -222,6 +223,12 @@
   }
 
   /** Rows W1-W5: null, booleans and typed values, in arrays and objects up to depth 3. */
+  /** Values (leaves) in an argument tree, counted only as deep as checkArgs accepts. */
+  function countLeaves(node, depth = 0) {
+    if (node === null || typeof node !== 'object' || typeof node.treatment === 'string' || depth > LIMITS.argDepth) return 1;
+    return Object.values(node).reduce((n, child) => n + countLeaves(child, depth + 1), 0);
+  }
+
   function checkArgs(node, env, path, problems, depth = 0) {
     if (node === null || typeof node === 'boolean') return;
     if (isObject(node) && typeof node.treatment === 'string') {
@@ -378,7 +385,10 @@
       if (step.target?.href !== undefined) checkUrl(step.target.href, step.env, `${path}.target.href`, problems);
       if (step.value !== undefined) checkTyped(step.value, step.env, `${path}.value`, problems);
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
-      if (step.args !== undefined) checkArgs(step.args, step.env, `${path}.args`, problems);
+      if (step.args !== undefined) {
+        checkArgs(step.args, step.env, `${path}.args`, problems);
+        if (countLeaves(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
+      }
     });
     // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.
     if (problems.length) return problems;

@@ -22,7 +22,7 @@
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
   // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
-  const OWN_PLACEHOLDER = /\[\[(?:text:\d+|file:\d+|url:[a-z0-9+.-]{1,16}|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+  const OWN_PLACEHOLDER = /\[\[(?:(?:text|file|url):([a-z0-9+.-]{1,16})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
@@ -218,11 +218,16 @@
    *   isLeaf(node) - true for what leaf() handles
    *   leaf(node)   - the value to keep for a leaf
    */
-  function walkArgs(node, { isLeaf, leaf, keywords }, depth = 0) {
-    if (isLeaf(node)) return leaf(node);
-    if (depth >= LIMITS.argDepth) return typed.redacted('arg', 'nested');
-    const walk = (child) => walkArgs(child, { isLeaf, leaf, keywords }, depth + 1);
-    if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk);
+  const DROP = Symbol('dropped');
+
+  function walkArgs(node, handlers, depth = 0, budget = { leaves: LIMITS.argLeaves }) {
+    const { isLeaf, leaf, keywords } = handlers;
+    // At most argLeaves values in one call's arguments; the rest are dropped (W5).
+    const spend = () => (budget.leaves -= 1) >= 0;
+    if (isLeaf(node)) return spend() ? leaf(node) : DROP;
+    if (depth >= LIMITS.argDepth) return spend() ? typed.redacted('arg', 'nested') : DROP;
+    const walk = (child) => walkArgs(child, handlers, depth + 1, budget);
+    if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk).filter((v) => v !== DROP);
     const out = {};
     let masked = 0;
     // Masked keys are numbered, and a name already taken (after the cut or
@@ -236,9 +241,11 @@
     for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
       const name = scrubText(k, { keywords, maxLength: LIMITS.argKey });
       const cls = classifyField({ name: k });
+      const value = cls.kind === 'secret' || cls.kind === 'pii' ? (spend() ? typed.redacted('arg', cls.label) : DROP) : walk(v);
+      if (value === DROP) continue;
       // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
       Object.defineProperty(out, unique(name.kinds.length ? `masked-${masked += 1}` : name.text), {
-        value: cls.kind === 'secret' || cls.kind === 'pii' ? typed.redacted('arg', cls.label) : walk(v),
+        value,
         enumerable: true,
         writable: true,
         configurable: true
@@ -396,7 +403,9 @@
     const findings = [];
     const hosts = hostPattern(opts.hosts);
     const check = (text, path) => {
-      const plain = String(text).replace(OWN_PLACEHOLDER, ' ');
+      // Skip the placeholder, not what it carries: "[[url:acme]]" in a hand-edited
+      // Markdown is still scanned for "acme" (E4, E6).
+      const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
       const { kinds } = scrubText(plain, { keywords: opts.keywords });
       if (hosts?.test(plain.normalize('NFKC'))) kinds.push('host');
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });

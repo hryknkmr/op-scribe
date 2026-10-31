@@ -284,3 +284,23 @@ test('an argument tree far too deep is refused without rendering it (rows E1, E3
   assert.doesNotThrow(() => { problems = P.checkPayload(payload); });
   assert.ok(problems.some((p) => p.problem === 'too deep'));
 });
+
+test('the largest recording the limits allow still passes the check and fits the totals (rows E1, E3, E4; review new R5)', async () => {
+  const { LIMITS, TOTALS } = require('../shared/limits.js');
+  const url = `https://site-1.invalid/${'a/'.repeat((LIMITS.url - 24) / 2)}`.slice(0, LIMITS.url);
+  const long = (n) => 'あ'.repeat(n);
+  const args = Object.fromEntries(Array.from({ length: LIMITS.argKeys }, (_, i) => [
+    `${String(i).padStart(2, '0')}${'k'.repeat(LIMITS.argKey - 2)}`,
+    Array.from({ length: LIMITS.argLeaves / LIMITS.argKeys }, () => ({ treatment: 'kept', field: 'arg', text: long(LIMITS.kept.arg) }))
+  ]));
+  const steps = Array.from({ length: LIMITS.steps }, (_, i) => (i % 2
+    ? { type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: long(LIMITS.tool), ok: true, args }
+    : { type: 'click', t: i, env: 'standard', source: 'user', url,
+      target: { role: 'button', tag: 'button', name: long(LIMITS.name), selector: 's'.repeat(LIMITS.selector), href: url } }));
+  const big = { ...clone(rec), startUrl: url, steps, webmcpTools: {} };
+  const markdown = D.toMarkdown(D.buildReproduction(big));
+  assert.ok([...markdown].length <= TOTALS.markdown);
+  const payload = P.buildPayload(big, { generator: 'template', markdown }, {});
+  assert.deepEqual(P.checkPayload(payload), []);
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) <= TOTALS.payloadBytes);
+});
