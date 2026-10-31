@@ -203,6 +203,9 @@
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
+        // CSS escapes undone, and the real hosts this recording knows, too (T3, K5; review R23).
+        const hosts = [...Object.keys(rec.aliases || {}).map(hostOf), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))];
+        if (S.finalScan(oneLine(t.selector), { keywords: settings.keywords, hosts: hosts.filter(Boolean) }).length) r.kinds.push('selector');
         // Cut like any kept text, with the "…" that says so (T3; review R21).
         const chars = [...r.text];
         if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : r.text;

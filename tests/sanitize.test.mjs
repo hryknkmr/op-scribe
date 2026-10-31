@@ -327,3 +327,10 @@ test('non-finite numbers are redacted as numbers, and no string poses as one (ro
   });
   assert.deepEqual(S.maskArgs({ s: '\u0000op-scribe:non-finite' }, { env: 'standard' }).s.treatment, 'kept');
 });
+
+test('finalScan undoes CSS escapes before it looks (E6; review R23)', () => {
+  assert.equal(S.cssUnescape('a\\.b\\/c\\31 23'), 'a.b/c123');
+  assert.deepEqual(S.finalScan({ s: '#intranet\\.corp\\.invalid' }, { hosts: ['intranet.corp.invalid'] }), [{ path: 's', kinds: ['host'] }]);
+  assert.deepEqual(S.finalScan({ s: '#Acme\\/Prod' }, { keywords: ['Acme/Prod'] }), [{ path: 's', kinds: ['keyword'] }]);
+  assert.deepEqual(S.finalScan({ s: '#save\\.button' }), []);
+});

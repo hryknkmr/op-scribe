@@ -309,3 +309,14 @@ test('an argument the worker had to redact is counted once (row M1)', () => {
   R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 't', args: { a: 'raw', b: { treatment: 'other' } } }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(rec.redactions, { v: 2 });
 });
+
+test('a CSS-escaped selector is checked as written and unescaped, and dropped on a find (rows T3, K2, K3, K5; review R23)', () => {
+  const rec = newRec();
+  rec.aliases['https://intranet.corp.invalid'] = 'site-1.invalid';
+  const click = (selector) => R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', selector } }, rec, settings, { tabUrl: BETA });
+  for (const selector of ['[data-testid="intranet\\.corp\\.invalid"]', '#Ac\\me-panel', '#alice\\@example\\.com',
+    '#shop\\.example\\.com', '[data-testid="\\41 cme"]']) {
+    assert.equal(click(selector).target.selector, undefined, selector);
+  }
+  assert.equal(click('#save\\.button').target.selector, '#save\\.button');
+});

@@ -455,6 +455,17 @@
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
 
+  /**
+   * A CSS-escaped text as written (CSS Syntax 4.3.7): the selector escapes
+   * "intranet.corp.invalid" as "intranet\\.corp\\.invalid", which no keyword,
+   * host or pattern would otherwise match (T3, K2, K5; review R23).
+   */
+  const cssUnescape = (text) => String(text).replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n]?|([^\n0-9a-fA-F]))/g, (m, hex, ch) => {
+    if (ch !== undefined) return ch;
+    const code = parseInt(hex, 16);
+    return code === 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(code);
+  });
+
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
@@ -463,8 +474,9 @@
       // Markdown is still scanned for "acme" (E4, E6). The count in [[text:N]] and
       // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
       const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
-      const { kinds } = scrubText(plain, { keywords: opts.keywords });
-      if (hosts?.test(plain.normalize('NFKC'))) kinds.push('host');
+      // As written and with CSS escapes undone: a selector carries them (review R23).
+      const kinds = [plain, cssUnescape(plain)].flatMap((t) => [...scrubText(t, { keywords: opts.keywords }).kinds,
+        ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])]);
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {
@@ -501,7 +513,8 @@
     scrubUrl,
     hostAllowed,
     parsedHost,
-    finalScan
+    finalScan,
+    cssUnescape
   };
 
   root.OpScribeSanitize = api;
