@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
 
   const LABELS = {
     secret: '秘匿値',
@@ -40,6 +40,8 @@
    */
   function display(value) {
     if (!value || typeof value !== 'object') return '';
+    // A typed value that may not exist (TYPED_SCHEMA) is never rendered as what it claims.
+    if (!typedAllowed(value.treatment, value.field, value.kind)) return '[[v]]';
     switch (value.treatment) {
       case 'kept': return typeof value.number === 'number' ? String(value.number) : String(value.text ?? '');
       case 'length': return value.kind === 'text' ? `[[text:${value.length}]]` : `[[${value.kind}]]`;

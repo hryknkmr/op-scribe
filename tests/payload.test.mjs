@@ -363,3 +363,32 @@ test('privacy.redactions counts only the known kinds, within the limit (row M1; 
     assert.notDeepEqual(P.checkPayload(payload), [], change.toString());
   }
 });
+
+test('only the typed values that may exist pass the check, and describe renders nothing else (E1-E3, TYPED_SCHEMA; review R20)', () => {
+  const bad = [
+    { treatment: 'redacted', field: 'text', kind: 'url' },
+    { treatment: 'length', field: 'search', kind: 'text', length: 2 },
+    { treatment: 'redacted', field: 'secret', kind: 'email' },
+    { treatment: 'length', field: 'pii', kind: 'secret', length: 2 }
+  ];
+  for (const value of bad) {
+    const r = clone(rec);
+    r.steps[1].value = value;
+    assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'bad kind'), JSON.stringify(value));
+    assert.equal(D.display(value), '[[v]]');
+  }
+  // What the masking makes still passes (nested and value are kinds of their own).
+  const r = clone(rec);
+  r.steps[4].args = { deep: typed.redacted('arg', 'nested'), fn: typed.redacted('arg', 'value') };
+  assert.deepEqual(P.checkPayload(build(r)), []);
+});
+
+test('the environment is masked before it is cut, and a raw one too long is refused (M3; review R20)', () => {
+  const browser = `${'x'.repeat(59)}Acme`;
+  const masked = S.cleanLine(browser, { keywords: ['Acme'], maxLength: 60 }).text;
+  assert.ok(!masked.includes('A'), masked);
+  assert.deepEqual(P.checkPayload(P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser: masked })), []);
+  const raw = P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser });
+  assert.equal(raw.recording.environment.browser, browser, 'buildPayload never cuts');
+  assert.ok(P.checkPayload(raw).some((p) => p.path === 'recording.environment.browser'));
+});

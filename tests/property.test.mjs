@@ -98,12 +98,14 @@ test('every payload built from generated page input passes the independent check
       };
       const from = type === 'note' && g.r() < 0.5 ? {} : { tabUrl };
       const step = R.cleanStep(raw, rec, settings, from);
+      // What the content script makes for a field, the worker never drops (rows I1-I8; review R20).
+      if ((type === 'input' || type === 'select') && masked) assert.ok(step, `seed ${seed}: ${JSON.stringify(meta)}`);
       if (step) rec.steps.push(step);
     }
     // Deleting steps (including the first) must not break the payload either.
     if (rec.steps.length && g.r() < 0.3) rec.steps.splice(g.int(rec.steps.length), 1);
     rec.webmcpTools['https://site-1.invalid'] = Array.from({ length: g.int(60) }, () => S.scrubText(R.oneLine(g.text(120)), { maxLength: 80 }).text).slice(0, 50);
-    const payload = P.buildPayload(rec, { generator: 'manual', markdown: D.toMarkdown(D.buildReproduction(rec)) }, { browser: g.text(100), language: 'ja' });
+    const payload = P.buildPayload(rec, { generator: 'manual', markdown: D.toMarkdown(D.buildReproduction(rec)) }, { browser: S.cleanLine(g.text(100), { keywords: settings.keywords, maxLength: 60 }).text, language: 'ja' });
     const problems = P.checkPayload(JSON.parse(JSON.stringify(payload)));
     assert.deepEqual(problems, [], `seed ${seed}: ${JSON.stringify(problems.slice(0, 3))}`);
   }

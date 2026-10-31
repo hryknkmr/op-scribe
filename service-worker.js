@@ -13,10 +13,10 @@
  */
 importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
-const { scrubText, scrubUrl, defaults } = self.OpScribeSanitize;
+const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
-const { policyOf, envOf, oneLine, cleanStep } = self.OpScribeRecord;
+const { policyOf, envOf, cleanStep } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -292,7 +292,7 @@ async function handle(message, sender) {
         // The payload holds tools for at most toolList sites (row W6).
         if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
         rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
-          .map((n) => scrubText(oneLine(n), { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
+          .map((n) => cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);

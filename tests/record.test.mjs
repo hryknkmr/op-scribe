@@ -17,7 +17,17 @@ function newRec() {
   return { startedAt: Date.now(), aliases: {}, redactions: {}, steps: [], policy: R.policyOf(settings) };
 }
 
-const input = (value, extra = {}) => ({ type: 'input', pageUrl: PROD, target: { role: 'textbox', tag: 'input', name: '本文' }, value, ...extra });
+// The names of a field that classifyField puts in each field, as the content script sends them.
+const META = {
+  text: { tag: 'input', type: 'text', name: 'body' },
+  search: { tag: 'input', type: 'search' },
+  choice: { tag: 'select', type: 'select' },
+  secret: { tag: 'input', type: 'password' },
+  pii: { tag: 'input', type: 'email' }
+};
+const input = (value, extra = {}) => ({
+  type: 'input', pageUrl: PROD, target: { role: 'textbox', tag: 'input', name: '本文' }, value, field: META[value?.field] || META.text, ...extra
+});
 
 test('envOf: commercial when the top page or the frame is on a listed host', () => {
   const policy = R.policyOf({ commercialHosts: ['*.example.com'] });
@@ -49,19 +59,47 @@ test('commercial free text that arrives kept is redacted; search and choices sta
 test('secret and personal fields are never kept, whatever the environment (rows I2-I4)', () => {
   for (const tabUrl of [PROD, BETA]) {
     const rec = newRec();
-    assert.equal(R.cleanStep(input(typed.kept('secret', 'hunter2')), rec, settings, { tabUrl }).value.treatment, 'redacted');
-    assert.equal(R.cleanStep(input(typed.kept('pii', 'Taro')), rec, settings, { tabUrl }).value.treatment, 'redacted');
+    // A kept value the masking never makes for these fields drops the step (review R20).
+    assert.equal(R.cleanStep(input(typed.kept('secret', 'hunter2')), rec, settings, { tabUrl }), null);
+    assert.equal(R.cleanStep(input(typed.kept('pii', 'Taro')), rec, settings, { tabUrl }), null);
     // Even empty: no exception to the rows (R1).
-    assert.equal(R.cleanStep(input(typed.kept('secret', '')), rec, settings, { tabUrl }).value.treatment, 'redacted');
+    assert.equal(R.cleanStep(input(typed.kept('secret', '')), rec, settings, { tabUrl }), null);
+    assert.deepEqual(R.cleanStep(input(typed.redacted('secret', 'secret')), rec, settings, { tabUrl }).value, typed.redacted('secret', 'secret'));
   }
 });
 
-test('anything that is not a well-formed typed value is redacted (row E2)', () => {
+test('a value that is not a typed value of its field drops the step; a malformed one is redacted (row E2; review R20)', () => {
   const rec = newRec();
-  for (const value of ['plain text', 42, null, { text: 'x' }, { treatment: 'other', text: 'x' }, { treatment: 'length', length: -1 }]) {
-    assert.equal(R.cleanStep(input(value), rec, settings, { tabUrl: BETA }).value.treatment, 'redacted', JSON.stringify(value));
+  for (const value of ['plain text', 42, null, { text: 'x' }, { treatment: 'other', text: 'x' }]) {
+    assert.equal(R.cleanStep(input(value, { field: META.text }), rec, settings, { tabUrl: BETA }), null, JSON.stringify(value));
   }
-  assert.ok(rec.redactions.v >= 6);
+  const malformed = [{ treatment: 'other', field: 'text', text: 'x' }, { treatment: 'length', field: 'text', kind: 'text', length: -1 },
+    { treatment: 'redacted', field: 'text', kind: 'url' }, { treatment: 'length', field: 'text', kind: 'email', length: 3 }];
+  for (const value of malformed) {
+    assert.deepEqual(R.cleanStep(input(value), rec, settings, { tabUrl: BETA }).value, typed.redacted('text', 'v'), JSON.stringify(value));
+  }
+  assert.equal(rec.redactions.v, 4);
+});
+
+test('a field that is not recorded drops the step in the worker too (row I1; review R20)', () => {
+  const rec = newRec();
+  assert.equal(R.cleanStep(input(typed.kept('text', 'token-value'), { field: { tag: 'input', type: 'hidden' } }), rec, settings, { tabUrl: BETA }), null);
+  // Without the names the worker cannot classify: the step is dropped.
+  assert.equal(R.cleanStep(input(typed.kept('text', 'x'), { field: undefined }), rec, settings, { tabUrl: BETA }), null);
+});
+
+test('the field names are classified whole, never cut first (row I3; review R20)', () => {
+  const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { type: 'text', name: `${'x'.repeat(200)}password` } }),
+    newRec(), settings, { tabUrl: BETA });
+  assert.equal(step, null);
+});
+
+test('a search box or a choice keeps only its own limit (rows I5, I6; review R20)', () => {
+  const long = 'あ'.repeat(200);
+  // Sent as free text for a real search box: not what the masking makes, so dropped.
+  assert.equal(R.cleanStep(input(typed.kept('text', long), { field: META.search }), newRec(), settings, { tabUrl: BETA }), null);
+  const search = R.cleanStep(input(typed.kept('search', long)), newRec(), settings, { tabUrl: BETA });
+  assert.equal([...search.value.text].length, 121);
 });
 
 test('standard kept text is masked again, keeping the content script placeholders (rows K2, K3)', () => {
@@ -180,14 +218,16 @@ test('a credential key redacts everything below it, at any depth and of any type
 test('the worker classifies the field names again and redacts what the content script kept (rows I3, I4; review R3)', () => {
   const rec = newRec();
   const kept = typed.kept('text', 'hunter2');
-  const secret = R.cleanStep({ ...input(kept), pageUrl: BETA, field: { type: 'text', name: 'Password' } }, rec, settings, { tabUrl: BETA });
+  // What the content script kept, the names say secret or personal: the step is dropped (review R20).
+  assert.equal(R.cleanStep({ ...input(kept), pageUrl: BETA, field: { type: 'text', name: 'Password' } }, rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep({ ...input(typed.kept('text', 'a')), pageUrl: BETA, field: { type: 'text', name: 'email' } }, rec, settings, { tabUrl: BETA }), null);
+  const length = { treatment: 'length', field: 'text', kind: 'text', length: 3 };
+  assert.equal(R.cleanStep({ ...input(length), field: { name: 'email' } }, rec, settings, { tabUrl: PROD }), null);
+  const secret = R.cleanStep({ ...input(typed.redacted('secret', 'secret')), pageUrl: BETA, field: { type: 'text', name: 'Password' } }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(secret.value, { treatment: 'redacted', field: 'secret', kind: 'secret' });
   assert.equal(secret.field, undefined, 'the names are not stored');
-  const mail = R.cleanStep({ ...input(typed.kept('text', 'a')), pageUrl: BETA, field: { type: 'text', name: 'email' } }, rec, settings, { tabUrl: BETA });
-  assert.deepEqual(mail.value, { treatment: 'redacted', field: 'pii', kind: 'email' });
-  const length = { treatment: 'length', field: 'text', kind: 'text', length: 3 };
-  const prod = R.cleanStep({ ...input(length), field: { name: 'email' } }, rec, settings, { tabUrl: PROD });
-  assert.deepEqual(prod.value, { treatment: 'length', field: 'pii', kind: 'email', length: 3 });
+  const mail = { treatment: 'length', field: 'pii', kind: 'email', length: 3 };
+  assert.deepEqual(R.cleanStep({ ...input(mail), field: { name: 'email' } }, rec, settings, { tabUrl: PROD }).value, mail);
   const plain = R.cleanStep({ ...input(typed.kept('text', 'hello')), pageUrl: BETA, field: { name: 'comment' } }, rec, settings, { tabUrl: BETA });
   assert.deepEqual(plain.value, typed.kept('text', 'hello'));
 });
@@ -210,10 +250,9 @@ test('a trailing dot does not take a host out of production (rows U4, I8; review
 test('the worker does not keep as a search box what its names say is free text (rows I6, I8; review R15)', () => {
   const rec = newRec();
   const search = typed.kept('search', 'alpha beta');
-  const prod = R.cleanStep({ ...input(search), field: { type: 'text', role: 'region search', inSearch: false } }, rec, settings, { tabUrl: PROD });
-  assert.equal(prod.value.treatment, 'redacted');
-  const beta = R.cleanStep({ ...input(search), pageUrl: BETA, field: { type: 'text', inSearch: false } }, rec, settings, { tabUrl: BETA });
-  assert.deepEqual(beta.value, typed.kept('text', 'alpha beta'));
+  // Not what the masking makes for a free-text field: dropped, in any environment (review R20).
+  assert.equal(R.cleanStep({ ...input(search), field: { type: 'text', role: 'region search', inSearch: false } }, rec, settings, { tabUrl: PROD }), null);
+  assert.equal(R.cleanStep({ ...input(search), pageUrl: BETA, field: { type: 'text', inSearch: false } }, rec, settings, { tabUrl: BETA }), null);
   const real = R.cleanStep({ ...input(search), field: { type: 'text', inSearch: true } }, rec, settings, { tabUrl: PROD });
   assert.deepEqual(real.value, search);
 });

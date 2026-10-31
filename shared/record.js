@@ -13,13 +13,12 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { LIMITS, STEP_RULES, REDACTION_KINDS } = root.OpScribeLimits || require('./limits.js');
-  const { scrubText, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
+  const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
+  const { scrubText, cleanLine, oneLine, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, walkArgs } = S;
 
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = LIMITS.kept;
-  const KIND = /^[a-z]{1,16}$/;
   // ADR 0003 rows T4 and T5.
   const TOKEN = /^[a-z][a-z0-9-]{0,23}$/;
   const KEY = /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/;
@@ -43,12 +42,6 @@
     return urls.some((url) => url && hostAllowed(hostOf(url), policy.commercialHosts)) ? 'commercial' : 'standard';
   }
 
-  /**
-   * Names, notes and tool names are one line (rows T1, T2, W6): a line break
-   * from the page could otherwise forge a Gherkin step or a Markdown heading (#18).
-   */
-  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
-
   const hasCommercial = (rec) => (rec.steps || []).some((s) => s.env === 'commercial');
 
   /**
@@ -58,11 +51,13 @@
   function cleanValue(value, env, settings, kinds, field = null) {
     const fail = (f) => {
       kinds.push('v');
-      return typed.redacted(f, 'v');
+      return f === 'file' ? typed.file(0) : typed.redacted(f, 'v');
     };
     if (!value || typeof value !== 'object' || typeof value.treatment !== 'string') return fail(field || 'text');
     const f = field || (FIELDS.has(value.field) ? value.field : 'text');
-    const kind = is(KIND, value.kind) ? value.kind : 'v';
+    // Only a field and kind the masking makes (TYPED_SCHEMA); anything else is redacted.
+    if (!typedAllowed(value.treatment, f, value.kind)) return fail(f);
+    const { kind } = value;
     switch (value.treatment) {
       case 'redacted':
         if (f === 'file') return typed.file(Number.isInteger(value.count) && value.count >= 0 ? Math.min(value.count, LIMITS.fileCount) : 0);
@@ -129,27 +124,31 @@
     Object.values(node).forEach((child) => countArgs(child, kinds));
   }
 
+  const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
+  const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role'];
+
   /**
-   * Rows I3, I4 again in the worker: the content script sends the field's
-   * names (never its value) and the worker classifies them with the same
-   * classifyField. A field that turns out to be secret or personal is
-   * redacted even if the content script kept it. The names are not stored.
+   * Rows I1-I8 again in the worker, before the value is looked at (review of
+   * #22, R20): the content script sends the field's names (never its value)
+   * and the worker classifies them, uncut, with the same classifyField. The
+   * field that gives decides what the value may be and how long a kept text
+   * may be. A field that is not recorded (I1), or a value whose field or kind
+   * is not what the classification gives, drops the whole step: the worker
+   * has no raw value to make the right one from. The names are not stored.
+   * Returns the typed value, or null to drop the step.
    */
-  function reclassify(value, meta, env) {
-    if (!meta || typeof meta !== 'object' || !value) return value;
-    const bounded = { inSearch: meta.inSearch === true };
-    for (const k of ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role']) {
-      if (typeof meta[k] === 'string') bounded[k] = meta[k].slice(0, 200);
-    }
-    const cls = classifyField(bounded);
-    if (cls.kind === 'secret') return typed.redacted('secret', cls.label);
-    // Kept as a search box or a choice, but the names say free text: free text it is (I5, I6, I8).
-    if (cls.kind === 'free' && value.treatment === 'kept' && (value.field === 'search' || value.field === 'choice')) {
-      return env === 'commercial' ? typed.redacted('text', 'v') : { ...value, field: 'text' };
-    }
-    if (cls.kind !== 'pii' || value.field === 'pii') return value;
-    if (env === 'commercial' && value.treatment === 'length') return { ...value, field: 'pii', kind: cls.label };
-    return typed.redacted('pii', cls.label);
+  function fieldValue(raw, env, settings, kinds) {
+    const meta = raw.field;
+    if (!meta || typeof meta !== 'object') return null;
+    const names = { inSearch: meta.inSearch === true };
+    for (const k of META_NAMES) if (typeof meta[k] === 'string') names[k] = meta[k];
+    const cls = classifyField(names);
+    if (cls.kind === 'ignore') return null;
+    const field = FIELD_OF[cls.kind];
+    const value = raw.value;
+    if (!value || typeof value !== 'object' || value.field !== field) return null;
+    if ((cls.kind === 'secret' || cls.kind === 'pii') && value.kind !== cls.label) return null;
+    return cleanValue(value, env, settings, kinds, field);
   }
 
   /**
@@ -167,7 +166,7 @@
     const ctx = { ...policy, aliases: rec.aliases, keywords: settings.keywords, env };
     const kinds = [];
     const text = (value, maxLength) => {
-      const r = scrubText(oneLine(value), { keywords: settings.keywords, maxLength });
+      const r = cleanLine(value, { keywords: settings.keywords, maxLength });
       kinds.push(...r.kinds);
       return r.text;
     };
@@ -192,7 +191,12 @@
       }
       if (t.href) step.target.href = url(t.href);
     }
-    if (raw.value !== undefined) step.value = reclassify(cleanValue(raw.value, env, settings, kinds), raw.field, env);
+    if (type === 'input' || type === 'select') {
+      const value = fieldValue(raw, env, settings, kinds);
+      if (!value) return null;
+      step.value = value;
+    }
+    if (type === 'upload') step.value = cleanValue(raw.value, env, settings, kinds, 'file');
     if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
     if (is(KEY, raw.key)) step.key = raw.key;
     if (type === 'tool') {
@@ -212,8 +216,6 @@
       if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
     }
     if (rule.required.some((f) => step[f] === undefined || step[f] === '')) return null;
-    if (type === 'upload' && step.value.field !== 'file') step.value = typed.file(0);
-    if (type !== 'upload' && step.value?.field === 'file') step.value = typed.redacted('text', 'v');
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
       // Only the kinds the payload may count (row M1), and never past the limit.
       if (REDACTION_KINDS.includes(kind)) rec.redactions[kind] = Math.min((rec.redactions[kind] || 0) + 1, LIMITS.redactionCount);

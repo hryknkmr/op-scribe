@@ -19,7 +19,7 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -88,9 +88,9 @@
           environment: {
             type: 'object',
             fields: {
-              browser: opt(str('M3', LIMITS.environment)),
-              platform: opt(str('M3', LIMITS.environment)),
-              language: opt(str('M3', LIMITS.environment))
+              browser: opt(cutStr('M3', LIMITS.environment)),
+              platform: opt(cutStr('M3', LIMITS.environment)),
+              language: opt(cutStr('M3', LIMITS.environment))
             }
           },
           steps: { type: 'array', max: LIMITS.steps, of: STEP },
@@ -153,8 +153,9 @@
       endedAt: rec.endedAt ? new Date(rec.endedAt).toISOString() : null,
       // Always the URL of a step, so the receiver can judge it by that step's environment.
       startUrl: D.startUrlOf(rec),
-      environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS))
-        .map(([k, v]) => [k, [...String(v)].slice(0, LIMITS.environment).join('')])),
+      // Masked and cut by the panel (cleanLine), never cut here: a cut before the
+      // masking leaves half a keyword (M3). Too long is refused by the check.
+      environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS)).map(([k, v]) => [k, String(v)])),
       steps: (rec.steps || []).map((step, i) => {
         const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
         if (D.isPanelNote(step)) out.env = D.panelNoteEnv(rec.steps);
@@ -185,7 +186,6 @@
 
   const TREATMENTS = new Set(['kept', 'length', 'redacted']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
-  const KIND = /^[a-z]{1,16}$/;
   const KEPT_MAX = Object.fromEntries(Object.entries(LIMITS.kept).map(([f, n]) => [f, cut(n)]));
   const isObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
   const hasOnly = (obj, keys) => Object.keys(obj).every((k) => keys.includes(k));
@@ -194,6 +194,8 @@
   function checkTyped(v, env, path, problems) {
     const bad = (problem) => problems.push({ path, problem });
     if (!isObject(v) || !TREATMENTS.has(v.treatment) || !FIELDS.has(v.field)) return bad('not a typed value');
+    // Only the typed values that may exist (TYPED_SCHEMA): a field and kind the masking never makes is refused.
+    if (!typedAllowed(v.treatment, v.field, v.kind)) return bad(v.treatment === 'kept' ? `${v.field} kept` : 'bad kind');
     if (v.treatment === 'kept') {
       if (!hasOnly(v, ['treatment', 'field', 'text', 'number'])) return bad('unknown field');
       if (v.field === 'arg' && typeof v.number === 'number' && v.text === undefined) {
@@ -202,13 +204,11 @@
         return undefined;
       }
       if (typeof v.text !== 'string' || v.number !== undefined) return bad('kept value is not text');
-      if (v.field === 'secret' || v.field === 'pii' || v.field === 'file') return bad(`${v.field} kept`);
       if (v.text === '') return env === 'commercial' && (v.field === 'text' || v.field === 'arg') ? bad('commercial free text kept') : undefined;
       if (env === 'commercial' && (v.field === 'text' || v.field === 'arg')) return bad('commercial free text kept');
       if ([...v.text].length > KEPT_MAX[v.field] || overCut(v.text, LIMITS.kept[v.field])) return bad('too long');
       return undefined;
     }
-    if (!KIND.test(String(v.kind))) return bad('bad kind');
     if (v.treatment === 'length') {
       if (!hasOnly(v, ['treatment', 'field', 'kind', 'length'])) return bad('unknown field');
       if (v.field === 'secret' || v.field === 'file') return bad(`${v.field} not redacted`);

@@ -29,6 +29,10 @@
 | `kept` | 残す。上限を超えた分は切り、末尾に `…` を付ける。中には「残す値の中にかける検査」をかける | `{ treatment: 'kept', text: '…' }` | 入力した文字 |
 | `dropped` | 記録しない（欄ごと無い） | — | — |
 
+- **型の付いた値の一覧**: 扱い・欄（`field`）・種類（`kind`）の組み合わせは `shared/limits.js` の `TYPED_SCHEMA` にあるものだけ。伏せる処理はこれだけを作り、worker はこれ以外を `[[v]]` にし、出口と受信サーバはこれ以外を拒否し、描画はこれ以外を `[[v]]` にする。WebMCP の引数の `nested`（深すぎる階層）と `value`（文字列でも数でもない値）は、それぞれ独自の種類として持つ。構造を伏せたもので個人情報の種類ではないので、`privacy.redactions` には数えない（M1）。
+- **worker の分類し直し（I1〜I8）**: worker は値を見る前に、欄の名前を切らずに `classifyField` で分類し直す。記録しない欄（I1）のステップと、届いた値の欄・種類が分類と合わないステップは捨てる（worker は生の値を持たないので、正しい値に作り直せない）。
+- **文字列の欄の入口**: 名前・ツール名・メモ・環境のような自由な文字列の欄は、`shared/sanitize.js` の `cleanLine`（1 行にする → 伏せる → 切る）だけを通して作る。生の値を先に切らない。切った境目にまたがる登録語やアドレスが、どの規則にも当たらない断片で残るため。
+
 - **保証の強さ**
   - **構造**: 経路・欄の型（`type`・`autocomplete`・タグ）・解析した構造・列挙・形の許可リストで、扱いが必ず決まること。保証するのは「決めた扱いが当たること」で、「残した値に機微な情報が無いこと」ではない（許可した形の中に短いトークンがあっても、それは許可した形の範囲）。出口の独立した検査（E2）は、この種類のものを確かめる。
   - **規則**: 版を固定した語彙と正規化の規則（`shared/sanitize.js` の `classifyField` の一覧、利用者の登録語）に**一致した入力**に、決めた扱いが当たること。content script と worker が同じ関数で判定する。出口の独立した検査は語彙を持たないので確かめない（E2）。一覧に無い同義語・言い換えは「できる限り」。
@@ -110,7 +114,7 @@
 | --- | --- | --- | --- | --- |
 | M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` と `policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
 | M2 | `recording.id`・`startedAt`・`endedAt`・`sentAt` | `kept`。ID は `^rec-[a-z0-9-]{1,40}$`、日時は ISO 8601（`endedAt` は `null` も可） | 構造 | ② |
-| M3 | `recording.environment`（ブラウザ・プラットフォーム・言語） | `kept`（60 字） | 構造（型と長さ）・できる限り（中） | ② |
+| M3 | `recording.environment`（ブラウザ・プラットフォーム・言語） | `kept`（60 字）。サイドパネルが `cleanLine` で伏せてから切る。`buildPayload` は切らず、上限を超えたものは出口で拒否する | 構造（型と長さ）・できる限り（中） | ② |
 | M4 | `reproduction.generator` | `template`・`on-device-ai`・`manual`・`none` のどれか | 構造 | ② |
 
 ### 出口と受信（E）

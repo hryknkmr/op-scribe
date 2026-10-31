@@ -9,7 +9,7 @@
 import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
-const { TOTALS } = globalThis.OpScribeLimits;
+const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
 const D = globalThis.OpScribeDescribe;
 const P = globalThis.OpScribePayload;
 
@@ -137,14 +137,17 @@ function describeFindings(findings) {
   return findings.slice(0, 8).map((f) => `${f.path}: ${f.kinds.map((k) => KIND_LABELS[k] || k).join(', ')}`);
 }
 
+/** The browser as the payload carries it: each field masked and then cut, never cut first (M3). */
 function environment() {
   const brands = navigator.userAgentData?.brands || [];
   const brand = brands.find((b) => /Chrome|Chromium/.test(b.brand));
-  return {
+  const raw = {
     browser: brand ? `${brand.brand} ${brand.version}` : 'unknown',
     platform: navigator.userAgentData?.platform || '',
-    language: navigator.language
+    language: navigator.language || ''
   };
+  const clean = (v) => S.cleanLine(v, { keywords: settings.keywords, maxLength: LIMITS.environment }).text;
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, clean(v)]));
 }
 
 // ------------------------------------------------------------------- render

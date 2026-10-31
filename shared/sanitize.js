@@ -158,6 +158,17 @@
     return { text, kinds };
   }
 
+  /** One line: a line break from the page could otherwise forge a Gherkin step or a Markdown heading (#18). */
+  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+
+  /**
+   * The one way a free text becomes a text field of the output - a name, a
+   * tool name, a note, the environment: one line, masked, then cut (rows K2,
+   * T1, T2, W6, M3). Never cut a raw text before this: a keyword or an
+   * address across the limit would be left as a piece no rule finds.
+   */
+  const cleanLine = (value, opts = {}) => scrubText(oneLine(value), opts);
+
   // ------------------------------------------------------------------ fields
 
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
@@ -465,6 +476,8 @@
     mark,
     PLACEHOLDER,
     scrubText,
+    oneLine,
+    cleanLine,
     placeholderKinds,
     usableKeyword,
     typed,

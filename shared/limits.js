@@ -39,6 +39,36 @@
   const REDACTION_KINDS = Object.freeze(['secret', 'card', 'email', 'phone', 'personal', 'postal', 'id', 'ip', 'number',
     'keyword', 'text', 'query', 'hash', 'user', 'url', 'v']);
 
+  /**
+   * Every typed value that may exist (ADR 0003, "伏せた結果の型"): the fields a
+   * kept value may have, and for length and redacted the kinds each field may
+   * carry. The masking makes only these, the worker keeps only these and the
+   * check and the receiver accept only these; describe renders only these.
+   * Defined once so the four cannot drift apart (review of #22, R20).
+   * nested (an argument too deep) and value (an argument that is neither text
+   * nor a number) are kinds of their own, not counted in privacy.redactions.
+   */
+  const PII_KINDS = ['email', 'phone', 'card', 'personal'];
+  const TYPED_SCHEMA = Object.freeze({
+    kept: Object.freeze(['text', 'choice', 'search', 'arg']),
+    length: Object.freeze({ text: ['text'], arg: ['text'], pii: PII_KINDS }),
+    redacted: Object.freeze({
+      text: ['v'],
+      choice: ['v'],
+      search: ['v'],
+      secret: ['secret', 'card', 'v'],
+      pii: [...PII_KINDS, 'v'],
+      arg: ['secret', 'card', ...PII_KINDS, 'number', 'nested', 'value', 'v'],
+      file: ['file']
+    })
+  });
+
+  /** Whether a treatment, field and kind make a typed value that may exist. */
+  const typedAllowed = (treatment, field, kind) => (treatment === 'kept'
+    ? TYPED_SCHEMA.kept.includes(field)
+    : Boolean(Object.hasOwn(TYPED_SCHEMA, treatment) && Object.hasOwn(TYPED_SCHEMA[treatment], field)
+      && TYPED_SCHEMA[treatment][field].includes(kind)));
+
   /** The longest text a cut to n can produce. */
   const cut = (n) => n + 1;
 
@@ -101,7 +131,7 @@
   /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
   const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
 
-  const api = { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, ARIA_ROLES, primaryRole };
+  const api = { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
