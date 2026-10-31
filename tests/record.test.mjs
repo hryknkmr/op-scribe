@@ -320,3 +320,18 @@ test('a CSS-escaped selector is checked as written and unescaped, and dropped on
   }
   assert.equal(click('#save\\.button').target.selector, '#save\\.button');
 });
+
+test('every WebMCP answer goes through the final scan, the site and the counts too (rows W8, E6; review R37)', () => {
+  const rec = newRec();
+  rec.aliases['https://intranet.corp.invalid'] = 'site-1.invalid';
+  rec.steps.push(R.cleanStep({ type: 'note', note: 'Acme の件' }, rec, { ...settings, keywords: [] }));
+  const later = { ...settings, keywords: ['Acme'] };
+  // A keyword added after the note was recorded stops the reproduction.
+  assert.deepEqual(R.webmcpReply(rec, later, 'https://site-1.invalid', 'reproduction'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  // A site carrying a keyword or a real host stops the status too.
+  assert.deepEqual(R.webmcpReply(rec, later, 'https://acme.example.com', 'status'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  assert.deepEqual(R.webmcpReply(rec, settings, 'https://intranet.corp.invalid', 'status'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  const fine = R.webmcpReply(rec, { ...settings, keywords: [] }, 'https://site-1.invalid', 'status');
+  assert.equal(fine.ok, true);
+  assert.equal(R.webmcpReply(rec, settings, 'https://site-1.invalid', 'expect'), null);
+});

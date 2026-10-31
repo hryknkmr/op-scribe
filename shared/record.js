@@ -244,7 +244,37 @@
     return step;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep };
+  /**
+   * Every answer WebMCP gives the page is an exit (rows W8, E6): the whole
+   * object goes through the final scan with the keywords as they are now and
+   * the real hosts behind the aliases, and is withheld on a find (review R37).
+   */
+  function guardReply(reply, rec, settings) {
+    const hosts = Object.keys(rec.aliases || {}).map(hostOf).filter(Boolean);
+    return S.finalScan(reply, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
+  }
+
+  /**
+   * What WebMCP tells a page on site about the recording (row W8): its own
+   * steps and the notes without a URL. A panel note's environment comes from
+   * the whole recording, not this site's part of it. Null for another op.
+   */
+  function webmcpReply(rec, settings, site, op) {
+    const D = root.OpScribeDescribe || require('./describe.js');
+    const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+    if (op === 'status') {
+      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length }, rec, settings);
+    }
+    if (op === 'reproduction') {
+      const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
+      const markdown = D.toMarkdown(D.buildReproduction(scoped));
+      const gherkin = D.toGherkin(scoped, { envSteps: rec.steps });
+      return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings);
+    }
+    return null;
+  }
+
+  const api = { policyOf, envOf, oneLine, cleanStep, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

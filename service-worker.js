@@ -13,10 +13,9 @@
  */
 importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
-const { cleanLine, scrubUrl, finalScan, defaults } = self.OpScribeSanitize;
+const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
-const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
-const { policyOf, envOf, cleanStep } = self.OpScribeRecord;
+const { policyOf, envOf, cleanStep, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -218,32 +217,14 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
-  // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
-
-  if (op === 'status') {
-    return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
-  }
-  if (op === 'reproduction') {
-    const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    // A panel note's environment comes from the whole recording, not this site's part of it.
-    const markdown = toMarkdown(buildReproduction(scoped));
-    const gherkin = toGherkin(scoped, { envSteps: rec.steps });
-    // This is an exit too: the keywords added since and the real hosts behind the aliases
-    // stop it like the panel's send, copy and save (E6, W8; review R36).
-    const hosts = Object.keys(rec.aliases || {}).map((origin) => {
-      try { return new URL(origin).hostname; } catch { return ''; }
-    }).filter(Boolean);
-    if (finalScan({ markdown, gherkin }, { keywords: settings.keywords, hosts }).length) {
-      return { reply: { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } };
-    }
-    return { reply: { ok: true, site, steps: own.length, markdown, gherkin } };
-  }
+  // Steps on other sites are never handed to this page; every answer goes through the final scan (W8, E6).
+  const answer = webmcpReply(rec, settings, site, op);
+  if (answer) return { reply: answer };
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, fromOf(sender)));
-    return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
+    return { save: rec, reply: guardReply({ ok: true, added: rec.steps[rec.steps.length - 1].note }, rec, settings) };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
 }
