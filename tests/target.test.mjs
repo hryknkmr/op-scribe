@@ -119,3 +119,13 @@ test('only the actual role counts, never a later token (rows I6, T2; review R15)
   el('form', { role: 'search region' }, '', [inner]);
   assert.equal(T.inSearch(inner), true);
 });
+
+test('a field inside a <search> element is in a search landmark (row I6; review R33)', () => {
+  const field = el('input', { type: 'text', name: 'q' });
+  const landmark = el('search', {}, '', [field]);
+  field.parentElement = landmark;
+  assert.equal(T.inSearch(field), true);
+  const plain = el('input', { type: 'text', name: 'q' });
+  plain.parentElement = el('div', {}, '', [plain]);
+  assert.equal(T.inSearch(plain), false);
+});

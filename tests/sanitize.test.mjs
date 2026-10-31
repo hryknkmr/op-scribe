@@ -400,3 +400,9 @@ test('the host of a URL is left out of the patterns only: an allowed IP host pas
 test('an address with an IP domain literal is one email (K3; review R32)', () => {
   assert.equal(S.scrubText('alice@[127.0.0.1] x').text, '[[email]] x');
 });
+
+test('keywords fold case outside the BMP, and a local part keeps none of its ASCII symbols (K2, K3; review R33)', () => {
+  assert.equal(S.scrubText('\u{10428}\u{10429} x', { keywords: ['\u{10400}\u{10401}'] }).text, '[[masked]] x');
+  assert.equal(S.scrubText('sales!ops@example.com').text, '[[email]]');
+  assert.equal(S.scrubText("o'brien+tag@example.com").text, '[[email]]');
+});

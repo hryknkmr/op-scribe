@@ -45,9 +45,12 @@
     return null;
   };
 
-  /** Whether the element is inside a search landmark, judged by each ancestor's actual role (row I6). */
+  /**
+   * Whether the element is inside a search landmark, judged by each ancestor's
+   * actual role - the role attribute, or the element's own (<search>; row I6, review R33).
+   */
   const inSearch = (el) => {
-    for (let node = el; node; node = node.parentElement) if (primaryRole(node.getAttribute('role')) === 'search') return true;
+    for (let node = el; node; node = node.parentElement) if (implicitRole(node) === 'search') return true;
     return false;
   };
 
