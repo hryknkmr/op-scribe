@@ -98,7 +98,10 @@ test('maskFieldValue: hidden fields are not recorded; empty secret and personal 
   assert.equal(S.maskFieldValue('x', { type: 'hidden' }, standard), null);
   assert.deepEqual(S.maskFieldValue('', { type: 'password' }, standard).value,
     { treatment: 'redacted', field: 'secret', kind: 'secret' });
+  // Commercial keeps the length of personal fields, 0 when cleared (R4).
   assert.deepEqual(S.maskFieldValue('', { type: 'email' }, commercial).value,
+    { treatment: 'length', field: 'pii', kind: 'email', length: 0 });
+  assert.deepEqual(S.maskFieldValue('', { type: 'email' }, standard).value,
     { treatment: 'redacted', field: 'pii', kind: 'email' });
   // Commercial free text is a length even when cleared (R3).
   assert.deepEqual(S.maskFieldValue('', { type: 'text' }, commercial).value,
@@ -192,4 +195,16 @@ test('finalScan ignores placeholders and reports leftovers with their path', () 
     { path: 'steps[1].target.name', kinds: ['email'] },
     { path: 'markdown', kinds: ['keyword'] }
   ]);
+});
+
+test('finalScan skips only the placeholders this extension makes (rows E4, E6; review R4)', () => {
+  assert.deepEqual(S.finalScan({ markdown: '[[Acme]] を開く' }, { keywords: ['Acme'] }),
+    [{ path: 'markdown', kinds: ['keyword'] }]);
+  assert.deepEqual(S.finalScan({ markdown: '[[text:12]] [[email]] [[url:invalid]] [[file:2]]' }), []);
+});
+
+test('an argument key named __proto__ stays an ordinary key (row W5; review R4)', () => {
+  const out = S.maskArgs(JSON.parse('{"__proto__":"x","ok":true}'), { env: 'standard' });
+  assert.deepEqual(Object.keys(out), ['__proto__', 'ok']);
+  assert.equal(Object.getPrototypeOf(out), Object.prototype);
 });

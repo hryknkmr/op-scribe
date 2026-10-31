@@ -81,7 +81,7 @@
     return String(text ?? '').replace(/\[\[([a-z]+)(?::([\w-]+))?\]\]/gi, (match, kind, arg) => {
       if (kind === 'text') return `‹任意の文字列 ${arg}文字›`;
       if (kind === 'file') return `‹ファイル ${arg}件›`;
-      if (kind === 'url') return arg === 'invalid' ? '‹URL›' : `‹${arg} ページ›`;
+      if (kind === 'url') return arg === 'invalid' || arg === 'none' ? '‹URL›' : `‹${arg} ページ›`;
       return `‹${LABELS[kind] || kind}›`;
     });
   }
@@ -294,7 +294,8 @@
     ];
     const start = steps[0]?.type === 'navigate' ? steps[0] : null;
     const startUrl = start?.url || rec?.startUrl;
-    if (startUrl) {
+    // [[url:none]]: the payload of a recording whose steps were all deleted.
+    if (startUrl && startUrl !== '[[url:none]]') {
       out.push('  Background:', `    Given "${startUrl}" を開いている`, ...table([['url', startUrl]], '      '), '');
     }
     out.push('  Scenario: 記録された操作');

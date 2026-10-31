@@ -19,6 +19,9 @@
 
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
+  // Only the placeholders this extension makes. finalScan skips these and nothing
+  // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
+  const OWN_PLACEHOLDER = /\[\[(?:text:\d+|file:\d+|url:[a-z0-9+.-]{1,16}|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
@@ -185,19 +188,17 @@
     if (cls.kind === 'ignore') return null;
     const field = FIELD_OF[cls.kind];
     const text = raw == null ? '' : String(raw);
-    // Secret and personal fields are redacted even when empty: no exception to rows I2-I4.
-    if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: text ? [cls.label] : [] };
-    if (cls.kind === 'pii' && !text) return { value: typed.redacted(field, cls.label), kinds: [] };
+    const kinds = (kind) => (text ? [kind] : []);
     const commercial = opts.env === 'commercial';
-    // Commercial free text is a length even when empty (row I8): "cleared" is length 0.
-    if (cls.kind === 'free' && commercial) return { value: typed.length(field, 'text', text), kinds: text ? ['text'] : [] };
-    if (!text) return { value: typed.kept(field, ''), kinds: [] };
+    // Secret fields are redacted even when empty (rows I2, I3).
+    if (cls.kind === 'secret') return { value: typed.redacted(field, cls.label), kinds: kinds(cls.label) };
+    // Personal fields: commercial keeps the length (0 when cleared), standard redacts (row I4).
     if (cls.kind === 'pii') {
-      return commercial
-        ? { value: typed.length(field, cls.label, text), kinds: [cls.label] }
-        : { value: typed.redacted(field, cls.label), kinds: [cls.label] };
+      return { value: commercial ? typed.length(field, cls.label, text) : typed.redacted(field, cls.label), kinds: kinds(cls.label) };
     }
-    if (cls.kind === 'free' && commercial) return { value: typed.length(field, 'text', text), kinds: ['text'] };
+    // Commercial free text is a length even when cleared (row I8).
+    if (cls.kind === 'free' && commercial) return { value: typed.length(field, 'text', text), kinds: kinds('text') };
+    if (!text) return { value: typed.kept(field, ''), kinds: [] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: KEPT_LIMIT[field] });
     return { value: typed.kept(field, r.text), kinds: r.kinds };
   }
@@ -220,9 +221,13 @@
     for (const [k, v] of Object.entries(node).slice(0, 20)) {
       const name = scrubText(k, { keywords, maxLength: 40 });
       const cls = classifyField({ name: k });
-      out[name.kinds.length ? 'masked' : name.text] = cls.kind === 'secret' || cls.kind === 'pii'
-        ? typed.redacted('arg', cls.label)
-        : walk(v);
+      // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
+      Object.defineProperty(out, name.kinds.length ? 'masked' : name.text, {
+        value: cls.kind === 'secret' || cls.kind === 'pii' ? typed.redacted('arg', cls.label) : walk(v),
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
     }
     return out;
   }
@@ -349,7 +354,7 @@
   function finalScan(value, opts = {}) {
     const findings = [];
     const check = (text, path) => {
-      const { kinds } = scrubText(String(text).replace(PLACEHOLDER, ' '), { keywords: opts.keywords });
+      const { kinds } = scrubText(String(text).replace(OWN_PLACEHOLDER, ' '), { keywords: opts.keywords });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {

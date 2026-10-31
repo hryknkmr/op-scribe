@@ -233,3 +233,25 @@ test('checkPayload: prototype names are not fields, dates must exist, commercial
     assert.notDeepEqual(P.checkPayload(regen(payload)), [], change.toString());
   }
 });
+
+test('checkPayload: kept numbers stay in range, and the start URL is a step URL judged by that step (rows W3, U7; review R4)', () => {
+  const standardRec = clone(rec);
+  for (const step of standardRec.steps) step.env = 'standard';
+  const big = clone(build(standardRec));
+  big.recording.steps[4].args.q = { treatment: 'kept', field: 'arg', number: 1e100 };
+  assert.notDeepEqual(P.checkPayload(regen(big)), []);
+
+  const orphan = clone(build());
+  orphan.recording.startUrl = 'https://site-1.invalid/?q=leak';
+  assert.notDeepEqual(P.checkPayload(regen(orphan)), []);
+
+  // With the first navigation deleted, the payload's start URL becomes another step's URL.
+  const deleted = clone(rec);
+  deleted.startUrl = 'https://site-1.invalid/?q=leak';
+  const payload = build(deleted);
+  assert.equal(payload.recording.startUrl, 'https://site-1.invalid/');
+  assert.deepEqual(P.checkPayload(payload), []);
+  const empty = build({ ...clone(rec), steps: [] });
+  assert.equal(empty.recording.startUrl, '[[url:none]]');
+  assert.deepEqual(P.checkPayload(empty), []);
+});

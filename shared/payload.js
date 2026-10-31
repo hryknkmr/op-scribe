@@ -145,7 +145,10 @@
       id: rec.id,
       startedAt: new Date(rec.startedAt).toISOString(),
       endedAt: rec.endedAt ? new Date(rec.endedAt).toISOString() : null,
-      startUrl: rec.startUrl,
+      // Always the URL of a step, so the receiver can judge it by that step's environment.
+      startUrl: (rec.steps || []).some((s) => s.url === rec.startUrl)
+        ? rec.startUrl
+        : (rec.steps || []).find((s) => s.url)?.url || '[[url:none]]',
       environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS))
         .map(([k, v]) => [k, String(v).slice(0, 60)])),
       steps: (rec.steps || []).map((step, i) => {
@@ -189,7 +192,7 @@
     if (v.treatment === 'kept') {
       if (!hasOnly(v, ['treatment', 'field', 'text', 'number'])) return bad('unknown field');
       if (v.field === 'arg' && typeof v.number === 'number' && v.text === undefined) {
-        if (!Number.isFinite(v.number)) return bad('not a finite number');
+        if (!Number.isFinite(v.number) || Math.abs(v.number) >= 1e6) return bad('number outside the kept range');
         if (env === 'commercial') return bad('commercial number kept');
         return undefined;
       }
@@ -371,9 +374,11 @@
     if (problems.length) return problems;
 
     const steps = payload.recording.steps;
-    // The start URL is the first navigation's URL; judge it by that step even if earlier steps were deleted.
-    const startEnv = steps.find((s) => s.url === payload.recording.startUrl)?.env;
-    checkUrl(payload.recording.startUrl, startEnv, 'recording.startUrl', problems);
+    // The start URL is one of the steps' URLs, or [[url:none]]; it is judged by that step's environment.
+    const start = payload.recording.startUrl;
+    const startStep = steps.find((s) => s.url === start);
+    if (!startStep && start !== '[[url:none]]') problems.push({ path: 'recording.startUrl', problem: 'not a URL of the steps' });
+    checkUrl(start, startStep?.env, 'recording.startUrl', problems);
     payload.recording.webmcpTools.forEach((w, i) => checkUrl(w.site, 'standard', `recording.webmcpTools[${i}].site`, problems, { origin: true }));
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
