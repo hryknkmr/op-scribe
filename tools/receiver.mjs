@@ -48,7 +48,9 @@ createServer(async (req, res) => {
   } catch {
     return reply(res, 400, { error: 'invalid json' });
   }
-  if (payload?.schema !== 'op-scribe.recording/v1') return reply(res, 422, { error: 'unknown schema' });
+  if (payload?.schema !== 'op-scribe.recording/v2' || payload?.recording?.privacy?.policy !== 'tiered-commercial/v1') {
+    return reply(res, 422, { error: 'unknown schema or privacy policy' });
+  }
 
   const findings = finalScan(payload, { hostAllowlist: HOST_ALLOWLIST });
   if (findings.length) {

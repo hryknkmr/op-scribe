@@ -12,7 +12,7 @@
 (function (root) {
   'use strict';
 
-  const SCHEMA = 'op-scribe.recording/v1';
+  const SCHEMA = 'op-scribe.recording/v2';
 
   const LABELS = {
     secret: '秘匿値',
@@ -222,10 +222,10 @@
     const steps = rec?.steps || [];
     const out = [
       '# op-scribe: Gherkin + attributes',
-      `# recording: ${rec?.id || 'unknown'} / privacy: ${rec?.privacyLevel || 'partial'}`,
-      '# ‹…› and [[…]] are masked values: supply test values, never guess the original.',
+      `# recording: ${rec?.id || 'unknown'} / privacy: tiered-commercial/v1`,
+      '# ‹…› and [[…]] are masked values, and so are values with * (t***@e***.com, 12****78): supply test values, never guess the original.',
       '# site-N.invalid is an alias for a host that is not disclosed.',
-      `@op-scribe @privacy-${rec?.privacyLevel || 'partial'}`,
+      '@op-scribe @privacy-tiered-commercial',
       'Feature: 記録された操作の再現',
       ''
     ];
@@ -262,7 +262,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const STEP_FIELDS = ['type', 't', 'url', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source'];
+  const STEP_FIELDS = ['type', 't', 'url', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source', 'valueClass'];
   const TARGET_FIELDS = ['role', 'name', 'tag', 'selector', 'href'];
 
   const pick = (obj, fields) => {
@@ -276,6 +276,26 @@
    * so local-only state (tab id, real-origin alias map, granted origins) can
    * never ride along by accident.
    */
+  const hasCommercial = (rec) => (rec?.steps || []).some((s) => s.privacy?.profile !== 'standard');
+
+  /**
+   * The privacy of a recording (docs/adr/0001): the policy and its version, whether its steps are on
+   * production, elsewhere or both, and what was hidden. The host lists themselves are not sent.
+   */
+  function privacyOf(rec) {
+    const steps = rec.steps || [];
+    const commercialSteps = steps.filter((s) => s.privacy?.profile !== 'standard').length;
+    const standardSteps = steps.length - commercialSteps;
+    return {
+      policy: 'tiered-commercial/v1',
+      coverage: !commercialSteps ? 'standard-only' : !standardSteps ? 'commercial-only' : 'mixed',
+      commercialSteps,
+      standardSteps,
+      hostsAliased: Object.keys(rec.aliases || {}).length,
+      redactions: { ...(rec.redactions || {}) }
+    };
+  }
+
   function buildPayload(rec, reproduction, environment) {
     return {
       schema: SCHEMA,
@@ -284,14 +304,12 @@
         startedAt: new Date(rec.startedAt).toISOString(),
         endedAt: rec.endedAt ? new Date(rec.endedAt).toISOString() : null,
         startUrl: rec.startUrl,
-        privacy: {
-          level: rec.privacyLevel,
-          hostsAliased: Object.keys(rec.aliases || {}).length,
-          redactions: { ...(rec.redactions || {}) }
-        },
+        privacy: privacyOf(rec),
         environment: pick(environment || {}, ['browser', 'platform', 'language']),
         steps: (rec.steps || []).map((step, i) => {
           const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
+          // How the step's values were treated (docs/adr/0001); a step without one is treated as commercial.
+          out.privacy = { profile: step.privacy?.profile === 'standard' ? 'standard' : 'commercial' };
           if (step.target) out.target = pick(step.target, TARGET_FIELDS);
           return out;
         }),
@@ -300,7 +318,8 @@
       reproduction: {
         generator: reproduction?.generator || 'none',
         markdown: reproduction?.markdown || '',
-        gherkin: reproduction?.gherkin || toGherkin(rec)
+        // With a step recorded on production, Gherkin is always rebuilt from the record: an edit is not sent.
+        gherkin: hasCommercial(rec) ? toGherkin(rec) : reproduction?.gherkin || toGherkin(rec)
       },
       sentAt: new Date().toISOString()
     };

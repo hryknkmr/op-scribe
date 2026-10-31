@@ -25,7 +25,7 @@
    * final scan; anything else written as [[...]] (by a page, the model or a
    * person editing the text) is scanned like ordinary text.
    */
-  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|file:\d+|url:[a-z-]+)\]\]/g;
+  const PLACEHOLDER = /\[\[(?:secret|card|masked|v|nested|value|text:\d+|file:\d+|url:[a-z-]+)\]\]/g;
 
   /** Exactly one placeholder this filter writes. A [[...]] of any other kind is the page's text and is read as such. */
   const isPlaceholder = (value) => new RegExp(`^${PLACEHOLDER.source}$`).test(String(value));
@@ -34,13 +34,16 @@
     privacyLevel: 'partial',
     // Hosts that may appear as-is. Every other host becomes site-N.invalid.
     hostAllowlist: [],
+    // Real production hosts: there, typed text is kept as its length only (search boxes and chosen options
+    // aside) and URL values only when short and plain. Everywhere else (beta, staging) values are kept.
+    productionHosts: [],
     // Words that must never leave the browser (company, product, people).
     keywords: [],
     endpoint: '',
     authHeader: ''
   });
 
-  const defaults = () => ({ ...DEFAULT_SETTINGS, hostAllowlist: [], keywords: [] });
+  const defaults = () => ({ ...DEFAULT_SETTINGS, hostAllowlist: [], productionHosts: [], keywords: [] });
 
   function luhn(digits) {
     let sum = 0;
@@ -115,6 +118,8 @@
         return `${key}${sep}${quote}${mark('secret')}${closed ? quote : ''}`;
       }
     },
+    // A quoted local part: "john doe"@example.com.
+    { kind: 'email', re: /"[^"\n@]{1,64}"@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
@@ -129,6 +134,8 @@
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g, replace: partialPhone },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g, replace: partialPhone },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g, replace: partialPhone },
+    // Dotted: 415.555.2671, +1.415.555.2671 (an IPv4 address has four groups of at most three digits).
+    { kind: 'phone', re: /(?<![\d.])(?:\+\d{1,3}\.)?\d{2,4}\.\d{3,4}\.\d{4}(?![\d.])/g, replace: partialPhone },
     // Three groups with an area code in brackets or set apart: (415) 555-2671, 415-555-2671, 03 1234 5678, (03) 1234-5678.
     { kind: 'phone', re: /(?<![\d(-])(?:\(\d{2,4}\)\s?|\d{2,4}[ -])\d{3,4}[ -]\d{4}(?![\d-])/g, replace: partialPhone },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, replace: (m) => partialId(m, 4, 4) },
@@ -284,7 +291,7 @@
   // Japanese words that name the same thing as an English one, so the pairs below apply: PINコード, APIキー.
   const JA_WORDS = { コード: 'code', キー: 'key' };
   const SESSION_WORDS = new Set(['session', 'sessionid', 'sid']);
-  const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
+  const CREDENTIAL_WORDS = new Set(['csrf', 'xsrf', 'pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
   // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
   const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)|^pass$|^(?:user|login|admin|account|new|old|current|confirm|db)pass$|^(?:verification|verify|confirm|confirmation|auth|access|login|sms|backup|recovery|onetime|otp|mfa|pin)code$/;
@@ -351,12 +358,15 @@
     const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel];
     const strong = !chosen || hints.some((h) => classifyKey(wordsOf(h).filter((w) => !SESSION_WORDS.has(w)).join(' ')) === 'secret');
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || (found.has('secret') && strong)) return { kind: 'secret', label: 'secret' };
-    if (chosen) return { kind: 'text' };
+    if (chosen) return { kind: 'choice' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
     if (/\b(?:username|nickname)\b/.test(autocomplete)) return { kind: 'id' };
     const kind = RANK.find((k) => found.has(k));
-    return { kind: kind || 'text' };
+    if (kind) return { kind };
+    // A search box, known from the page's markup only (type=search, role=searchbox, inside role=search): its words
+    // are what a reproduction needs, so they are kept on production too. A field merely named q is free text.
+    return { kind: type === 'search' || meta.search ? 'search' : 'text' };
   }
 
   /** A value whose key or field says what it is (classifyKey's kinds), under the policy for that kind. */
@@ -402,7 +412,10 @@
     if (cls.kind === 'ignore') return null;
     const text = raw == null ? '' : String(raw);
     if (!text) return { value: '', kinds: [] };
-    return maskByKind(cls.kind === 'secret' ? cls.label : cls.kind, text, { keywords: opts.keywords, maxLength: 200 });
+    // On a production host (opts.strict) typed text is kept as its length only.
+    if (opts.strict && cls.kind === 'text') return { value: mark(`text:${[...text].length}`), kinds: ['text'] };
+    const kind = cls.kind === 'secret' ? cls.label : ['search', 'choice', 'text'].includes(cls.kind) ? null : cls.kind;
+    return maskByKind(kind, text, { keywords: opts.keywords, maxLength: 200 });
   }
 
   /**
@@ -415,6 +428,10 @@
     if (value == null || typeof value === 'boolean') return value;
     if (typeof value === 'number' || typeof value === 'string') {
       if (typeof value === 'number' && !Number.isFinite(value)) return mark('value');
+      // On a production host a text argument is kept as its length only, unless its key names a search.
+      if (opts.strict && !meaning && typeof value === 'string' && !(opts.trustHidden && isPlaceholder(value))) {
+        return mark(`text:${[...value].length}`);
+      }
       const r = maskByKind(meaning, String(value), { keywords: opts.keywords, maxLength: 200, trustHidden: opts.trustHidden });
       return typeof value === 'number' && r.value === String(value) ? value : r.value;
     }
@@ -453,10 +470,10 @@
   // URLs nested in a URL (?next=https://..., /go/https%3A...) follow the same host policy and share its aliases.
   const hostsOf = (ctx) => {
     if (!ctx.aliases) ctx.aliases = {};
-    return { hostAllowlist: ctx.hostAllowlist, aliases: ctx.aliases, trustHidden: ctx.trustHidden };
+    return { hostAllowlist: ctx.hostAllowlist, productionHosts: ctx.productionHosts, aliases: ctx.aliases, trustHidden: ctx.trustHidden, strict: ctx.strict };
   };
 
-  /** Decoded until it no longer changes (at most 3 times): https%253A%252F%252F... is a URL too. */
+  /** Decoded until it no longer changes (at most 3 times): https%253A%252F%252F... is a URL too. See overEncoded. */
   const decodeDeep = (value) => {
     let out = String(value);
     for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(out); i += 1) {
@@ -467,11 +484,22 @@
     }
     return out;
   };
+  // Still encoded after decodeDeep (encoded more deeply than is read): hidden whole rather than half read.
+  const overEncoded = (value) => {
+    const decoded = decodeDeep(value);
+    try { return decodeURIComponent(decoded) !== decoded; } catch { return false; }
+  };
+  // What a production URL keeps of a value or a path segment: short, plain letters and digits.
+  const PLAIN = /^[\w.-]{1,24}$/;
 
   /** One path or fragment segment under the policy. */
   function scrubSegment(segment, ctx, kinds) {
     const decoded = decodeDeep(segment);
     if (ctx.trustHidden && alreadyHidden(decoded.replace(/^@/, ''))) return segment;
+    if (overEncoded(segment)) {
+      kinds.push('path');
+      return mark('v');
+    }
     if (decoded.startsWith('@') && decoded.length > 1) {
       kinds.push('id');
       return `@${partialId(decoded.slice(1), 1, 1)}`;
@@ -487,6 +515,11 @@
       return partialId(id);
     });
     if (changed) kinds.push('id');
+    // On production only a short, plain segment is kept (a route word, an id partly hidden as above).
+    if (ctx.strict && !PLAIN.test(decoded)) {
+      kinds.push('path');
+      return mark('v');
+    }
     const r = scrubText(text, { keywords: ctx.keywords, hosts: hostsOf(ctx) });
     if (!changed && !r.kinds.length) return segment;
     kinds.push(...r.kinds);
@@ -505,7 +538,12 @@
         const decoded = decodeDeep(v);
         // The key is decoded like the value: %2574oken is token.
         const meaning = classifyKey(decodeDeep(k), { protocol: true }) || (ID_SEGMENT.test(decoded) ? 'id' : null);
-        const r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
+        let r;
+        if (ctx.trustHidden && isPlaceholder(decoded)) r = { value: decoded, kinds: [] };
+        else if (meaning === 'secret' || meaning === 'card') r = maskByKind(meaning, decoded, { trustHidden: ctx.trustHidden });
+        // Encoded more deeply than is read, or (on production) anything but a short plain value: hidden whole.
+        else if (overEncoded(v) || (ctx.strict && !meaning && !PLAIN.test(decoded))) r = { value: mark('v'), kinds: ['query'] };
+        else r = maskByKind(meaning, decoded, { keywords: ctx.keywords, hosts: hostsOf(ctx), trustHidden: ctx.trustHidden });
         kinds.push(...r.kinds);
         value = encodeURIComponent(r.value).replace(/%5B/g, '[').replace(/%5D/g, ']').replace(/%2A/gi, '*');
       }
@@ -544,29 +582,39 @@
       kinds.push('host');
     }
 
-    const path = url.pathname.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
+    // A production URL (its own host is registered, or it was written on a production page: ctx.strict) keeps
+    // only short plain values. The same aliases object is shared, so nested hosts get the recording's aliases.
+    const strict = Boolean(ctx.strict) || hostAllowed(host, ctx.productionHosts);
+    const sctx = { ...ctx, strict };
+    const path = url.pathname.split('/').map((seg) => (seg ? scrubSegment(seg, sctx, kinds) : seg)).join('/');
 
-    const params = scrubParams(url.searchParams, ctx, kinds);
+    const params = scrubParams(url.searchParams, sctx, kinds);
 
-    // Fragments are kept like paths: SPA routes (#/settings) stay readable, ids and listed words are masked.
     // Fragments are routes (#/orders/123456;view=full): every segment of the route is scrubbed like a path.
     // Parameters (#access_token=..., #/route?code=...) follow the query rules; a URL inside the fragment
     // (#/redirect/https://...?x=1) is read as text, so its host and its own parameters follow the policy.
+    // On production only a route (#/settings) and parameters are kept; anything else in a fragment is [[v]].
     let hash = '';
     const fragment = url.hash.slice(1);
-    const route = (part) => part.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
+    const route = (part) => part.split('/').map((seg) => (seg ? scrubSegment(seg, sctx, kinds) : seg)).join('/');
     const decodedFragment = decodeDeep(fragment);
     const nested = decodedFragment.search(/[a-z][a-z0-9+.-]*:\/\//i);
-    if (nested >= 0) {
-      const r = scrubText(decodedFragment.slice(nested), { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+    if (fragment && (overEncoded(fragment) || (strict && nested >= 0))) {
+      kinds.push('query');
+      hash = `#${mark('v')}`;
+    } else if (nested >= 0) {
+      const r = scrubText(decodedFragment.slice(nested), { keywords: ctx.keywords, hosts: hostsOf(sctx) });
       kinds.push(...r.kinds);
       hash = `#${route(decodedFragment.slice(0, nested))}${r.text}`;
     } else if (decodedFragment.includes('?')) {
       // Judged on the decoded fragment: #/route%3Fcode%3Dabc is a route with parameters too.
       const at = decodedFragment.indexOf('?');
-      hash = `#${route(decodedFragment.slice(0, at))}?${scrubParams(new URLSearchParams(decodedFragment.slice(at + 1)), ctx, kinds).join('&')}`;
+      hash = `#${route(decodedFragment.slice(0, at))}?${scrubParams(new URLSearchParams(decodedFragment.slice(at + 1)), sctx, kinds).join('&')}`;
     } else if (/^[^/]*=/.test(decodedFragment)) {
-      hash = `#${scrubParams(new URLSearchParams(decodedFragment), ctx, kinds).join('&')}`;
+      hash = `#${scrubParams(new URLSearchParams(decodedFragment), sctx, kinds).join('&')}`;
+    } else if (strict && fragment && !decodedFragment.startsWith('/') && !(sctx.trustHidden && isPlaceholder(decodedFragment))) {
+      kinds.push('query');
+      hash = `#${mark('v')}`;
     } else if (fragment) {
       hash = `#${route(fragment)}`;
     }
@@ -600,14 +648,15 @@
       // Every host in this URL that has the form of an alias.
       return (raw.match(/\bsite-\d+\.invalid\b/gi) || []).map((h) => h.toLowerCase());
     };
-    const urlParams = (text, path) => {
+    // strictUrls: inside a step recorded on production, URLs must also pass the production rules unchanged.
+    const urlParams = (text, path, strictUrls = false) => {
       for (const match of String(text).match(TEXT_URL) || []) {
         const relative = match.startsWith('//');
         const raw = relative ? `https:${match}` : match;
         // Hosts, nested ones too, when the caller knows the allowlist: allowed, or an alias this filter wrote
         // (opts.aliases: the recording's alias names; without them, the form site-N.invalid).
         const known = Array.isArray(opts.hostAllowlist);
-        const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, ...aliasNames(raw)] : [], keywords: opts.keywords, trustHidden: true })
+        const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, ...aliasNames(raw)] : [], keywords: opts.keywords, trustHidden: true, strict: strictUrls })
           .kinds.filter((kind) => known || kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
@@ -618,7 +667,7 @@
       const RELATIVE = /(?<![\w:/.@%-])\/(?!\/)[^\s"'<>「」『』（）()、。]*|(?<![\w/])\?[\w.-]+=[^\s"'<>「」『』（）()、。]*/g;
       for (const match of String(text).replace(TEXT_URL, ' ').match(RELATIVE) || []) {
         const kinds = scrubUrl(`https://relative.invalid${match.startsWith('?') ? '/' : ''}${match}`,
-          { hostAllowlist: ['relative.invalid'], keywords: opts.keywords, trustHidden: true }).kinds.filter((kind) => kind !== 'host');
+          { hostAllowlist: ['relative.invalid'], keywords: opts.keywords, trustHidden: true, strict: strictUrls }).kinds.filter((kind) => kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
           return;
@@ -628,7 +677,8 @@
     // under: the credential kind of a key above, which covers everything nested in it.
     // args: inside WebMCP arguments, where keys are protocol keys (code, state) as in maskArgs.
     // namedUnder: the contact or id kind of an argument key above ({ user_id: { value: ... } }), as maskArgs carries it.
-    const walk = (v, path, key = '', under = null, args = false, namedUnder = null) => {
+    // commercial: inside a step recorded on a production host (privacy.profile === 'commercial').
+    const walk = (v, path, key = '', under = null, args = false, namedUnder = null, commercial = false) => {
       // Counts of what this filter hid, keyed by kind (secret: 2): not values. Only the recording's own, only numbers.
       if (/^(?:recording\.)?privacy\.redactions$/.test(path) && v && typeof v === 'object' && !Array.isArray(v)
           && Object.entries(v).every(([k, n]) => /^[a-z]{1,16}$/.test(k) && Number.isInteger(n) && n >= 0 && n < 1e6)) return undefined;
@@ -644,16 +694,27 @@
       if (kind && (typeof v === 'number' || (typeof v === 'string' && v.replace(PLACEHOLDER, '').trim()))) {
         findings.push({ path: path || '(root)', kinds: [kind] });
       }
+      // On production a text argument is only its length: anything else left in WebMCP arguments is a value.
+      if (commercial && inArgs && key && typeof v === 'string' && v && !isPlaceholder(v) && !alreadyHidden(v.trim())) {
+        findings.push({ path: path || '(root)', kinds: ['text'] });
+      }
       if (typeof v === 'string') {
-        urlParams(v, path);
+        urlParams(v, path, commercial);
         return check(v, path);
       }
       const carried = ['email', 'phone', 'id'].includes(named) ? named : null;
-      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind, inArgs, carried));
+      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`, '', kind, inArgs, carried, commercial));
       if (v && typeof v === 'object') {
+        // A step recorded on production: a typed value must be only its length unless it was a search box or a
+        // chosen option (valueClass), or a contact or id field's partial mask.
+        const onProduction = commercial || v.privacy?.profile === 'commercial';
+        if (v.privacy?.profile === 'commercial' && typeof v.value === 'string' && v.value
+            && !['search', 'choice'].includes(v.valueClass) && !isPlaceholder(v.value) && !alreadyHidden(v.value.trim())) {
+          findings.push({ path: path ? `${path}.value` : 'value', kinds: ['text'] });
+        }
         for (const [k, item] of Object.entries(v)) {
           check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k, k, kind, inArgs, carried);
+          walk(item, path ? `${path}.${k}` : k, k, kind, inArgs, carried, onProduction);
         }
       }
       return undefined;
@@ -677,6 +738,7 @@
     maskArgs,
     scrubUrl,
     hostAllowed,
+    isPlaceholder,
     aliasedHosts,
     finalScan
   };

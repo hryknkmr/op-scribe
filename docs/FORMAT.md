@@ -16,10 +16,10 @@
 
 ```gherkin
 # op-scribe: Gherkin + attributes
-# recording: rec-mgx0abcd-1a2b3c / privacy: partial
-# ‹…› and [[…]] are masked values: supply test values, never guess the original.
+# recording: rec-mgx0abcd-1a2b3c / privacy: tiered-commercial/v1
+# ‹…› and [[…]] are masked values, and so are values with * (t***@e***.com, 12****78): supply test values, never guess the original.
 # site-N.invalid is an alias for a host that is not disclosed.
-@op-scribe @privacy-partial
+@op-scribe @privacy-tiered-commercial
 Feature: 記録された操作の再現
 
   Background:
@@ -105,22 +105,30 @@ Feature: 記録された操作の再現
 ...
 ```
 
-## 送信ペイロード（`op-scribe.recording/v1`）
+## 送信ペイロード（`op-scribe.recording/v2`）
 
 ```jsonc
 {
-  "schema": "op-scribe.recording/v1",
+  "schema": "op-scribe.recording/v2",
   "recording": {
     "id": "rec-…",
     "startedAt": "2026-10-29T01:00:00.000Z",
     "endedAt": "…",
     "startUrl": "https://site-1.invalid/",
-    "privacy": { "level": "partial", "hostsAliased": 1, "redactions": { "secret": 1, "email": 1 } },
+    "privacy": {
+      "policy": "tiered-commercial/v1",
+      "coverage": "mixed",              // commercial-only | standard-only | mixed
+      "commercialSteps": 1, "standardSteps": 2,
+      "hostsAliased": 1, "redactions": { "secret": 1, "text": 1 }
+    },
     "environment": { "browser": "Google Chrome 141", "platform": "macOS", "language": "ja" },
     "steps": [
-      { "n": 1, "type": "navigate", "t": 0, "url": "https://site-1.invalid/", "source": "user" },
-      { "n": 2, "type": "click", "t": 900, "url": "…", "source": "user",
-        "target": { "role": "link", "name": "ログイン", "tag": "a", "selector": "…", "href": "…" } }
+      { "n": 1, "type": "navigate", "t": 0, "url": "https://site-1.invalid/", "source": "user",
+        "privacy": { "profile": "standard" } },
+      { "n": 2, "type": "click", "t": 900, "url": "…", "source": "user", "privacy": { "profile": "standard" },
+        "target": { "role": "link", "name": "ログイン", "tag": "a", "selector": "…", "href": "…" } },
+      { "n": 3, "type": "input", "t": 2100, "url": "https://site-2.invalid/contact", "source": "user",
+        "value": "[[text:12]]", "valueClass": "text", "privacy": { "profile": "commercial" } }
     ],
     "webmcpTools": [{ "site": "https://site-1.invalid", "tools": ["search_catalog"] }]
   },
@@ -133,8 +141,13 @@ Feature: 記録された操作の再現
 }
 ```
 
-`privacy.level` は `partial` です（認証情報は完全に、連絡先と ID は一部だけ伏せ、ほかの入力はそのまま残す方針。[PRIVACY.md](PRIVACY.md)）。
-入力の文字そのものが残るので、受け取る側は「入力は文字数だけ」という以前の `strict` と同じ扱いにしないでください。
+伏せ方は `privacy.policy`（`tiered-commercial/v1`）とステップごとの `privacy.profile` で表します（[ADR 0001](adr/0001-commercial-environment-policy.md)、[PRIVACY.md](PRIVACY.md)）。
+
+- `commercial`: 商用環境として登録したホストでの操作。自由入力は文字数だけ（`[[text:12]]`）、検索欄（`valueClass: search`）と選択肢（`choice`）の値は残す。URL の値は短い英数字だけ
+- `standard`: それ以外（beta・staging など）。入力と URL の値は残し、認証情報は完全に、メール・電話・ID は一部だけ伏せる
+- どちらでも、`[[…]]` と `*` を含む値は伏せた値です。受け取る側は、`standard` のステップの値を「文字数だけ」と見なさないでください
+- 商用のステップを含む記録の `gherkin` は、手の編集を使わず記録から作り直したものです
+- 受信側は、知らない `schema` や `privacy.policy` を拒否してください（同梱の受信サーバはそうしています）
 
 `t` は記録開始からの経過ミリ秒です。ペイロードはフィールドを許可リスト方式で組み立てるため、
 タブ ID や実ホスト名との対応表など、ブラウザ内専用の状態は構造上含まれません。

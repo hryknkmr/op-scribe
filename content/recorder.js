@@ -176,6 +176,8 @@
       label: accessibleName(el),
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
+      // A search box by the page's markup only (docs/adr/0001).
+      search: el.type === 'search' || el.getAttribute('role') === 'searchbox' || Boolean(el.closest('[role="search"]')),
       contentEditable: el.isContentEditable
     };
   }
@@ -193,17 +195,24 @@
     return el.value;
   }
 
+  /** This page is on a production host (docs/adr/0001): typed text is kept as its length only. */
+  const onProduction = () => S.hostAllowed(location.hostname.replace(/\.+$/, ''), config?.productionHosts);
+
   function recordValue(el) {
     if (!config) return;
     const value = currentValue(el);
     if (committed.get(el) === value) return;
     committed.set(el, value);
-    const masked = S.maskFieldValue(value, fieldMeta(el), config);
+    const meta = fieldMeta(el);
+    const masked = S.maskFieldValue(value, meta, { ...config, strict: onProduction() });
     if (!masked) return;
+    const cls = S.classifyField(meta);
     emit(el.tagName === 'SELECT' ? 'select' : 'input', {
       target: describe(el),
       value: masked.value,
-      valueKinds: masked.kinds
+      valueKinds: masked.kinds,
+      // What kind of field it was (text, search, choice, ...): the worker checks production values against it.
+      valueClass: cls.kind === 'secret' ? cls.label : cls.kind
     });
   }
 
@@ -295,7 +304,7 @@
     }
     if (data.type === 'TOOL_CALL') {
       // Arguments come from an agent or the page; mask them like typed input.
-      emit('tool', { tool: String(data.name).slice(0, 80), args: S.maskArgs(data.args, config), ok: data.ok !== false });
+      emit('tool', { tool: String(data.name).slice(0, 80), args: S.maskArgs(data.args, { ...config, strict: onProduction() }), ok: data.ok !== false });
     }
   });
 
@@ -311,7 +320,8 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     const next = changes.opsSettings?.newValue;
     if (area !== 'local' || !next || !config) return;
-    config = { keywords: next.keywords || [] };
+    // Only the listed words: the host lists stay as they were when recording started (docs/adr/0001).
+    config = { ...config, keywords: next.keywords || [] };
   });
 
   globalThis.__opScribeRecorder = { hello };

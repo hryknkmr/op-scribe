@@ -11,7 +11,7 @@
  */
 importScripts('shared/sanitize.js', 'shared/describe.js');
 
-const { scrubText, scrubUrl, maskArgs, defaults, finalScan, aliasedHosts } = self.OpScribeSanitize;
+const { scrubText, scrubUrl, maskArgs, defaults, finalScan, aliasedHosts, hostAllowed, isPlaceholder } = self.OpScribeSanitize;
 const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
 
 const REC_KEY = 'opsRecording';
@@ -122,11 +122,36 @@ function bump(rec, kinds) {
   for (const kind of kinds) rec.redactions[kind] = (rec.redactions[kind] || 0) + 1;
 }
 
-function cleanStep(raw, rec, settings) {
+/**
+ * The host lists of a recording, fixed when it started (docs/adr/0001): a change in the settings applies to the
+ * next recording. Recordings started before the lists were kept fall back to the settings.
+ */
+const policyOf = (rec, settings) => ({
+  hostAllowlist: rec.policy?.hostAllowlist ?? settings.hostAllowlist,
+  productionHosts: rec.policy?.productionHosts ?? settings.productionHosts ?? []
+});
+
+const hostOf = (value) => {
+  try { return new URL(value).hostname.replace(/\.+$/, ''); } catch { return ''; }
+};
+
+const VALUE_CLASSES = new Set(['text', 'search', 'choice', 'secret', 'card', 'email', 'phone', 'id']);
+
+/**
+ * origin: where the step came from as Chrome reports it (the sender), not as the page says. A step from a
+ * production host is commercial (docs/adr/0001); a navigation is judged by its URL, a note by the step before it.
+ */
+function cleanStep(raw, rec, settings, origin = null) {
+  const policy = policyOf(rec, settings);
+  const source = origin || (raw.type === 'navigate' ? raw.pageUrl : null);
+  const commercial = source ? hostAllowed(hostOf(source), policy.productionHosts)
+    : rec.steps[rec.steps.length - 1]?.privacy?.profile === 'commercial';
   const ctx = {
-    hostAllowlist: settings.hostAllowlist,
+    hostAllowlist: policy.hostAllowlist,
+    productionHosts: policy.productionHosts,
     aliases: rec.aliases,
-    keywords: settings.keywords
+    keywords: settings.keywords,
+    strict: commercial
   };
   const kinds = [];
   const text = (value, maxLength) => {
@@ -141,6 +166,7 @@ function cleanStep(raw, rec, settings) {
   };
 
   const step = { type: String(raw.type).slice(0, 16), t: Math.max(0, Date.now() - rec.startedAt), source: raw.source || 'user' };
+  step.privacy = { profile: commercial ? 'commercial' : 'standard' };
   if (raw.pageUrl) step.url = url(raw.pageUrl);
   if (raw.target) {
     const t = raw.target;
@@ -149,7 +175,7 @@ function cleanStep(raw, rec, settings) {
     // A selector is a locator, not prose: if anything had to be masked, or it holds a URL or a host
     // the policy cannot place, drop it entirely.
     if (t.selector) {
-      const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: settings.hostAllowlist, aliases: {} } });
+      const r = scrubText(t.selector, { keywords: settings.keywords, hosts: { hostAllowlist: policy.hostAllowlist, aliases: {} } });
       // An id-like number or a host name inside the selector (#user-123456, [data-testid="x.example.test"]) too.
       // A CSS-escaped dot (#private\.example\.test) is a host name in an id.
       const identifying = /\/\/|@|\\|\d{3,}|[0-9a-f]{8,}|["'][^"']*[\w-]\.[a-z]{2,}[^"']*["']/i.test(t.selector);
@@ -157,7 +183,13 @@ function cleanStep(raw, rec, settings) {
     }
     if (t.href) step.target.href = url(t.href);
   }
-  if (raw.value !== undefined) step.value = text(raw.value, 200);
+  if (raw.value !== undefined) {
+    // What kind of field the value came from, as the content script classified it; anything unknown is free text.
+    step.valueClass = VALUE_CLASSES.has(raw.valueClass) ? raw.valueClass : 'text';
+    const value = String(raw.value ?? '');
+    // On production free text arrives as its length only ([[text:12]]); anything else is not kept.
+    step.value = commercial && step.valueClass === 'text' && value && !isPlaceholder(value) ? '[[v]]' : text(value, 200);
+  }
   if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
   if (raw.key) step.key = text(raw.key, 24);
   if (raw.tool) {
@@ -167,7 +199,7 @@ function cleanStep(raw, rec, settings) {
     if (raw.args && typeof raw.args === 'object') {
       // Masked by key again here (the page may not have), then as text.
       // The content script masked them already: its partial masks are kept as they are (trustHidden), anything else is masked.
-      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords, trustHidden: true })), { keywords: settings.keywords, hosts: ctx });
+      const r = scrubText(JSON.stringify(maskArgs(raw.args, { keywords: settings.keywords, trustHidden: true, strict: commercial })), { keywords: settings.keywords, hosts: ctx });
       kinds.push(...r.kinds);
       try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
     }
@@ -201,13 +233,15 @@ async function start({ tabId, url }) {
       startedAt: Date.now(),
       endedAt: null,
       privacyLevel: 'partial',
+      // The host lists as they were when recording started: used until it ends (docs/adr/0001).
+      policy: { hostAllowlist: [...settings.hostAllowlist], productionHosts: [...(settings.productionHosts || [])] },
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},
       webmcpTools: {},
       steps: []
     };
-    rec.startUrl = scrubUrl(url, { ...settings, aliases: rec.aliases }).url;
+    rec.startUrl = scrubUrl(url, { ...rec.policy, keywords: settings.keywords, aliases: rec.aliases }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
     await syncContentScripts(rec.grantedPatterns);
     await injectNow(tabId);
@@ -236,7 +270,7 @@ const stop = () => mutate(async (rec) => {
 function scanFor(rec, settings) {
   const hosts = aliasedHosts(rec.aliases).map(([host]) => host);
   const keywords = [...(settings.keywords || []), ...hosts].filter(Boolean);
-  return (value) => finalScan(value, { keywords, hostAllowlist: settings.hostAllowlist, aliases: Object.values(rec.aliases || {}) });
+  return (value) => finalScan(value, { keywords, hostAllowlist: policyOf(rec, settings).hostAllowlist, aliases: Object.values(rec.aliases || {}) });
 }
 
 const addPattern = (url) => mutate(async (rec) => {
@@ -253,7 +287,7 @@ const addPattern = (url) => mutate(async (rec) => {
 
 /** Origin as it appears in the recording (real if allowlisted, otherwise its alias). */
 function siteOf(rec, settings, origin) {
-  const { url } = scrubUrl(`${origin}/`, { ...settings, aliases: { ...rec.aliases } });
+  const { url } = scrubUrl(`${origin}/`, { ...policyOf(rec, settings), aliases: { ...rec.aliases } });
   try { return new URL(url).origin; } catch { return url; }
 }
 
@@ -317,18 +351,18 @@ async function handle(message, sender) {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
       const settings = await getSettings();
-      return { active: true, config: { keywords: settings.keywords } };
+      return { active: true, config: { keywords: settings.keywords, productionHosts: policyOf(rec, settings).productionHosts } };
     }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        appendStep(rec, cleanStep(detail, rec, settings));
+        appendStep(rec, cleanStep(detail, rec, settings, sender.origin || sender.url));
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
-        const hosts = { hostAllowlist: settings.hostAllowlist, aliases: rec.aliases };
+        const hosts = { ...policyOf(rec, settings), aliases: rec.aliases };
         rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: settings.keywords, maxLength: 80, hosts }).text);
         return { save: rec, reply: { ok: true } };
       }

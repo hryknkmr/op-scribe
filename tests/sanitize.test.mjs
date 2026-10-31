@@ -459,3 +459,31 @@ test('names mixing Latin and Japanese, narrower card and phone words, and only r
   assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { 'alice@example.com': 1 } } } }).length, 1);
   assert.deepEqual(S.finalScan({ recording: { privacy: { redactions: { secret: 2, email: 1 } } } }), []);
 });
+
+test('production (docs/adr/0001): free text is its length only; search boxes by markup and chosen options are kept', () => {
+  const strict = { strict: true };
+  assert.equal(S.maskFieldValue('Taro Yamada', { name: 'full_name' }, strict).value, '[[text:11]]');
+  assert.equal(S.maskFieldValue('shoes', { type: 'search' }, strict).value, 'shoes');
+  assert.equal(S.maskFieldValue('shoes', { name: 'q', search: true }, strict).value, 'shoes');
+  assert.equal(S.maskFieldValue('shoes', { name: 'q' }, strict).value, '[[text:5]]');
+  assert.equal(S.maskFieldValue('Japan', { tag: 'select', type: 'select' }, strict).value, 'Japan');
+  assert.equal(S.maskFieldValue('a@example.com', { type: 'email' }, strict).value, 'a***@e***.com');
+  assert.equal(S.maskFieldValue('Taro', { name: 'full_name' }).value, 'Taro');
+  assert.deepEqual(S.maskArgs({ q: 'shoes', count: 3, otp: '1' }, strict), { q: '[[text:5]]', count: 3, otp: '[[secret]]' });
+});
+
+test('production URLs keep only short plain values; other hosts keep theirs; deep encodings are hidden everywhere', () => {
+  const ctx = () => ({ hostAllowlist: ['www.example.com', 'beta.example.com'], productionHosts: ['www.example.com'], aliases: {} });
+  assert.equal(S.scrubUrl('https://www.example.com/items/ランニング/abc?q=shoes&ref=https%3A%2F%2Fx.test#/settings', ctx()).url,
+    'https://www.example.com/items/[[v]]/abc?q=shoes&ref=[[v]]#/settings');
+  assert.equal(S.scrubUrl('https://www.example.com/a#section', ctx()).url, 'https://www.example.com/a#[[v]]');
+  assert.equal(S.scrubUrl('https://beta.example.com/a#section', ctx()).url, 'https://beta.example.com/a#section');
+  const deep = encodeURIComponent(encodeURIComponent(encodeURIComponent(encodeURIComponent('https://private.internal.test/'))));
+  assert.equal(S.scrubUrl(`https://beta.example.com/a/${deep}`, ctx()).url, 'https://beta.example.com/a/[[v]]');
+});
+
+test('csrf keys, dotted phone numbers and quoted local parts', () => {
+  assert.deepEqual(S.maskArgs({ _csrf: 'short-secret' }), { _csrf: '[[secret]]' });
+  assert.equal(S.scrubText('415.555.2671 +1.415.555.2671 192.168.1.1 "john doe"@example.com').text,
+    '***.***.2671 +*.***.***.2671 192.168.*.* "j***"@e***.com');
+});

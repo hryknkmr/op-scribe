@@ -60,7 +60,7 @@ test('buildPayload carries no local-only state and passes the final scan', () =>
 
 test('toGherkin renders Given/When/Then with an attribute table per step', () => {
   const feature = D.toGherkin(rec);
-  assert.match(feature, /^@op-scribe @privacy-partial$/m);
+  assert.match(feature, /^@op-scribe @privacy-tiered-commercial$/m);
   assert.match(feature, /^ {2}Background:\n {4}Given "https:\/\/site-1\.invalid\/" を開いている$/m);
   assert.match(feature, /^ {4}When 「ログイン」リンクをクリックする\n {6}\| action +\| click +\|\n {6}\| url +\| https:\/\/site-1\.invalid\/ \|\n {6}\| role +\| link +\|/m);
   assert.match(feature, /^ {4}Then "https:\/\/site-1\.invalid\/login" に遷移する$/m);
@@ -80,4 +80,17 @@ test('toGherkin escapes pipes inside table cells', () => {
 test('buildPayload includes Gherkin even when none was generated in the panel', () => {
   const payload = D.buildPayload(rec, { generator: 'none', markdown: '' }, {});
   assert.match(payload.reproduction.gherkin, /^Feature: /m);
+});
+
+test('payload v2: the privacy policy and coverage, and Gherkin rebuilt when a step is on production', () => {
+  const recording = { id: 'r', startedAt: 0, steps: [
+    { type: 'input', t: 1, url: 'https://site-1.invalid/', value: 'Taro', valueClass: 'text', privacy: { profile: 'commercial' } },
+    { type: 'input', t: 2, url: 'https://site-2.invalid/', value: 'Taro', valueClass: 'text', privacy: { profile: 'standard' } }
+  ] };
+  const payload = D.buildPayload(recording, { generator: 'manual', markdown: '', gherkin: 'edited' }, {});
+  assert.equal(payload.schema, 'op-scribe.recording/v2');
+  assert.deepEqual(payload.recording.privacy, { policy: 'tiered-commercial/v1', coverage: 'mixed', commercialSteps: 1, standardSteps: 1, hostsAliased: 0, redactions: {} });
+  assert.notEqual(payload.reproduction.gherkin, 'edited');
+  // A typed value left on a production step is stopped at the exit; the same value elsewhere is not.
+  assert.deepEqual(S.finalScan(payload).map((f) => f.path), ['recording.steps[0].value']);
 });

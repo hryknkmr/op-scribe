@@ -89,7 +89,13 @@
             <p><strong>伏せるもの</strong>: パスワード・カード情報・認証コード・トークンは完全に、
               メールアドレス・電話番号・ID は一部だけ（例 <code>t***@e***.com</code>）。</p>
             <p>入力した文字、ボタン名などはそのまま残ります。残したくない語は下に登録してください。</p>
+            <p><strong>商用環境</strong>（下に登録したホスト）では、自由入力は文字数だけ（検索欄と選択肢は残す）、URL の値は短い英数字だけを残します。</p>
           </div>
+          <label class="field">
+            <span>商用環境のホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
+            <textarea name="productionHosts" rows="3" placeholder="www.example.com"></textarea>
+            <small>beta・staging などは登録しないでください。変更は次の記録から反映されます。</small>
+          </label>
           <label class="field">
             <span>実名で記録してよいホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
             <textarea name="hostAllowlist" rows="3" placeholder="example.com"></textarea>

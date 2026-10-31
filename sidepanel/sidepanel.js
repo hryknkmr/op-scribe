@@ -62,7 +62,7 @@ let previewed = null;
 const KIND_LABELS = {
   text: '自由入力', secret: '秘匿値', email: 'メール', phone: '電話', card: 'カード', personal: '個人情報',
   keyword: '指定語', postal: '郵便番号', id: 'ID', ip: 'IP', number: '番号', query: 'クエリ値',
-  hash: 'フラグメント', user: 'ユーザー名', host: 'ホスト'
+  hash: 'フラグメント', user: 'ユーザー名', host: 'ホスト', path: 'パス', url: 'URL'
 };
 
 // ------------------------------------------------------------------ helpers
@@ -415,7 +415,12 @@ async function copyText(label, text) {
 }
 
 ui.copyMd.addEventListener('click', () => copyText('Markdown', ui.repro.value));
-ui.copyGherkin.addEventListener('click', () => copyText('Gherkin', ui.gherkin.value));
+// With a step recorded on production, Gherkin is rebuilt from the record (docs/adr/0001): an edit is not copied.
+ui.copyGherkin.addEventListener('click', async () => {
+  const rec = await loadRecording();
+  const commercial = (rec?.steps || []).some((s) => s.privacy?.profile !== 'standard');
+  await copyText('Gherkin', commercial && rec ? D.toGherkin(rec) : ui.gherkin.value);
+});
 
 ui.download.addEventListener('click', async () => {
   const prepared = await preparePayload();
@@ -441,6 +446,7 @@ ui.download.addEventListener('click', async () => {
 function fillSettingsForm() {
   const form = ui.settingsForm.elements;
   form.hostAllowlist.value = settings.hostAllowlist.join('\n');
+  form.productionHosts.value = (settings.productionHosts || []).join('\n');
   form.keywords.value = settings.keywords.join('\n');
   form.endpoint.value = settings.endpoint;
   form.authHeader.value = settings.authHeader;
@@ -460,6 +466,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   const next = {
     privacyLevel: 'partial',
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),
+    productionHosts: lines(form.productionHosts.value).map((h) => h.toLowerCase()),
     keywords: [...new Set(lines(form.keywords.value))],
     endpoint,
     authHeader: form.authHeader.value.trim()
