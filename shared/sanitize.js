@@ -116,8 +116,8 @@
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
-    // An address on a single-label (internal) domain: alice@intranet.
-    { kind: 'email', re: /(?<![\w.%+@*-])[\w.%+-]+@[A-Za-z][A-Za-z0-9-]*(?![\w.@*-])/g, replace: partialEmail },
+    // An address on a single-label (internal) domain, in any letters: alice@intranet, 太郎@社内.
+    { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}.%+@*-])[\p{L}\p{N}\p{M}._%+-]+@\p{L}[\p{L}\p{N}\p{M}-]*(?![\p{L}\p{N}\p{M}.@*-])/gu, replace: partialEmail },
     // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.
     // Words written right before such an address are taken with it: over-matching only hides more.
     { kind: 'email', re: /[\p{L}\p{N}\p{M}._%+-]+@[\p{L}\p{N}\p{M}-]+(?:\.[\p{L}\p{N}\p{M}-]+)+/gu, replace: partialEmail },
@@ -271,6 +271,7 @@
     .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
 
   // Whole words, or (the long ones) inside a word written without separators: newpassword, accesstoken.
+  const SESSION_WORDS = new Set(['session', 'sessionid', 'sid']);
   const CREDENTIAL_WORDS = new Set(['pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
   // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords
   // (passwordconfirm). Not inside a longer word: secretary and tokenizer are not credentials.
@@ -330,7 +331,10 @@
     const chosen = meta.tag === 'select' || /^(?:select|radio|checkbox)/.test(type);
     const found = new Set([meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel].map((h) => classifyKey(h)));
     if (/\bcc-/.test(autocomplete) || found.has('card')) return { kind: 'secret', label: 'card' };
-    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || found.has('secret')) return { kind: 'secret', label: 'secret' };
+    // For a chosen option, a name that only says "session" (a meeting's morning session) is not enough.
+    const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel];
+    const strong = !chosen || hints.some((h) => classifyKey(wordsOf(h).filter((w) => !SESSION_WORDS.has(w)).join(' ')) === 'secret');
+    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || (found.has('secret') && strong)) return { kind: 'secret', label: 'secret' };
     if (chosen) return { kind: 'text' };
     if (type === 'email' || /\bemail\b/.test(autocomplete)) return { kind: 'email' };
     if (type === 'tel' || /\btel\b/.test(autocomplete)) return { kind: 'phone' };
@@ -527,23 +531,25 @@
     const params = scrubParams(url.searchParams, ctx, kinds);
 
     // Fragments are kept like paths: SPA routes (#/settings) stay readable, ids and listed words are masked.
-    // Parameters in a fragment (#access_token=..., #/route?code=...) follow the query rules.
+    // Fragments are routes (#/orders/123456;view=full): every segment of the route is scrubbed like a path.
+    // Parameters (#access_token=..., #/route?code=...) follow the query rules; a URL inside the fragment
+    // (#/redirect/https://...?x=1) is read as text, so its host and its own parameters follow the policy.
     let hash = '';
     const fragment = url.hash.slice(1);
-    const [route, query] = fragment.includes('?') ? [fragment.slice(0, fragment.indexOf('?')), fragment.slice(fragment.indexOf('?') + 1)]
-      : fragment.includes('=') ? ['', fragment] : [fragment, null];
-    if (decodeDeep(fragment).includes('://')) {
-      // A URL inside the fragment (#/redirect/https://...?x=1): read as text, so its host and its own
-      // parameters follow the policy. Checked before the fragment's own parameters, which it would split.
-      const r = scrubText(decodeDeep(fragment), { keywords: ctx.keywords, hosts: hostsOf(ctx) });
+    const route = (part) => part.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
+    const decodedFragment = decodeDeep(fragment);
+    const nested = decodedFragment.search(/[a-z][a-z0-9+.-]*:\/\//i);
+    if (nested >= 0) {
+      const r = scrubText(decodedFragment.slice(nested), { keywords: ctx.keywords, hosts: hostsOf(ctx) });
       kinds.push(...r.kinds);
-      hash = `#${r.text}`;
-    } else if (query !== null) {
-      const routed = route.split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/');
-      const fragmentParams = scrubParams(new URLSearchParams(query), ctx, kinds);
-      hash = `#${routed}${route || fragment.includes('?') ? '?' : ''}${fragmentParams.join('&')}`;
-    } else if (url.hash.length > 1) {
-      hash = `#${url.hash.slice(1).split('/').map((seg) => (seg ? scrubSegment(seg, ctx, kinds) : seg)).join('/')}`;
+      hash = `#${route(decodedFragment.slice(0, nested))}${r.text}`;
+    } else if (fragment.includes('?')) {
+      const at = fragment.indexOf('?');
+      hash = `#${route(fragment.slice(0, at))}?${scrubParams(new URLSearchParams(fragment.slice(at + 1)), ctx, kinds).join('&')}`;
+    } else if (/^[^/]*=/.test(fragment)) {
+      hash = `#${scrubParams(new URLSearchParams(fragment), ctx, kinds).join('&')}`;
+    } else if (fragment) {
+      hash = `#${route(fragment)}`;
     }
 
     return { url: `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`, kinds };
@@ -578,6 +584,16 @@
         const known = Array.isArray(opts.hostAllowlist);
         const kinds = scrubUrl(raw, { hostAllowlist: known ? [...opts.hostAllowlist, '*.invalid'] : [], keywords: opts.keywords, trustHidden: true })
           .kinds.filter((kind) => known || kind !== 'host');
+        if (kinds.length) {
+          findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
+          return;
+        }
+      }
+      // A path or a query written on its own (/orders/123456, ?code=abc123): read against a placeholder host.
+      const RELATIVE = /(?<![\w:/.@%-])\/(?!\/)[^\s"'<>「」『』（）()、。]*|(?<![\w/])\?[\w.-]+=[^\s"'<>「」『』（）()、。]*/g;
+      for (const match of String(text).replace(TEXT_URL, ' ').match(RELATIVE) || []) {
+        const kinds = scrubUrl(`https://relative.invalid${match.startsWith('?') ? '/' : ''}${match}`,
+          { hostAllowlist: ['relative.invalid'], keywords: opts.keywords, trustHidden: true }).kinds.filter((kind) => kind !== 'host');
         if (kinds.length) {
           findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
           return;

@@ -406,3 +406,16 @@ test('an address is read before listed words and opaque strings can cut it apart
   assert.equal(S.maskFieldValue('4155552671', { type: 'tel' }).value, '******2671');
   assert.equal(S.maskFieldValue('4111 1111 1111 1111', { type: 'tel' }).value, '[[masked]]');
 });
+
+test('single-label addresses in any letters, fragment routes, relative URLs at the exit, and session lists', () => {
+  assert.equal(S.scrubText('太郎@社内 alice@社内 太郎@intranet react@18 @handle').text, '太***@社*** a***@社*** 太***@i*** react@18 @handle');
+  const ctx = { hostAllowlist: ['example.com'], aliases: {} };
+  const scrubbed = S.scrubUrl('https://example.com/#/orders/123456/redirect/https://private.internal.test/a?x=1', ctx).url;
+  assert.equal(scrubbed, 'https://example.com/#/orders/12**56/redirect/https://site-1.invalid/a?x=1');
+  assert.deepEqual(S.finalScan({ scrubbed }, { hostAllowlist: ['example.com'] }), []);
+  assert.equal(S.scrubUrl('https://example.com/#/orders/123456;view=full', ctx).url, 'https://example.com/#/orders/12**56;view=full');
+  for (const t of ['see /orders/123456 now', '?code=abc123']) assert.equal(S.finalScan({ t }).length, 1, t);
+  for (const t of ['東京/大阪', '10/31', '/orders/12**56', '/search?q=shoes']) assert.deepEqual(S.finalScan({ t }), [], t);
+  assert.equal(S.maskFieldValue('Morning', { tag: 'select', type: 'select', name: 'meeting_session' }).value, 'Morning');
+  assert.equal(S.maskFieldValue('x', { name: 'session' }).value, '[[secret]]');
+});
