@@ -76,6 +76,9 @@
 
   // ----------------------------------------------------------- partial masks
 
+  // What partialEmail writes: one character, ***, @, one character, ***, the top-level domain.
+  const OWN_EMAIL = /^[^@*\s]?\*{3}@[^@*\s]?\*{3}(?:\.[^@*.\s]+)?$/u;
+
   /** someone@mail.example.com → s***@m***.com */
   function partialEmail(email) {
     const [local, domain] = email.split('@');
@@ -139,7 +142,10 @@
     { kind: 'email', re: /"(?![^"]*\*\*\*")(?:[^"\\\n@]|\\.){1,64}"@(?![\p{L}\p{N}-]*\*)[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*/gu, replace: (m) => `"${m[1]}***"@${partialEmail(`x@${m.split('@').pop()}`).split('@')[1]}` },
     // Addresses before the generic rules below, which would cut one apart (a 32-letter local part, a listed word).
     // Not right after another letter: 名taro@example.com is one address with a non-ASCII local part (below).
-    { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}])[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/gu, replace: partialEmail },
+    // The local part with every symbol it may hold (verysecret*tag, o'neil), and a domain that may hold * itself
+    // (alice@i***.example): only this filter's own output (a***@e***.com) is left as it is.
+    { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}.!#$%&'*+/=?^`{|}~-])[\w.!#$%&'*+/=?^`{|}~-]+@[A-Za-z0-9*-]+(?:\.[A-Za-z0-9*-]+)+/gu,
+      accept: (m) => !OWN_EMAIL.test(m), replace: partialEmail },
     // An address on a single-label (internal) domain, in any letters: alice@intranet, 太郎@社内.
     { kind: 'email', re: /(?<![\p{L}\p{N}\p{M}.%+@*-])[\p{L}\p{N}\p{M}._%+-]+@\p{L}[\p{L}\p{N}\p{M}-]*(?![\p{L}\p{N}\p{M}.@*-])/gu, replace: partialEmail },
     // Addresses with non-ASCII letters (太郎@例え.テスト), after the ASCII ones so those keep their own bounds.

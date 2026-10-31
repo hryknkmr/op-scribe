@@ -574,3 +574,12 @@ test('a page\'s own scheme name never becomes a trusted placeholder, and escaped
   assert.equal(S.finalScan({ a: '[[url:acmesecret]]' }, { keywords: ['acmesecret'] }).length, 1);
   assert.equal(S.scrubText('"john\\"doe"@example.com').text, '"j***"@e***.com');
 });
+
+test('the local part is read whole with its symbols, and only the filter\'s own partial address is left as it is', () => {
+  for (const [input, output] of [['verysecret*tag@example.com', 'v***@e***.com'], ['alice@i***.private.example', 'a***@i***.example'],
+    ["o'neil@example.com", 'o***@e***.com'], ['a***@e***.com', 'a***@e***.com']]) {
+    assert.equal(S.scrubText(input).text, output, input);
+    assert.deepEqual(S.finalScan({ output }), [], output);
+  }
+  assert.equal(S.finalScan({ raw: 'verysecret*tag@example.com' }).length, 1);
+});

@@ -477,6 +477,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   (async () => {
     await chrome.storage.local.set({ [SETTINGS_KEY]: next });
     ui.policyNotice.hidden = true;
+    await chrome.storage.local.remove('opsPolicyNotice');
     settings = { ...S.defaults(), ...next };
     const short = next.keywords.filter((k) => k.length < 2);
     ui.settingsStatus.textContent = (await granted)
@@ -509,9 +510,12 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
     settings = { ...S.defaults(), ...(stored[SETTINGS_KEY] || {}) };
     fillSettingsForm();
     // Settings saved before production hosts existed were strict everywhere: say once that this changed.
-    // Shown in the recording section, which is open, until the settings are saved once.
-    if (stored[SETTINGS_KEY] && !('productionHosts' in stored[SETTINGS_KEY])) {
-      ui.policyNotice.textContent = stored[SETTINGS_KEY].privacyLevel === 'balanced'
+    // Shown in the recording section, which is open, until the settings are saved once: for settings saved before
+    // production hosts existed, and for an update from such a version with nothing saved (the worker sets the flag).
+    const { opsPolicyNotice } = await chrome.storage.local.get('opsPolicyNotice');
+    const old = stored[SETTINGS_KEY] && !('productionHosts' in stored[SETTINGS_KEY]);
+    if (old || opsPolicyNotice) {
+      ui.policyNotice.textContent = (stored[SETTINGS_KEY]?.privacyLevel || opsPolicyNotice) === 'balanced'
         ? '入力の扱いが変わりました。「商用環境のホスト」に登録したホストでは、自由入力を文字数だけにします。「プライバシーと送信先」で登録して保存してください'
         : '入力の扱いが変わりました。以前は全サイトで自由入力を文字数だけにしていましたが、今は「商用環境のホスト」に登録したホストだけです。'
           + '「プライバシーと送信先」で登録して保存してください';

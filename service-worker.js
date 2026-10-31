@@ -19,7 +19,15 @@ const SETTINGS_KEY = 'opsSettings';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 const MAX_STEPS = 500;
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  // Updated from a version without production hosts (strict everywhere by default, saved or not): the side panel
+  // says once that this changed (docs/adr/0001), until the settings are saved.
+  if (reason === 'update') {
+    const stored = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
+    if (!stored || !('productionHosts' in stored)) {
+      await chrome.storage.local.set({ opsPolicyNotice: stored?.privacyLevel === 'balanced' ? 'balanced' : 'strict' });
+    }
+  }
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (error) {
