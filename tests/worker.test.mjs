@@ -38,7 +38,7 @@ function worker() {
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
-    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async () => { if (control.noRecorder) throw new Error('no receiver'); } },
+    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async (id, message) => { if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; } },
     sidePanel: { setPanelBehavior: noop }
   };
   const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
@@ -77,6 +77,21 @@ test('a loaded page with no recorder is not attached, and one that has a recorde
   control.noRecorder = true;
   await pageLoaded();
   assert.equal(session.opsRecording.attached, false);
+});
+
+test('a late failed ping of an earlier recording leaves the new one attached', async () => {
+  const { send, control, session, pageLoaded } = worker();
+  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
+  await send(start);
+  await control.hello;
+  let fail;
+  control.ping = new Promise((resolve, reject) => { fail = reject; });
+  const loaded = pageLoaded();
+  await send(start);
+  await control.hello;
+  fail(new Error('no receiver'));
+  await loaded;
+  assert.equal(session.opsRecording.attached, true);
 });
 
 test('a HELLO queued behind the stop gets no configuration', async () => {

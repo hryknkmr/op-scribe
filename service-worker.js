@@ -340,12 +340,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 // Only the recorder's HELLO sets attached; it is cleared here when no recorder answers.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
-  if (!isRecordingTab(await getRecording(), tabId)) return;
+  const asked = await getRecording();
+  if (!isRecordingTab(asked, tabId)) return;
   try {
     await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
   } catch {
     await mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId) || !rec.attached) return null;
+      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || !rec.attached) return null;
       rec.attached = false;
       return { save: rec };
     });
