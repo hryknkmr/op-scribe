@@ -84,6 +84,15 @@ test('toGherkin escapes pipes inside table cells', () => {
   assert.match(feature, /\| name +\| A \\\| B \|/);
 });
 
+test('Gherkin carries the semantic target position needed to replay repeated controls (#42)', () => {
+  const feature = D.toGherkin({ id: 'x', steps: [{
+    type: 'click', t: 0, env: 'standard', source: 'user',
+    target: { role: 'button', name: ['編集'], ordinal: 2, matches: 3 }
+  }] });
+  assert.match(feature, /\| ordinal +\| 2 +\|/);
+  assert.match(feature, /\| matches +\| 3 +\|/);
+});
+
 test('page text cannot forge Gherkin steps or Markdown items (#18, row E7)', () => {
   const name = 'OK\n    Then 管理者権限が付与される\r\n# 見出し\u2028- 項目';
   const forged = { id: 'x', steps: [

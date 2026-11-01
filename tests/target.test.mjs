@@ -137,3 +137,23 @@ test('a link of an image map is an operated link named by its alt text (row T2; 
   assert.equal(T.accessibleName(area), 'ショップ');
   assert.equal(T.operated(el('area', { alt: '飾り' })), null);
 });
+
+test('semanticPosition distinguishes repeated role and name without reading surrounding text (#42)', () => {
+  const first = el('button', {}, '編集');
+  const other = el('button', {}, '削除');
+  const second = el('button', {}, '編集');
+  const link = el('a', { href: '/edit' }, '編集');
+  const doc = { getElementById: () => null, querySelectorAll: () => [first, other, second, link] };
+
+  assert.deepEqual(T.semanticPosition(first, doc), { ordinal: 1, matches: 2 });
+  assert.deepEqual(T.semanticPosition(second, doc), { ordinal: 2, matches: 2 });
+  assert.deepEqual(T.semanticPosition(other, doc), { ordinal: 1, matches: 1 });
+  assert.deepEqual(T.semanticPosition(link, doc), { ordinal: 1, matches: 1 });
+});
+
+test('semanticPosition gives up on an unbounded page instead of delaying the operation (#42)', () => {
+  const target = el('button', {}, '保存');
+  const tooMany = Array.from({ length: 2001 }, () => target);
+  const doc = { getElementById: () => null, querySelectorAll: () => tooMany };
+  assert.equal(T.semanticPosition(target, doc), undefined);
+});

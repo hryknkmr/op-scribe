@@ -20,6 +20,9 @@
     tool: 80,
     toolList: 50,
     selector: 160,
+    // Interactive elements inspected to position one semantic role/name target.
+    // Above this, omit the position rather than make a person's operation wait (#42).
+    targetMatches: 2000,
     argKey: 40,
     argItems: 10,
     argKeys: 20,
@@ -149,7 +152,7 @@
    * as \u0000 (6 characters) and a quote or backslash as 2; a Gherkin table
    * cell doubles backslashes and pipes once more.
    */
-  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + cut(LIMITS.selector) + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
+  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + cut(LIMITS.selector) + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text) + 32;
   // The arguments as JSON with their typed wrappers ({"treatment":"kept","field":"arg","text":...}).
   const ARGS_JSON = LIMITS.argLeaves * (6 * cut(LIMITS.argKey) + 6 * cut(LIMITS.kept.arg) + 64) + 64;
   const STEP = Object.freeze({

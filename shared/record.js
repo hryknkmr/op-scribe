@@ -226,6 +226,11 @@
       if (is(TOKEN, t.role)) step.target.role = t.role;
       if (is(TOKEN, t.tag)) step.target.tag = t.tag;
       if (t.name) step.target.name = text(t.name, LIMITS.name);
+      if (Number.isInteger(t.ordinal) && Number.isInteger(t.matches)
+        && t.ordinal >= 1 && t.ordinal <= t.matches && t.matches <= LIMITS.targetMatches) {
+        step.target.ordinal = t.ordinal;
+        step.target.matches = t.matches;
+      }
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });

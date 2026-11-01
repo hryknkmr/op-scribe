@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { primaryRole } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, primaryRole } = root.OpScribeLimits || require('./limits.js');
 
   // Elements a person operates by their tag. No <label>: one without a control is page
   // text, and one with a control is recorded through the control it forwards the click to.
@@ -113,7 +113,29 @@
     return textOf(el) || oneLine(el.querySelector('img[alt]')?.alt) || declared;
   }
 
-  const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName };
+  /**
+   * The 1-based position of this element among targets with the same semantic
+   * role and accessible name. It stores no surrounding text and stops the
+   * bounded comparison on pages with too many interactive candidates (#42).
+   */
+  function semanticPosition(el, doc) {
+    if (!el || !doc?.querySelectorAll) return undefined;
+    let candidates;
+    try { candidates = doc.querySelectorAll(`${NATIVE}, [role]`); } catch { return undefined; }
+    if (candidates.length > LIMITS.targetMatches) return undefined;
+    const role = implicitRole(el);
+    const name = accessibleName(el, doc);
+    let ordinal = 0;
+    let matches = 0;
+    for (const candidate of candidates) {
+      if (!isOperated(candidate) || implicitRole(candidate) !== role || accessibleName(candidate, doc) !== name) continue;
+      matches += 1;
+      if (candidate === el) ordinal = matches;
+    }
+    return ordinal && matches ? { ordinal, matches } : undefined;
+  }
+
+  const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName, semanticPosition };
   root.OpScribeTarget = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

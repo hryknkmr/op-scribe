@@ -322,6 +322,8 @@
       add('role', step.target.role);
       add('name', txt(step.target.name));
       add('tag', step.target.tag);
+      add('ordinal', step.target.ordinal);
+      add('matches', step.target.matches);
       add('selector', step.target.selector);
       add('href', txt(step.target.href));
     }

@@ -180,6 +180,15 @@ test('unknown step types are not recorded (row T6)', () => {
   assert.equal(R.cleanStep({ type: 'scroll' }, newRec(), settings, { tabUrl: BETA }), null);
 });
 
+test('semantic target position is bounded and internally consistent (row T7, #42)', () => {
+  const clean = (target) => R.cleanStep({ type: 'click', pageUrl: BETA, target }, newRec(), settings, { tabUrl: BETA });
+  assert.deepEqual(clean({ role: 'button', name: '編集', ordinal: 2, matches: 3 }).target,
+    { role: 'button', name: ['編集'], ordinal: 2, matches: 3 });
+  assert.equal(clean({ role: 'button', ordinal: 0, matches: 2 }).target.ordinal, undefined);
+  assert.equal(clean({ role: 'button', ordinal: 3, matches: 2 }).target.ordinal, undefined);
+  assert.equal(clean({ role: 'button', ordinal: 1, matches: 2001 }).target.ordinal, undefined);
+});
+
 test('a note from the panel is commercial when the recording has a commercial step', () => {
   const rec = newRec();
   assert.equal(R.cleanStep({ type: 'note', note: 'ok' }, rec, settings).env, 'standard');

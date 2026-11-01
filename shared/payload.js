@@ -98,6 +98,8 @@
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       name: opt(runs('T2', LIMITS.name)),
+      ordinal: opt({ type: 'int', row: 'T7', min: 1, max: LIMITS.targetMatches }),
+      matches: opt({ type: 'int', row: 'T7', min: 1, max: LIMITS.targetMatches }),
       // Page text with "[[" is escaped by the masking: a "[[" here would forge a placeholder finalScan skips.
       selector: opt({ ...cutStr('T3', LIMITS.selector), re: /^(?![\s\S]*\[\[)/ }),
       href: opt(URL_VALUE)
@@ -501,6 +503,10 @@
       checkStepKind(step, path, problems);
       if (step.url !== undefined) checkUrl(step.url, step.env, `${path}.url`, problems);
       if (step.target?.href !== undefined) checkUrl(step.target.href, step.env, `${path}.target.href`, problems);
+      if (step.target && ((step.target.ordinal === undefined) !== (step.target.matches === undefined)
+        || (step.target.ordinal !== undefined && step.target.ordinal > step.target.matches))) {
+        problems.push({ path: `${path}.target.ordinal`, problem: 'inconsistent semantic position' });
+      }
       if (step.value !== undefined) checkTyped(step.value, step.env, `${path}.value`, problems);
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
       if (step.args !== undefined) {

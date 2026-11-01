@@ -702,3 +702,19 @@ test('each kind of step has the source W7 gives it (row W7; review of #37 R9)', 
   }
   assert.deepEqual(P.checkPayload(build()), []);
 });
+
+test('checkPayload accepts only a consistent bounded semantic target position (row T7, #42)', () => {
+  const payload = regen(build());
+  payload.recording.steps[1].target.ordinal = 2;
+  payload.recording.steps[1].target.matches = 3;
+  payload.reproduction.gherkin = D.toGherkin(payload.recording);
+  assert.deepEqual(P.checkPayload(payload), []);
+
+  for (const [ordinal, matches] of [[0, 3], [4, 3], [1, 2001]]) {
+    const bad = structuredClone(payload);
+    bad.recording.steps[1].target.ordinal = ordinal;
+    bad.recording.steps[1].target.matches = matches;
+    bad.reproduction.gherkin = D.toGherkin(bad.recording);
+    assert.ok(P.checkPayload(bad).some((problem) => problem.path.includes('.target.')));
+  }
+});

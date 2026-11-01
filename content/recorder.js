@@ -102,7 +102,8 @@
       // Whole: the worker masks first and then cuts, so a keyword across the limit is never left half (K2).
       name: accessibleName(el),
       tag: el.tagName.toLowerCase(),
-      selector: selectorFor(el)
+      selector: selectorFor(el),
+      ...T.semanticPosition(el, document)
     };
     if ((el.tagName === 'A' || el.tagName === 'AREA') && el.href) target.href = el.href;
     return target;
@@ -227,7 +228,7 @@
       // Synthetic events (page scripts, automation) are not human operations.
       if (!config || !event.isTrusted) return;
       try { handler(event); } catch (error) { console.warn('[op-scribe] handler failed', type, error); }
-    }, true);
+    }, { capture: true, passive: true });
   }
 
   // ------------------------------------------------------- MAIN world relay
