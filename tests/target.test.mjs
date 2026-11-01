@@ -151,6 +151,29 @@ test('semanticPosition distinguishes repeated role and name without reading surr
   assert.deepEqual(T.semanticPosition(link, doc), { ordinal: 1, matches: 1 });
 });
 
+test('semanticPosition counts only targets a role-based replay can reach (#42)', () => {
+  const hidden = el('input', { type: 'hidden', 'aria-label': '検索' });
+  const gone = el('button', {}, '検索');
+  gone.checkVisibility = () => false;
+  const inDialog = el('button', {}, '検索');
+  el('div', { 'aria-hidden': 'true' }, '', [inDialog]);
+  const inert = el('button', {}, '検索');
+  el('div', { inert: '' }, '', [inert]);
+  const shown = el('button', {}, '検索');
+  shown.checkVisibility = () => true;
+  const doc = { getElementById: () => null, querySelectorAll: () => [hidden, gone, inDialog, inert, shown] };
+  assert.deepEqual(T.semanticPosition(shown, doc), { ordinal: 1, matches: 1 });
+});
+
+test('semanticPosition compares the name the step records, not an aria-labelledby lookup (#42)', () => {
+  const heading = el('h2', {}, '請求先');
+  const labelled = el('button', { 'aria-labelledby': 'h' }, '編集');
+  const plain = el('button', {}, '編集');
+  const doc = { getElementById: (id) => (id === 'h' ? heading : null), querySelectorAll: () => [labelled, plain] };
+  assert.equal(T.accessibleName(labelled), '編集');
+  assert.deepEqual(T.semanticPosition(plain, doc), { ordinal: 2, matches: 2 });
+});
+
 test('semanticPosition gives up on an unbounded page instead of delaying the operation (#42)', () => {
   const target = el('button', {}, '保存');
   const tooMany = Array.from({ length: 2001 }, () => target);

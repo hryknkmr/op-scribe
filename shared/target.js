@@ -114,9 +114,19 @@
   }
 
   /**
+   * Whether a person (and a role-based replay, like getByRole) can reach this
+   * element: rendered, not a hidden input, not inside aria-hidden or inert (#42).
+   */
+  const exposed = (el) => !(el.tagName === 'INPUT' && el.type === 'hidden')
+    && el.checkVisibility?.({ visibilityProperty: true }) !== false
+    && !el.closest('[aria-hidden="true"], [inert]');
+
+  /**
    * The 1-based position of this element among targets with the same semantic
    * role and accessible name. It stores no surrounding text and stops the
    * bounded comparison on pages with too many interactive candidates (#42).
+   * Names are compared as the step records them (no aria-labelledby lookup),
+   * so the position counts the same role + name a replay searches for.
    */
   function semanticPosition(el, doc) {
     if (!el || !doc?.querySelectorAll) return undefined;
@@ -124,11 +134,12 @@
     try { candidates = doc.querySelectorAll(`${NATIVE}, [role]`); } catch { return undefined; }
     if (candidates.length > LIMITS.targetMatches) return undefined;
     const role = implicitRole(el);
-    const name = accessibleName(el, doc);
+    const name = accessibleName(el);
     let ordinal = 0;
     let matches = 0;
     for (const candidate of candidates) {
-      if (!isOperated(candidate) || implicitRole(candidate) !== role || accessibleName(candidate, doc) !== name) continue;
+      if (!isOperated(candidate) || implicitRole(candidate) !== role || !exposed(candidate)
+        || accessibleName(candidate) !== name) continue;
       matches += 1;
       if (candidate === el) ordinal = matches;
     }
