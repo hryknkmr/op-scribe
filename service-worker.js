@@ -224,8 +224,8 @@ const addPattern = (url) => mutate(async (rec) => {
  * Origin as it appears in the recording (real if allowlisted, otherwise its alias), or null
  * for a site the recording does not hold (past the alias limit, K5).
  */
-function siteOf(rec, settings, origin) {
-  const { url } = scrubUrl(`${origin}/`, { ...rec.policy, keywords: settings.keywords, aliases: { ...rec.aliases } });
+function siteOf(rec, settings, origin, aliases = { ...rec.aliases }) {
+  const { url } = scrubUrl(`${origin}/`, { ...rec.policy, keywords: settings.keywords, aliases });
   if (url.length !== 1 || typeof url[0] !== 'string') return null;
   try { return new URL(url[0]).origin; } catch { return null; }
 }
@@ -305,7 +305,8 @@ async function handle(message, sender) {
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
-        const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
+        // The alias is kept: rec.webmcpTools is stored under it, and the next new site would take it otherwise.
+        const site = siteOf(rec, settings, new URL(detail.pageUrl).origin, rec.aliases);
         // A site past the alias limit is not recorded (K5): neither are its tools.
         if (!site) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).

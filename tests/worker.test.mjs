@@ -148,3 +148,16 @@ test('a page the recorder could not reach stays unattached until a recorder says
   assert.equal(session.opsRecording.attached, true);
 
 });
+
+test('a site that reports tools before any step keeps its alias, so a later site does not take it', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const from = (url) => ({ tab: { id: 7, url }, url });
+  await send({ from: 'op-scribe/content', type: 'WEBMCP_TOOLS', detail: { pageUrl: 'https://tools.test/', names: ['search'] } }, from('https://tools.test/'));
+  await send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'navigate', url: 'https://other.test/' } }, from('https://other.test/'));
+  const rec = session.opsRecording;
+  const toolSite = Object.keys(rec.webmcpTools)[0];
+  assert.equal(`https://${rec.aliases['https://tools.test']}`, toolSite);
+  assert.notEqual(rec.aliases['https://other.test'], rec.aliases['https://tools.test']);
+});
