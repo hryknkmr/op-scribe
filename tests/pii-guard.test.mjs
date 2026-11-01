@@ -3,9 +3,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Run inside a git hook, the tests inherit GIT_DIR and GIT_INDEX_FILE, which point at the real
+// repository when it is a worktree: every git below would then init, configure and commit there
+// instead of in its scratch directory. The scratch repositories are their own.
+for (const name of Object.keys(process.env)) if (name.startsWith('GIT_')) delete process.env[name];
 
 const ROOT = new URL('..', import.meta.url).pathname;
 
@@ -217,6 +223,26 @@ test('a file name with a newline is scanned', () => {
   assert.equal(guard('scan-tree').status, 1);
 });
 
+test('a value split by a newline in a file name is still found', () => {
+  const value = address();
+  const name = `${value.slice(0, 4)}\n${value.slice(4)}.txt`;
+  const { git, guard, write } = repo();
+  write(name, '');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+  git('commit', '-q', '-m', 'add');
+  assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 1);
+});
+
+test('a file name with bytes that are not UTF-8 does not stop the scan', () => {
+  const { dir, guard } = repo();
+  // In the index only: some file systems refuse such a name.
+  execFileSync('bash', ['-c', `git update-index --add --cacheinfo 100644,$(git rev-parse HEAD:r.txt),$'x\\xff.txt'`], { cwd: dir });
+  assert.equal(guard('scan-staged').status, 0);
+  assert.equal(guard('scan-tree').status, 0);
+});
+
 const hook = (dir, name, args = [], input = '') =>
   spawnSync('bash', [join(ROOT, '.githooks', name), ...args], { cwd: dir, input, encoding: 'utf8' });
 
@@ -276,19 +302,48 @@ test('only users.noreply is allowed on the GitHub noreply domain', () => {
   assert.equal(guard('scan-staged').status, 1);
 });
 
-test('grep failing during a scan is an error, not a clean result', () => {
-  const { dir, git, guard, write } = repo();
-  write('a.txt', 'ok\n');
-  git('add', '-A');
-  git('commit', '-q', '-m', 'add');
-  const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
-  const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
-  writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "-anoE" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
-    if (args[0] === 'scan-staged') { write('a.txt', 'changed\n'); git('add', '-A'); }
-    const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
-    assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
-  }
-  assert.equal(guard('scan-staged').status, 0);
+for (const flags of ['-anoE', '-ainEi', '-viE']) {
+  test(`grep ${flags} failing during a scan is an error, not a clean result`, () => {
+    const { git, write, dir, guard } = repo();
+    write('a.txt', `${address()}\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add');
+    const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
+    const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "${flags}" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    write('a.txt', `${address()} changed\n`);
+    git('add', '-A');
+    for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
+      const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
+      assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
+    }
+    assert.equal(guard('scan-staged').status, 1);
+  });
+}
+
+test('a git hook\'s GIT_DIR never reaches the scratch repositories (review of #28)', () => {
+  // A repository standing in for the one a worktree commit runs the hook in.
+  const victim = mkdtempSync(join(tmpdir(), 'opscribe-victim-'));
+  execFileSync('git', ['init', '-q', '-b', 'main', victim]);
+  writeFileSync(join(victim, 'v.txt'), 'v\n');
+  execFileSync('git', ['-C', victim, 'add', 'v.txt']);
+  const gitDir = join(victim, '.git');
+  const before = { config: readFileSync(join(gitDir, 'config'), 'utf8'), index: readFileSync(join(gitDir, 'index')) };
+  // The child's scratch repositories go here, so the test can see that they were made.
+  const scratch = mkdtempSync(join(tmpdir(), 'opscribe-scratch-'));
+  const env = { ...process.env, GIT_DIR: gitDir, GIT_INDEX_FILE: join(gitDir, 'index'), TMPDIR: scratch };
+  // A test run of its own, not a subtest of this one.
+  delete env.NODE_TEST_CONTEXT;
+  const r = spawnSync(process.execPath, ['--test', '--test-name-pattern=^a rename that adds personal data', fileURLToPath(import.meta.url)],
+    { env, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  // The scratch test ran, in a repository of its own: it made one and committed there.
+  const made = readdirSync(scratch).filter((name) => name.startsWith('opscribe-guard-'));
+  assert.equal(made.length, 1, readdirSync(scratch).join(', '));
+  assert.equal(spawnSync('git', ['-C', join(scratch, made[0]), 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 0);
+  // ... and the repository the hook pointed at is as it was.
+  assert.equal(readFileSync(join(gitDir, 'config'), 'utf8'), before.config);
+  assert.ok(readFileSync(join(gitDir, 'index')).equals(before.index), 'its index is as it was');
+  assert.equal(spawnSync('git', ['-C', victim, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 1, 'no commit was made there');
 });

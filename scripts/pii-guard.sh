@@ -108,6 +108,11 @@ strip_coauthor() {
     -e 's/`Co-Authored-By: … <noreply@anthropic\.com>`//g'
 }
 
+# -z のファイル名を 1 行 1 件にする。名前の中の改行は詰める（語を分けて検出を避けられないように）。
+join_names() {
+  LC_ALL=C tr -d '\n' | LC_ALL=C tr '\0' '\n'
+}
+
 # stdin のテキストから許可外のアドレスを表示する。grep の失敗は 2 を返す（検出なしと区別する）。
 grep_emails() {
   local rc=0 emails
@@ -136,7 +141,7 @@ scan_staged() {
     return 2
   fi
   # ファイル名も公開される。内容とは別に見る。
-  out="$(tr '\0' '\n' < "$PATH_LIST" | grep_text)" || return 2
+  out="$(join_names < "$PATH_LIST" | grep_text)" || return 2
   if [[ -n "$out" ]]; then
     echo "  ✗ staged のファイル名"; echo "$out" | sed 's/^/      /'
     found=1
@@ -182,7 +187,7 @@ scan_tree() {
     echo "pii-guard: tracked ファイルの一覧を取得できません" >&2
     return 2
   fi
-  out="$(tr '\0' '\n' < "$PATH_LIST" | grep_text)" || return 2
+  out="$(join_names < "$PATH_LIST" | grep_text)" || return 2
   if [[ -n "$out" ]]; then
     echo "  ✗ tracked のファイル名"; echo "$out" | sed 's/^/      /'
     rc=1
@@ -272,7 +277,7 @@ scan_commits() {
       echo "  ✗ ${h:0:7} の追加内容:"; echo "$out" | sed 's/^/      /'
       rc=1
     fi
-    if ! names="$(git show --root -m --first-parent --format= --name-only --diff-filter=d -z "$h" | tr '\0' '\n')"; then
+    if ! names="$(git show --root -m --first-parent --format= --name-only --diff-filter=d -z "$h" | join_names)"; then
       echo "pii-guard: コミットのファイル名を取得できません: $h" >&2
       return 2
     fi
