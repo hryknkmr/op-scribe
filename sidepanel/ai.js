@@ -79,6 +79,9 @@ export function validate(output, inputText, scan) {
     return ['出力が期待した形ではありません'];
   }
   const text = JSON.stringify(output);
+  // The renderer removes hidden characters (E7), so one could make "[\u200B[email]]" or a URL
+  // appear only after this check: refuse them instead (one definition, shared/limits.js; review of #34 R10).
+  if (new RegExp(globalThis.OpScribeLimits.HIDDEN_CHARS, 'u').test(text)) return ['見えない文字を含みます'];
   const newUrls = added(inputText, text, URLS);
   if (newUrls.length) problems.push(`入力にない URL を含みます: ${newUrls.slice(0, 2).join(', ')}`);
   const newMarks = added(inputText, text, MARKS);
