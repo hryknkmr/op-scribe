@@ -459,8 +459,10 @@ test('past the step limit the reported steps go first, whoever adds the new step
   const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
   const people = () => rec.steps.filter((s) => s.source === 'user').length;
   for (let i = 0; i < LIMITS.steps; i += 1) R.appendStep(rec, click());
+  const revision = rec.revision;
   assert.equal(R.appendStep(rec, tool()), false, 'no reported step to give way: not recorded');
   assert.equal(people(), LIMITS.steps);
+  assert.equal(rec.revision, revision, 'nothing changed, so no Markdown goes stale (review of #37 R11)');
   // Mixed and full: the person's new step pushes out a reported one, not the oldest of the person's.
   rec.steps.splice(0, LIMITS.agentSteps);
   for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, tool()));

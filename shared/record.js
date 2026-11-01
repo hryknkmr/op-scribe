@@ -329,6 +329,9 @@
     if (!step) return false;
     // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
     if (reported(step) && reportedOn(rec, step.site).length >= LIMITS.agentSteps) return false;
+    // At the step limit with only the person's steps, a reported step would go itself: not recorded,
+    // and the recording - its revision too - stays as it was (E4; review of #37 R11).
+    if (reported(step) && rec.steps.length >= LIMITS.steps && !rec.steps.some(reported)) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     // Past the step limit the steps the page reported go first, oldest first, whoever added the
