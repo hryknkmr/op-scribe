@@ -248,7 +248,9 @@ test('masked argument keys are numbered so none overwrites another (row W5; revi
 
 test('a URL longer than the limit after masking is redacted as a whole (row U1; review R5)', () => {
   const long = `https://example.com/${'a/'.repeat(1200)}`;
-  assert.deepEqual(urlOf(long, { hostAllowlist: ['example.com'] }), { url: '[[url:long]]', kinds: ['url'] });
+  const r = urlOf(long, { hostAllowlist: ['example.com'] });
+  assert.deepEqual([r.url, r.kinds], ['[[url:long]]', ['url']]);
+  assert.equal(r.origin, 'https://example.com', 'the site is still known (W8)');
 });
 
 test('argument keys stay distinct after the cut and after masking (row W5; review new R1)', () => {

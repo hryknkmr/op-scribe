@@ -199,17 +199,26 @@
       kinds.push(...r.kinds);
       return r.runs;
     };
-    const url = (value) => {
+    let site;
+    const url = (value, page = false) => {
       const r = scrubUrl(value, ctx);
       kinds.push(...r.kinds.filter((k) => k !== 'host'));
+      if (page) site = r.origin;
       return r.url;
     };
 
-    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: raw.source === 'agent' ? 'agent' : 'user' };
-    if (raw.pageUrl) {
+    // Where a step came from follows from its kind (W7): a navigation is unknown, a tool call and an
+    // expectation from the page are agent, everything else - what the content script saw a person do,
+    // a note in the side panel - is user. The worker marks the page's expectation (raw.source).
+    const source = type === 'navigate' ? 'unknown' : type === 'tool' || (type === 'note' && raw.source === 'agent') ? 'agent' : 'user';
+    // The page's expectation belongs to its page (W8): without one it is not recorded.
+    if (type === 'note' && source === 'agent' && !raw.pageUrl) return null;
+    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source };
+    // A note of the person's is written in the side panel and belongs to no page (W7, W8).
+    if (raw.pageUrl && !(type === 'note' && source === 'user')) {
       // A page on a host past the alias limit is not recorded (K5; review R42).
       if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
-      step.url = url(raw.pageUrl);
+      step.url = url(raw.pageUrl, true);
     }
     if (raw.target) {
       const t = raw.target;
@@ -257,6 +266,9 @@
     for (const f of Object.keys(step)) {
       if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
     }
+    // The site of the page, as the recording names it: WebMCP returns a site its own steps by it (W8, #17).
+    // Kept in the browser only; buildPayload copies the fields of SHAPE, which has none for it.
+    if (site) step.site = site;
     if (rule.required.some((f) => step[f] === undefined || step[f] === '' || (Array.isArray(step[f]) && !step[f].length))) return null;
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
       // Only the kinds the payload may count (row M1), and never past the limit.
@@ -277,19 +289,53 @@
     return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
   }
 
+  // The origin of a URL whose host is an alias. A real host of that form is always aliased (U4), so every match is one.
+  const ALIAS_ORIGIN = /^(https?:\/\/)(site-\d+\.invalid)(?=[/?#]|$)/;
+
   /**
-   * What WebMCP tells a page on site about the recording (row W8): its own
-   * steps and the notes without a URL. A panel note's environment comes from
-   * the whole recording, not this site's part of it. Null for another op.
+   * An alias numbers a site in the whole recording: site-2 says another site came first.
+   * The page gets aliases of its own from site-1, its site first when it is an alias and then
+   * in the order its steps name them, so a reply tells nothing of the other sites (W8; review
+   * of #37 R12). An allowed host keeps its name (U4).
+   * Only hosts are renamed (url, target.href): text is the page's own and stays as it is.
    */
-  function webmcpReply(rec, settings, site, op) {
+  function localAliases(site, steps) {
+    const names = new Map();
+    const swap = (u) => {
+      const m = ALIAS_ORIGIN.exec(u);
+      if (!m) return u;
+      if (!names.has(m[2])) names.set(m[2], `site-${names.size + 1}.invalid`);
+      return `${m[1]}${names.get(m[2])}${u.slice(m[0].length)}`;
+    };
+    const runs = (url) => typeof url === 'string' ? swap(url)
+      : Array.isArray(url) && typeof url[0] === 'string' ? [swap(url[0]), ...url.slice(1)] : url;
+    const here = swap(site);
+    return {
+      site: here,
+      steps: steps.map((s) => {
+        const local = { ...s };
+        if (s.url !== undefined) local.url = runs(s.url);
+        if (s.target?.href !== undefined) local.target = { ...s.target, href: runs(s.target.href) };
+        return local;
+      }),
+    };
+  }
+
+  /**
+   * What WebMCP tells a page on site about the recording (row W8): the steps on
+   * that site, its own notes included (an agent's note carries the URL of the
+   * page it came from), and nothing about the rest - no panel note, no count of
+   * the whole recording (#17). Null for another op.
+   */
+  function webmcpReply(rec, settings, recordedSite, op) {
     const D = root.OpScribeDescribe || require('./describe.js');
-    const own = rec.steps.filter((s) => (s.url && renderRuns(s.url).startsWith(`${site}/`)) || (!s.url && s.type === 'note'));
+    const { site, steps: own } = localAliases(recordedSite, rec.steps.filter((s) => s.site === recordedSite));
     if (op === 'status') {
-      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length }, rec, settings);
+      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length }, rec, settings);
     }
     if (op === 'reproduction') {
-      const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
+      // No recording id: one id handed to every site would tie them together (W8; review of #37 R4).
+      const scoped = { ...rec, id: undefined, steps: own, startUrl: own[0]?.url };
       const markdown = D.toMarkdown(D.buildReproduction(scoped));
       const gherkin = D.toGherkin(scoped, { envSteps: rec.steps });
       return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings, own);
@@ -304,12 +350,44 @@
    * storage holds, the oldest steps go first, so the newest step is always
    * kept and the recording can always be saved (review R40).
    */
+  /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
+  const reported = (s) => s.source !== 'user';
+  const nextToDrop = (rec) => Math.max(rec.steps.findIndex(reported), 0);
+  // The steps not from the person on one site: the limit is a site's own, so what one page can add
+  // tells it nothing about the other sites (W7, W8; owner decision on #37).
+  const reportedOn = (rec, site) => rec.steps.filter((s) => reported(s) && s.site === site);
+
   function appendStep(rec, step) {
-    if (!step) return;
+    if (!step) return false;
+    // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
+    if (reported(step) && reportedOn(rec, step.site).length >= LIMITS.agentSteps) return false;
+    // At the step limit with only the person's steps, a reported step would go itself: not recorded,
+    // and the recording - its revision too - stays as it was (E4; review of #37 R11).
+    if (reported(step) && rec.steps.length >= LIMITS.steps && !rec.steps.some(reported)) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
-    if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
+    // Past the step limit the steps the page reported go first, oldest first, whoever added the
+    // new one; a reported step with none to give way goes itself. The person's go only after them.
+    while (rec.steps.length > LIMITS.steps) rec.steps.splice(nextToDrop(rec), 1);
     fitRecord(rec);
+    return rec.steps[rec.steps.length - 1] === step;
+  }
+
+  /**
+   * Cleans and adds a step in one go. Cleaning names new sites and counts what it
+   * redacted; a step that is not recorded - not a step, not kept, or past a limit -
+   * leaves both as they were (W7, E4; review of #37 R14).
+   * keep: whether to add the cleaned step at all (a navigation to where the tab already is).
+   * Returns the step when it is recorded, else null.
+   */
+  function addStep(rec, raw, settings, from, keep = () => true) {
+    const aliases = { ...rec.aliases };
+    const redactions = { ...rec.redactions };
+    const step = cleanStep(raw, rec, settings, from);
+    if (step && keep(step) && appendStep(rec, step)) return step;
+    rec.aliases = aliases;
+    rec.redactions = redactions;
+    return null;
   }
 
   /**
@@ -319,6 +397,15 @@
    */
   function fitRecord(rec) {
     if (!rec?.steps) return;
+    // More reported steps on a site than agentSteps (a recording saved before the limit): its oldest go (W7).
+    let changed = false;
+    for (const site of new Set(rec.steps.filter(reported).map((s) => s.site))) {
+      const extra = reportedOn(rec, site).slice(0, -LIMITS.agentSteps);
+      if (!extra.length) continue;
+      rec.steps = rec.steps.filter((s) => !extra.includes(s));
+      changed = true;
+    }
+    if (changed) rec.revision = (rec.revision || 0) + 1;
     // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
     // then each removed step's own size and its comma.
     const json = JSON.stringify(rec);
@@ -326,13 +413,14 @@
     let bytes = new TextEncoder().encode(json).length;
     // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
     // a single step too large for the room is dropped too rather than break the save (review R41).
+    // The steps the page reported go first, oldest first, then the person's (W7, #17).
     const before = rec.steps.length;
-    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.splice(nextToDrop(rec), 1)[0]) + 1;
     // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
     if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, fitRecord, guardReply, webmcpReply };
+  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

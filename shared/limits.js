@@ -33,6 +33,10 @@
     scheme: 16,
     environment: 60,
     steps: 500,
+    // Steps not from a trusted event of the person (source 'agent': WebMCP tool calls and expectations;
+    // 'unknown': the tab's navigations, which a page script can cause too): at most this many
+    // together, so they never push the person's steps out (W7, #17).
+    agentSteps: 100,
     // chrome.storage.session holds 10 MiB for everything the extension keeps there, shared out
     // once here (review R43): the recording (oldest steps go first past it) and the Markdown
     // draft (not kept past it), with 1 MiB to spare.
@@ -200,7 +204,7 @@
     generator: words(['template', 'on-device-ai', 'manual', 'none']),
     type: words(Object.keys(STEP_RULES)),
     env: words(['commercial', 'standard']),
-    source: words(['user', 'agent']),
+    source: words(['user', 'agent', 'unknown']),
     treatment: words(['kept', 'length', 'redacted']),
     field: words(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']),
     // A typed value's kind, and a note's kind (#32).

@@ -111,7 +111,7 @@
       type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
-      source: { type: 'enum', row: 'T6', values: ['user', 'agent'] },
+      source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
       url: opt(URL_VALUE),
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
@@ -407,7 +407,11 @@
     const field = step.value?.field;
     if (step.type === 'upload' && step.value !== undefined && field !== 'file') problems.push({ path: `${path}.value`, problem: 'upload is not a file value' });
     if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
-    if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
+    // Row W7: the source each kind of step has. A note is the page's (agent, with the URL of its page)
+    // or the person's in the side panel (user, with none).
+    const source = step.type === 'navigate' ? 'unknown' : step.type === 'tool' ? 'agent'
+      : step.type === 'note' ? (step.url === undefined ? 'user' : 'agent') : 'user';
+    if (step.source !== source) problems.push({ path: `${path}.source`, problem: `${step.type} step not from ${source}` });
     // The fields each kind of step can hold (I5): a select is a choice (or secret or personal by its names),
     // never free text with the longer limit; an input is never a file (review R31).
     const allowed = { select: ['choice', 'secret', 'pii'], input: ['text', 'search', 'choice', 'secret', 'pii'] }[step.type];

@@ -39,7 +39,7 @@ const good = () => P.buildPayload({
   id: 'rec-recv-1', startedAt: Date.UTC(2026, 9, 31), endedAt: null, startUrl: 'https://site-1.invalid/',
   aliases: {}, redactions: {}, webmcpTools: {},
   steps: [
-    { type: 'navigate', t: 0, env: 'commercial', source: 'user', url: ['https://site-1.invalid/'] },
+    { type: 'navigate', t: 0, env: 'commercial', source: 'unknown', url: ['https://site-1.invalid/'] },
     { type: 'input', t: 5, env: 'commercial', source: 'user', target: { role: 'textbox', name: ['本文'] },
       value: { treatment: 'length', field: 'text', kind: 'text', length: 3 } }
   ]

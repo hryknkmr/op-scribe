@@ -424,7 +424,12 @@
     // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
     // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
     if (Object.keys(aliases).length >= LIMITS.aliases) return null;
-    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
+    // A host of the alias form never gets its own name back ("site-1.invalid" as site-1; review of #37 R8).
+    const host = new URL(origin).hostname;
+    const taken = new Set(Object.values(aliases));
+    let n = Object.keys(aliases).length + 1;
+    while (taken.has(`site-${n}.invalid`) || host === `site-${n}.invalid`) n += 1;
+    aliases[origin] = `site-${n}.invalid`;
     return aliases[origin];
   }
 
@@ -462,7 +467,9 @@
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
-    if (hostAllowed(host, ctx.hostAllowlist)) {
+    // A host of the alias form is always aliased, even when allowed by name: kept, it would read as
+    // the alias of another site, and WebMCP would hand that site's steps to it (U4, W8; owner decision on #37).
+    if (!ALIAS.test(host) && hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
       const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
@@ -513,8 +520,9 @@
 
     const runs = joinRuns(parts);
     // A URL too long to send is redacted as a whole rather than cut (row U1).
-    if ([...renderRuns(runs)].length > LIMITS.url) return { url: whole('long'), kinds: [...kinds, 'url'] };
-    return { url: runs, kinds };
+    // origin: the site as the recording names it (real or alias), also when the URL is redacted whole for its length.
+    if ([...renderRuns(runs)].length > LIMITS.url) return { url: whole('long'), kinds: [...kinds, 'url'], origin };
+    return { url: runs, kinds, origin };
   }
 
   // -------------------------------------------------------------- final gate
@@ -530,7 +538,10 @@
    * x in "box" is not.
    */
   function hostPattern(hosts) {
-    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean)
+    // A real host of the alias form ("site-1.invalid") tells nothing - a made-up name under a TLD that
+    // never resolves - and the same text may be the alias of another site: not looked for (K5; review of #37 R10).
+    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, ''))
+      .filter((h) => h && !/^site-\d+\.invalid$/.test(h))
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
