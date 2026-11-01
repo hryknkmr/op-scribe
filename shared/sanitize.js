@@ -538,7 +538,10 @@
    * x in "box" is not.
    */
   function hostPattern(hosts) {
-    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean)
+    // A real host of the alias form ("site-1.invalid") tells nothing - a made-up name under a TLD that
+    // never resolves - and the same text may be the alias of another site: not looked for (K5; review of #37 R10).
+    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, ''))
+      .filter((h) => h && !/^site-\d+\.invalid$/.test(h))
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }

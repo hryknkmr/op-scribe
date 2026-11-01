@@ -558,3 +558,14 @@ test('a host of the alias form never keeps its own name as its alias (rows U4, K
     assert.notEqual(got, host);
   }
 });
+
+test('a real host of the alias form does not stop the exits for another site\'s alias, in either order (rows U4, K5, W8; review of #37 R10)', () => {
+  for (const order of [['https://other.example.com/a', 'https://site-1.invalid/b'], ['https://site-1.invalid/b', 'https://other.example.com/a']]) {
+    const rec = newRec();
+    const s = { ...settings, keywords: [] };
+    for (const pageUrl of order) rec.steps.push(R.cleanStep({ type: 'click', pageUrl, target: { role: 'button', name: 'OK' } }, rec, s, { tabUrl: pageUrl }));
+    const hosts = new Set(Object.values(rec.aliases));
+    assert.equal(hosts.size, 2, JSON.stringify(rec.aliases));
+    for (const step of rec.steps) assert.equal(R.webmcpReply(rec, s, step.site, 'reproduction').ok, true, `${order} ${step.site}`);
+  }
+});
