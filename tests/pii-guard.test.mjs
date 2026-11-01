@@ -70,6 +70,16 @@ test('ordinary words that contain the prefixes are not secrets', () => {
   assert.equal(guard('scan-staged').status, 0);
 });
 
+test('an address at an IP address or a domain with digits is found (review of #44)', () => {
+  // Documentation addresses only (TEST-NET-1/2/3). Each on its own, so one found cannot hide another missed.
+  for (const domain of [['192', '0', '2', '10'], ['198', '51', '100', '7'], ['203', '0', '113', '25'], ['internal', '1a'], ['1a', 'example', 'net']]) {
+    const { git, guard, write } = repo();
+    write('a.txt', `${['person', domain.join('.')].join('@')}\n`);
+    git('add', '-A');
+    assert.equal(guard('scan-staged').status, 1, domain.join('.'));
+  }
+});
+
 test('a push range with deletions only passes (#11-3)', () => {
   const { git, guard } = repo();
   git('rm', '-q', 'r.txt');
