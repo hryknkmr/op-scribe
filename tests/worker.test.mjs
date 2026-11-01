@@ -18,8 +18,8 @@ function worker() {
   const chrome = {
     storage: {
       session: {
-        get: async (key) => ({ [key]: session[key] }),
-        set: async (items) => { Object.assign(session, items); },
+        get: async (key) => ({ [key]: session[key] === undefined ? undefined : structuredClone(session[key]) }),
+        set: async (items) => { Object.assign(session, structuredClone(items)); },
         remove: async (key) => { delete session[key]; }
       },
       local: { get: async () => ({}), set: noop }
@@ -147,4 +147,31 @@ test('a page the recorder could not reach stays unattached until a recorder says
   assert.equal((await hello()).active, true);
   assert.equal(session.opsRecording.attached, true);
 
+});
+
+test('a site that reports tools before any step keeps its alias, so a later site does not take it', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const from = (url) => ({ tab: { id: 7, url }, url, origin: new URL(url).origin });
+  await send({ from: 'op-scribe/content', type: 'WEBMCP_TOOLS', detail: { names: ['search'] } }, from('https://tools.test/'));
+  await send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'navigate', url: 'https://other.test/' } }, from('https://other.test/'));
+  const rec = session.opsRecording;
+  const toolSite = Object.keys(rec.webmcpTools)[0];
+  assert.equal(`https://${rec.aliases['https://tools.test']}`, toolSite);
+  assert.notEqual(rec.aliases['https://other.test'], rec.aliases['https://tools.test']);
+});
+
+test('tools are held under the site Chrome reports, and sites past the tool limit keep no alias', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const report = (url, detail) => send({ from: 'op-scribe/content', type: 'WEBMCP_TOOLS', detail: { names: ['search'], ...detail } },
+    { tab: { id: 7, url }, url, origin: new URL(url).origin });
+  await report('https://real.test/', { pageUrl: 'https://claimed.test/' });
+  assert.equal(session.opsRecording.aliases['https://claimed.test'], undefined);
+  assert.ok(session.opsRecording.aliases['https://real.test']);
+  for (let i = 0; i < 100; i += 1) await report(`https://s${i}.test/`);
+  assert.equal(Object.keys(session.opsRecording.webmcpTools).length, 50);
+  assert.equal(Object.keys(session.opsRecording.aliases).length, 51);
 });
