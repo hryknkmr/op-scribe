@@ -225,3 +225,29 @@ test('a Background made from a later step says unknown (row W7; review of #37 R8
   const sources = [...D.toGherkin(rec).matchAll(/\| source +\| (\w+) +\|/g)].map((m) => m[1]);
   assert.deepEqual(sources, ['unknown', 'user']);
 });
+
+const shown = (level, text) => ({ type: 'notice', t: 200, env: 'standard', source: 'unknown', url: ['https://a.test/'], level, notice: [text] });
+
+test('a notice is what the page showed, not an expected result', () => {
+  const click = { type: 'click', t: 100, env: 'standard', source: 'user', url: ['https://a.test/'], target: { role: 'button', name: ['保存'] } };
+  const repro = D.buildReproduction({ steps: [click, shown('alert', '保存できません')], startUrl: ['https://a.test/'] });
+  const step = repro.steps.at(-1);
+  assert.equal(step.expected, undefined);
+  assert.deepEqual(step.observed, ['警告: 保存できません']);
+  assert.match(D.toMarkdown(repro), /^ {3}- 画面の表示: 警告: 保存できません$/m);
+});
+
+test('a notice between an operation and its navigation does not hide what caused it', () => {
+  const click = { type: 'click', t: 100, env: 'standard', source: 'user', url: ['https://a.test/'], target: { role: 'button', name: ['保存'] } };
+  const moved = { type: 'navigate', t: 300, env: 'standard', source: 'unknown', url: ['https://a.test/done'] };
+  const rec = { steps: [click, shown('status', '保存しました'), moved], startUrl: ['https://a.test/'] };
+  assert.match(D.buildReproduction(rec).steps.at(-1).expected, /に遷移する/);
+  assert.match(D.toGherkin(rec), /Then 通知「保存しました」が表示される[\s\S]*And "https:\/\/a\.test\/done" に遷移する/);
+});
+
+test('a notice in the Gherkin carries what it showed and its source', () => {
+  const feature = D.toGherkin({ steps: [shown('alert', '失敗 | 再試行')], startUrl: ['https://a.test/'] });
+  assert.match(feature, /\| level +\| alert +\|/);
+  assert.match(feature, /\| notice +\| 失敗 \\\| 再試行 \|/);
+  assert.match(feature, /\| source +\| unknown +\|/);
+});

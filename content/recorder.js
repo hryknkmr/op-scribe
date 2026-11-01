@@ -137,6 +137,74 @@
   function emit(type, extra = {}) {
     lastStep = { type, at: Date.now() };
     send('STEP', { type, pageUrl: location.href, ...extra });
+    // A person's operation only: what a page reports does not open the window (T7).
+    if (type !== 'tool') watchNotices();
+  }
+
+  // ---------------------------------------------------------------- notices
+
+  // Only what the author declared as a notice, only for a moment after an operation, and only
+  // what changed since it (ADR 0003, T7). Nothing is read from a commercial page.
+  const NOTICE = '[role~="status"], [role~="alert"], [aria-live="polite"], [aria-live="assertive"]';
+  const NOTICE_MS = 5000;
+  const NOTICE_SETTLE_MS = 200;
+  const NOTICES_PER_OPERATION = 4;
+  const NOTICE_CHARS = 1000;
+  const SHOWN_BY = ['hidden', 'aria-hidden', 'class', 'style', 'open'];
+  let notices = null;
+
+  const noticeRegions = () => [...document.querySelectorAll(NOTICE)].filter((el) => !el.parentElement?.closest(NOTICE)).slice(0, 50);
+
+  /** The text a region shows, or '' when it is not a notice: a region with a field is a form, and a long one is content. */
+  function noticeText(el) {
+    if (el.closest('[aria-hidden="true"]') || el.isContentEditable) return '';
+    if (el.querySelector('input, textarea, select, [contenteditable]')) return '';
+    if (!el.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return '';
+    const text = String(el.innerText || '').replace(/\s+/g, ' ').trim();
+    return text.length > NOTICE_CHARS ? '' : text;
+  }
+
+  const noticeLevel = (el) => (el.matches('[role~="alert"], [aria-live="assertive"]') ? 'alert' : 'status');
+
+  function readNotices() {
+    const watch = notices;
+    if (!watch || !config || config.commercial) return;
+    for (const el of noticeRegions()) {
+      const text = noticeText(el);
+      if (!text || watch.before.get(el) === text || watch.sent.has(text)) continue;
+      if (watch.sent.size >= NOTICES_PER_OPERATION) return;
+      watch.before.set(el, text);
+      watch.sent.add(text);
+      // Not emit: a notice is not an operation, and lastStep decides what an operation explains.
+      send('STEP', { type: 'notice', pageUrl: location.href, notice: text, level: noticeLevel(el) });
+    }
+  }
+
+  function stopNotices() {
+    if (!notices) return;
+    notices.observer.disconnect();
+    clearTimeout(notices.settle);
+    clearTimeout(notices.end);
+    notices = null;
+  }
+
+  function watchNotices() {
+    if (!config || config.commercial) return;
+    // What the last operation caused so far belongs to it, not to this one.
+    readNotices();
+    stopNotices();
+    const watch = {
+      before: new Map(noticeRegions().map((el) => [el, noticeText(el)])),
+      sent: new Set(),
+      settle: 0,
+      end: setTimeout(() => { readNotices(); stopNotices(); }, NOTICE_MS),
+      observer: new MutationObserver(() => {
+        clearTimeout(watch.settle);
+        watch.settle = setTimeout(readNotices, NOTICE_SETTLE_MS);
+      })
+    };
+    notices = watch;
+    watch.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: SHOWN_BY });
   }
 
   function currentValue(el) {
@@ -263,6 +331,7 @@
       return;
     }
     if (message.type === 'OPS_STOP') {
+      stopNotices();
       config = null;
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
