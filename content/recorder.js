@@ -118,7 +118,10 @@
       label: accessibleName(el),
       // The text of every <label> of the field, apart from its accessible name: an aria-label
       // must not hide a label that says "password" from the classification (I3, I4; review R38).
-      labelText: [...(el.labels || [])].map((l) => l.innerText || l.textContent || '').join(' '),
+      // aria-labelledby too: an aria-label must not hide either (review R42).
+      labelText: [...(el.labels || []),
+        ...String(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => document.getElementById(id)).filter(Boolean)]
+        .map((l) => l.innerText || l.textContent || '').join(' '),
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
       role: el.getAttribute('role'),

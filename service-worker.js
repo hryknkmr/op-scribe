@@ -273,6 +273,8 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
+        // A site past the alias limit is not recorded (K5): neither are its tools.
+        if (site.startsWith('[[')) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).
         if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
         rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)

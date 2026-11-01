@@ -367,3 +367,26 @@ test('the host lists leave out names no host can have, and one step too large fo
   assert.equal(rec.steps.length, 0);
   assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
 });
+
+test('a page past the alias limit is not recorded, and an over-long production list makes every step commercial (K5, E2; review R42)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  for (let i = 0; i < LIMITS.aliases; i += 1) rec.aliases[`https://h${i}.example.com`] = `site-${i + 1}.invalid`;
+  assert.equal(R.cleanStep({ type: 'click', pageUrl: 'https://h500.example.com/', target: { role: 'button', name: 'h500.example.com' } },
+    rec, settings, { tabUrl: 'https://h500.example.com/' }), null);
+  assert.equal(Object.keys(rec.aliases).length, LIMITS.aliases);
+  assert.ok(R.cleanStep({ type: 'click', pageUrl: 'https://h1.example.com/', target: { role: 'button', name: 'x' } }, rec, settings, { tabUrl: 'https://h1.example.com/' }));
+
+  const many = Array.from({ length: LIMITS.hosts + 1 }, (_, i) => `p${i}.example.com`);
+  const policy = R.policyOf({ commercialHosts: many, hostAllowlist: many });
+  assert.equal(policy.commercialHosts.length, LIMITS.hosts);
+  assert.equal(policy.hostAllowlist.length, LIMITS.hosts);
+  assert.equal(policy.allCommercial, true);
+  assert.equal(R.envOf(['https://other.invalid/'], policy), 'commercial');
+});
+
+test('the worker classifies by aria-labelledby text passed as label text (row I3; review R42)', () => {
+  const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { tag: 'input', type: 'text', label: 'Comment', ariaLabel: 'Comment', labelText: 'Password' } }),
+    newRec(), settings, { tabUrl: BETA });
+  assert.equal(step, null);
+});

@@ -439,10 +439,13 @@ test('North American phone numbers are found (K3; review R41)', () => {
   assert.equal(S.scrubText('call 212-555-0123 or (212) 555-0123').text, 'call [[phone]] or [[phone]]');
 });
 
-test('past the alias limit a new host shares one alias and the table stops growing (U4; review R41)', () => {
+test('past the alias limit a new host is redacted whole and marked untracked; the table stops growing (U4, K5; reviews R41, R42)', () => {
   const { LIMITS } = require('../shared/limits.js');
   const aliases = {};
   for (let i = 0; i < LIMITS.aliases; i += 1) S.scrubUrl(`https://h${i}.example.com/`, { aliases });
-  assert.equal(new URL(S.scrubUrl('https://one-more.example.com/', { aliases }).url).host, 'site-overflow.invalid');
+  const r = S.scrubUrl('https://one-more.example.com/', { aliases });
+  assert.equal(r.url, '[[url:invalid]]');
+  assert.equal(r.untracked, true);
   assert.equal(Object.keys(aliases).length, LIMITS.aliases);
+  assert.equal(new URL(S.scrubUrl('https://h3.example.com/x', { aliases }).url).host, 'site-4.invalid', 'known hosts keep theirs');
 });

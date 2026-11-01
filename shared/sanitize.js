@@ -384,8 +384,9 @@
 
   function aliasFor(origin, aliases) {
     if (aliases[origin]) return aliases[origin];
-    // Past the limit a new host shares one alias: still not its name, and the recording stays bounded (U4; review R41).
-    if (Object.keys(aliases).length >= LIMITS.aliases) return 'site-overflow.invalid';
+    // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
+    // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
+    if (Object.keys(aliases).length >= LIMITS.aliases) return null;
     aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
     return aliases[origin];
   }
@@ -419,14 +420,16 @@
     }
 
     const host = parsedHost(url.hostname);
-    const commercial = ctx.env === 'commercial' || hostAllowed(host, ctx.commercialHosts);
+    const commercial = ctx.env === 'commercial' || ctx.allCommercial === true || hostAllowed(host, ctx.commercialHosts);
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
     if (hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
-      origin = `${url.protocol}//${aliasFor(`${url.protocol}//${host}${port}`, aliases)}`;
+      const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
+      if (!alias) return { url: mark('url:invalid'), kinds: ['url', 'host'], untracked: true };
+      origin = `${url.protocol}//${alias}`;
       kinds.push('host');
     }
 

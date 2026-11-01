@@ -32,7 +32,15 @@
    */
   function policyOf(settings) {
     const list = (names) => [...new Set((names || []).map(String))].filter((h) => [...h].length <= LIMITS.host);
-    return { commercialHosts: list(settings.commercialHosts), hostAllowlist: list(settings.hostAllowlist) };
+    const commercial = list(settings.commercialHosts);
+    return {
+      commercialHosts: commercial.slice(0, LIMITS.hosts),
+      // More production hosts than a recording holds (settings saved by an older version):
+      // every step is commercial, the strict side, rather than some production host left out (review R42).
+      allCommercial: commercial.length > LIMITS.hosts,
+      // Fewer allowed names only alias more hosts: cutting this list is the strict side.
+      hostAllowlist: list(settings.hostAllowlist).slice(0, LIMITS.hosts)
+    };
   }
 
   const hostOf = (url) => {
@@ -41,6 +49,7 @@
 
   /** 'commercial' when any of the URLs (top page, frame) is on a listed production host. */
   function envOf(urls, policy) {
+    if (policy.allCommercial) return 'commercial';
     return urls.some((url) => url && hostAllowed(hostOf(url), policy.commercialHosts)) ? 'commercial' : 'standard';
   }
 
@@ -195,7 +204,11 @@
     };
 
     const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: raw.source === 'agent' ? 'agent' : 'user' };
-    if (raw.pageUrl) step.url = url(raw.pageUrl);
+    if (raw.pageUrl) {
+      // A page on a host past the alias limit is not recorded (K5; review R42).
+      if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
+      step.url = url(raw.pageUrl);
+    }
     if (raw.target) {
       const t = raw.target;
       step.target = {};
