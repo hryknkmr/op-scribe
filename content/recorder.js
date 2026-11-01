@@ -150,10 +150,8 @@
   const NOTICE_SETTLE_MS = 200;
   const NOTICES_PER_OPERATION = 4;
   const NOTICE_CHARS = 1000;
-  const SHOWN_BY = ['hidden', 'aria-hidden', 'class', 'style', 'open'];
+  const SHOWN_BY = ['hidden', 'aria-hidden', 'class', 'style', 'open', 'role', 'aria-live'];
   let notices = null;
-
-  const noticeRegions = () => [...document.querySelectorAll(NOTICE)].filter((el) => !el.parentElement?.closest(NOTICE)).slice(0, 50);
 
   /** The text a region shows, or '' when it is not a notice: a region with a field is a form, and a long one is content. */
   function noticeText(el) {
@@ -164,19 +162,25 @@
     return text.length > NOTICE_CHARS ? '' : text;
   }
 
+  /** Each notice once: a region inside one that is read is part of it, and one inside a form region stands alone. */
+  function noticeRegions() {
+    const read = [...document.querySelectorAll(NOTICE)].slice(0, 50).map((el) => [el, noticeText(el)]).filter(([, text]) => text);
+    return read.filter(([el]) => !read.some(([other]) => other !== el && other.contains(el)));
+  }
+
   const noticeLevel = (el) => (el.matches('[role~="alert"], [aria-live="assertive"]') ? 'alert' : 'status');
 
   function readNotices() {
     const watch = notices;
     if (!watch || !config || config.commercial) return;
-    for (const el of noticeRegions()) {
-      const text = noticeText(el);
-      if (!text || watch.before.get(el) === text || watch.sent.has(text)) continue;
+    for (const [el, text] of noticeRegions()) {
+      if (watch.before.get(el) === text || watch.sent.has(text)) continue;
       if (watch.sent.size >= NOTICES_PER_OPERATION) return;
       watch.before.set(el, text);
       watch.sent.add(text);
       // Not emit: a notice is not an operation, and lastStep decides what an operation explains.
-      send('STEP', { type: 'notice', pageUrl: location.href, notice: text, level: noticeLevel(el) });
+      // Masked here, so what the page shows reaches the worker as runs, never as it was written.
+      send('STEP', { type: 'notice', pageUrl: location.href, notice: S.cleanLine(text, { keywords: config.keywords }).runs, level: noticeLevel(el) });
     }
   }
 
@@ -194,7 +198,7 @@
     readNotices();
     stopNotices();
     const watch = {
-      before: new Map(noticeRegions().map((el) => [el, noticeText(el)])),
+      before: new Map(noticeRegions()),
       sent: new Set(),
       settle: 0,
       end: setTimeout(() => { readNotices(); stopNotices(); }, NOTICE_MS),

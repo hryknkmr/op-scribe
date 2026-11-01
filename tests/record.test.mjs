@@ -631,7 +631,7 @@ test('a step that is not recorded leaves the aliases and the redaction counts as
   assert.equal(Object.keys(ok.aliases).length, 1);
 });
 
-const notice = (extra = {}) => ({ type: 'notice', pageUrl: BETA, notice: '保存しました', level: 'status', ...extra });
+const notice = (extra = {}) => ({ type: 'notice', pageUrl: BETA, notice: ['保存しました'], level: 'status', ...extra });
 
 test('a notice is kept as what the page showed, its source unknown (rows T7, W7)', () => {
   const step = R.cleanStep(notice({ level: 'alert', source: 'user' }), newRec(), settings, { tabUrl: BETA });
@@ -641,9 +641,11 @@ test('a notice is kept as what the page showed, its source unknown (rows T7, W7)
 });
 
 test('a notice is masked, one line and cut (row T7)', () => {
-  const step = R.cleanStep(notice({ notice: 'a@example.com に\n送信しました' }), newRec(), settings, { tabUrl: BETA });
-  assert.deepEqual(step.notice.map((p) => p.redacted || p), ['email', ' に 送信しました']);
-  const long = R.cleanStep(notice({ notice: 'あ'.repeat(500) }), newRec(), settings, { tabUrl: BETA });
+  const rec = newRec();
+  const step = R.cleanStep(notice({ notice: [{ redacted: 'email' }, ' に\nb@example.com へ送信しました'] }), rec, settings, { tabUrl: BETA });
+  assert.deepEqual(step.notice.map((p) => p.redacted || p), ['email', ' に ', 'email', ' へ送信しました']);
+  assert.equal(rec.redactions.email, 2);
+  const long = R.cleanStep(notice({ notice: ['あ'.repeat(500)] }), newRec(), settings, { tabUrl: BETA });
   assert.equal([...long.notice[0]].length, LIMITS.notice + 1);
 });
 
@@ -654,14 +656,15 @@ test('no notice comes from a commercial page, whatever the content script sent (
 test('a notice needs a page, a text and a known level, and one naming a real host is not kept (rows T6, T7, K5)', () => {
   const rec = newRec();
   assert.equal(R.cleanStep(notice({ pageUrl: undefined }), rec, settings, { tabUrl: BETA }), null);
-  assert.equal(R.cleanStep(notice({ notice: '   ' }), rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep(notice({ notice: ['   '] }), rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep(notice({ notice: 'not runs' }), rec, settings, { tabUrl: BETA }), null);
   assert.equal(R.cleanStep(notice({ level: 'loud' }), rec, settings, { tabUrl: BETA }), null);
-  assert.equal(R.cleanStep(notice({ notice: `${new URL(BETA).hostname} に保存しました` }), rec, settings, { tabUrl: BETA }), null);
+  assert.equal(R.cleanStep(notice({ notice: [`${new URL(BETA).hostname} に保存しました`] }), rec, settings, { tabUrl: BETA }), null);
 });
 
 test('notices count as what a page reports, so they never push out the person\'s steps (row W7)', () => {
   const rec = newRec();
-  for (let i = 0; i <= LIMITS.agentSteps; i += 1) R.addStep(rec, notice({ notice: `通知 ${i}` }), settings, { tabUrl: BETA });
+  for (let i = 0; i <= LIMITS.agentSteps; i += 1) R.addStep(rec, notice({ notice: [`通知 ${i}`] }), settings, { tabUrl: BETA });
   assert.equal(rec.steps.length, LIMITS.agentSteps);
   assert.ok(R.addStep(rec, { type: 'click', pageUrl: BETA }, settings, { tabUrl: BETA }));
 });

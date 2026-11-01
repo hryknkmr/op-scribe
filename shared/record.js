@@ -266,8 +266,13 @@
       if (NOTE_KINDS.has(raw.kind)) step.kind = raw.kind;
     }
     if (type === 'notice') {
-      step.notice = text(String(raw.notice ?? '').trim(), LIMITS.notice);
+      // Runs (#28), masked in the page and again here; anything else is refused.
+      const runs = scrubRuns(raw.notice, { keywords: settings.keywords, maxLength: LIMITS.notice });
+      if (!runs || !renderRuns(runs).trim()) return null;
+      step.notice = runs.map((p) => (typeof p === 'string' ? oneLine(p) : p));
       if (S.finalScan({ notice: step.notice }, { hosts: knownHosts() }).length) return null;
+      // The content script sends no kinds for a notice: count every masked part it holds (M1).
+      kinds.push(...runKinds(step.notice));
       if (NOTICE_LEVELS.has(raw.level)) step.level = raw.level;
     }
     // Only what this kind of step may carry, and nothing without what it must (row T6).
