@@ -24,7 +24,8 @@ Feature: 記録された操作の再現
 
   Background:
     Given "https://site-1.invalid/" を開いている
-      | url | https://site-1.invalid/ |
+      | url    | https://site-1.invalid/ |
+      | source | unknown |
 
   Scenario: 記録された操作
     When 「ログイン」リンクをクリックする
@@ -35,8 +36,10 @@ Feature: 記録された操作の再現
       | tag      | a |
       | selector | [data-testid="login-link"] |
       | href     | https://site-1.invalid/login |
+      | source   | user |
     Then "https://site-1.invalid/login" に遷移する
-      | url | https://site-1.invalid/login |
+      | url    | https://site-1.invalid/login |
+      | source | unknown |
     When 「メールアドレス」入力欄に ‹メールアドレス› を入力する
       | action   | input |
       | url      | https://site-1.invalid/login |
@@ -44,15 +47,19 @@ Feature: 記録された操作の再現
       | name     | メールアドレス |
       | selector | #email |
       | value    | [[email]] |
+      | source   | user |
     And 「ログインする」ボタンをクリックする
       | action   | click |
       | url      | https://site-1.invalid/login |
       | role     | button |
       | name     | ログインする |
       | selector | form > button |
+      | source   | user |
     Then "https://site-1.invalid/home" に遷移する
-      | url | https://site-1.invalid/home |
+      | url    | https://site-1.invalid/home |
+      | source | unknown |
     And ホーム画面にユーザーメニューが表示される
+      | source | user |
 ```
 
 ### キーワードの割り当て

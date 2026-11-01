@@ -330,7 +330,8 @@
     add('key', step.key);
     add('tool', txt(step.tool));
     if (step.args !== undefined) add('args', displayArgs(step.args));
-    add('source', step.source === 'agent' ? 'agent' : undefined);
+    // Every step says where it came from: the person (user), the page (agent) or either (unknown) (W7).
+    add('source', step.source);
     return rows;
   }
 
@@ -363,7 +364,8 @@
     // [[url:none]]: the payload of a recording whose steps were all deleted.
     if (startUrl && startUrl !== NO_URL) {
       // The step's sentence shows ‹…› like the Markdown; the attribute table keeps [[…]] (E3).
-      out.push('  Background:', `    Given "${humanize(startUrl)}" を開いている`, ...table([['url', startUrl]], '      '), '');
+      out.push('  Background:', `    Given "${humanize(startUrl)}" を開いている`,
+        ...table([['url', startUrl], ...(start?.source ? [['source', start.source]] : [])], '      '), '');
     }
     out.push('  Scenario: 記録された操作');
 
@@ -383,11 +385,12 @@
         continue;
       }
       if (step.type === 'note') {
-        push('Then', line(humanize(txt(step.note))), step.source === 'agent' ? [['source', 'agent']] : null);
+        push('Then', line(humanize(txt(step.note))), step.source ? [['source', step.source]] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
-        if (caused) push('Then', `"${humanize(txt(step.url))}" に遷移する`, [['url', txt(step.url)]]);
-        else push('When', `"${humanize(txt(step.url))}" を開く`, [['action', 'navigate'], ['url', txt(step.url)]]);
+        const source = step.source ? [['source', step.source]] : [];
+        if (caused) push('Then', `"${humanize(txt(step.url))}" に遷移する`, [['url', txt(step.url)], ...source]);
+        else push('When', `"${humanize(txt(step.url))}" を開く`, [['action', 'navigate'], ['url', txt(step.url)], ...source]);
       } else {
         push('When', humanize(describeStep(step)), attributesOf(step));
       }

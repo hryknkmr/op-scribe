@@ -207,3 +207,15 @@ test('in the Gherkin, the sentences show ‹…› and the attribute tables [[�
   assert.ok(sentences.length >= 3 && sentences.every((l) => !l.includes('[[')), sentences.join('\n'));
   assert.ok(cells.some((l) => l.includes('[[id]]')) && cells.some((l) => l.includes('[[url:invalid]]')) && cells.some((l) => l.includes('[[v]]')), cells.join('\n'));
 });
+
+test('every Gherkin step says where it came from: user, agent or unknown (row W7; review of #37 R7)', () => {
+  const rec = { id: 'rec-s', steps: [
+    { type: 'navigate', t: 0, env: 'standard', source: 'unknown', url: ['https://site-1.invalid/'] },
+    { type: 'click', t: 1, env: 'standard', source: 'user', url: ['https://site-1.invalid/'], target: { role: 'button', name: ['OK'] } },
+    { type: 'navigate', t: 2, env: 'standard', source: 'unknown', url: ['https://site-1.invalid/next'] },
+    { type: 'note', t: 3, env: 'standard', source: 'agent', url: ['https://site-1.invalid/next'], note: ['表示される'] },
+    { type: 'navigate', t: 9000, env: 'standard', source: 'unknown', url: ['https://site-1.invalid/last'] }
+  ] };
+  const sources = [...D.toGherkin(rec).matchAll(/\| source +\| (\w+) +\|/g)].map((m) => m[1]);
+  assert.deepEqual(sources, ['unknown', 'user', 'unknown', 'agent', 'unknown']);
+});
