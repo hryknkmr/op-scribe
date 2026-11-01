@@ -430,3 +430,7 @@ test('a keyword is normalized like the text it is matched against (K2, E6; revie
   }
   assert.equal(S.usableKeyword('a\u200B'), false, 'one character once the hidden one is gone');
 });
+
+test('a quoted local part with an escaped quote is one email (K3; review R39)', () => {
+  assert.equal(S.scrubText('"customer-name\\"x"@example.com').text, '[[email]]');
+});

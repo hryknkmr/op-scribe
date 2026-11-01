@@ -75,7 +75,7 @@
     },
     // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
     // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
-    { kind: 'email', re: /(?:"[^"\r\n]{1,64}"|[\w.!#$%&'*+/=?^`{|}~-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
+    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|[\w.!#$%&'*+/=?^`{|}~-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
