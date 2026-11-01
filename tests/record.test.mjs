@@ -357,3 +357,13 @@ test('the largest recording the limits allow still fits the session storage: the
   assert.equal(rec.steps.at(-1).n, LIMITS.steps - 1, 'the newest step is kept');
   assert.ok(rec.steps.length < LIMITS.steps, 'older steps made room');
 });
+
+test('the host lists leave out names no host can have, and one step too large for the room is dropped (E2; review R41)', () => {
+  const policy = R.policyOf({ commercialHosts: ['shop.example.com', 'x'.repeat(300)], hostAllowlist: [] });
+  assert.deepEqual(policy.commercialHosts, ['shop.example.com']);
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  R.appendStep(rec, { type: 'note', t: 0, env: 'standard', source: 'user', note: '\u0001'.repeat(LIMITS.storeBytes / 4) });
+  assert.equal(rec.steps.length, 0);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+});

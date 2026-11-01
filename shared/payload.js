@@ -482,6 +482,10 @@
       }
     };
     walk(payload?.recording, 'recording');
+    // A search box or a choice is kept in either environment (I5, I6): redacted only when the worker had to.
+    (payload?.recording?.steps || []).forEach((step, i) => {
+      if (['search', 'choice'].includes(step.value?.field) && step.value.treatment !== 'kept') bad(`recording.steps[${i}].value`, 'search or choice not kept');
+    });
     // A key the masking made unique ends in -2 .. -argKeys, at its cut length (W5).
     const keys = (node, path) => {
       if (!isObject(node) && !Array.isArray(node)) return;

@@ -25,12 +25,14 @@
   // RegExp#test(undefined) tests the string "undefined".
   const is = (re, value) => typeof value === 'string' && re.test(value);
 
-  /** The recording's fixed host lists, taken from the settings when it started. */
+  /**
+   * The recording's fixed host lists, taken from the settings when it started.
+   * A name longer than a host can be (253) is no host and is left out; the panel
+   * saves at most LIMITS.hosts names a list, so the recording stays bounded (review R41).
+   */
   function policyOf(settings) {
-    return {
-      commercialHosts: [...(settings.commercialHosts || [])],
-      hostAllowlist: [...(settings.hostAllowlist || [])]
-    };
+    const list = (names) => [...new Set((names || []).map(String))].filter((h) => [...h].length <= LIMITS.host);
+    return { commercialHosts: list(settings.commercialHosts), hostAllowlist: list(settings.hostAllowlist) };
   }
 
   const hostOf = (url) => {
@@ -291,7 +293,9 @@
     const json = JSON.stringify(rec);
     if (json.length * 3 <= LIMITS.storeBytes) return;
     let bytes = new TextEncoder().encode(json).length;
-    while (rec.steps.length > 1 && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+    // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
+    // a single step too large for the room is dropped too rather than break the save (review R41).
+    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
   }
 
   const api = { policyOf, envOf, oneLine, cleanStep, appendStep, guardReply, webmcpReply };

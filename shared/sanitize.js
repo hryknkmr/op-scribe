@@ -79,6 +79,8 @@
     { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
+    // North American numbers: 212-555-0123, (212) 555-0123 (review R41).
+    { kind: 'phone', re: /(?<![\d-])\d{3}-\d{3}-\d{4}(?![\d-])|\(\d{3}\) ?\d{3}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g },
     { kind: 'postal', re: /〒\s*\d{3}-?\d{4}|(?<![\d-])\d{3}-\d{4}(?![\d-])/g },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi },
@@ -381,7 +383,10 @@
   }
 
   function aliasFor(origin, aliases) {
-    if (!aliases[origin]) aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
+    if (aliases[origin]) return aliases[origin];
+    // Past the limit a new host shares one alias: still not its name, and the recording stays bounded (U4; review R41).
+    if (Object.keys(aliases).length >= LIMITS.aliases) return 'site-overflow.invalid';
+    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
     return aliases[origin];
   }
 

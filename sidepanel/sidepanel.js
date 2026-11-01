@@ -528,6 +528,12 @@ ui.settingsForm.addEventListener('submit', (event) => {
   }
   // Ask for the endpoint now, while we still hold the click.
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }) : Promise.resolve(true);
+  const tooMany = [form.commercialHosts, form.hostAllowlist].some((f) => lines(f.value).length > LIMITS.hosts
+    || lines(f.value).some((h) => [...h].length > LIMITS.host));
+  if (tooMany) {
+    ui.settingsStatus.textContent = `ホストは 1 つの一覧に ${LIMITS.hosts} 件まで、1 件 ${LIMITS.host} 字までです`;
+    return;
+  }
   const next = {
     commercialHosts: lines(form.commercialHosts.value).map((h) => h.toLowerCase()),
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),

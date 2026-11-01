@@ -550,3 +550,9 @@ test('a deleted start URL never comes back, not even when a later step goes ther
   payload.recording.startUrl = 'https://site-1.invalid/a';
   assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'not the first URL of the steps'));
 });
+
+test('checkCanonical finds a search box or a choice that is not kept (E8, I5, I6; review R41)', () => {
+  const r = clone(rec);
+  r.steps[2].value = typed.redacted('search', 'v');
+  assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'search or choice not kept'));
+});

@@ -434,3 +434,15 @@ test('a keyword is normalized like the text it is matched against (K2, E6; revie
 test('a quoted local part with an escaped quote is one email (K3; review R39)', () => {
   assert.equal(S.scrubText('"customer-name\\"x"@example.com').text, '[[email]]');
 });
+
+test('North American phone numbers are found (K3; review R41)', () => {
+  assert.equal(S.scrubText('call 212-555-0123 or (212) 555-0123').text, 'call [[phone]] or [[phone]]');
+});
+
+test('past the alias limit a new host shares one alias and the table stops growing (U4; review R41)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const aliases = {};
+  for (let i = 0; i < LIMITS.aliases; i += 1) S.scrubUrl(`https://h${i}.example.com/`, { aliases });
+  assert.equal(new URL(S.scrubUrl('https://one-more.example.com/', { aliases }).url).host, 'site-overflow.invalid');
+  assert.equal(Object.keys(aliases).length, LIMITS.aliases);
+});

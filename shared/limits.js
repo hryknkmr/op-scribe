@@ -35,6 +35,10 @@
     steps: 500,
     // The recording as stored (chrome.storage.session holds 10 MB): oldest steps go first past this (review R40).
     storeBytes: 8 * 1024 * 1024,
+    // What a recording holds besides its steps, bounded so the steps always have room (review R41).
+    hosts: 100,
+    host: 253,
+    aliases: 500,
     redactionCount: 1e9
   });
 
