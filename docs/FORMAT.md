@@ -93,7 +93,7 @@ Feature: 記録された操作の再現
 
 再現する側（人・AI）へのルール:
 
-- 要素は `role` + `name` で探し、現在の候補数が `matches` と同じなら `ordinal`（1 始まり）で絞る。候補数が変わった、または見つからない場合は `selector` を使い、なお曖昧なら推測して操作しない（Playwright の `getByRole(...).nth(ordinal - 1)` に対応）。
+- 要素は `role` + `name` で探し、現在の候補数が `matches` と同じなら `ordinal`（1 始まり）で絞る。候補数が変わった、または見つからない場合は `selector` を使い、なお曖昧なら推測して操作しない（Playwright の `getByRole(role, { name, exact: true }).nth(ordinal - 1)` に対応）。名前を伏せた・切り詰めた・空の要素には `ordinal` / `matches` を付けない。
 - `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。`[[text:N]]` は N 文字程度の任意文字列。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 

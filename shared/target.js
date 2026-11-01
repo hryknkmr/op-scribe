@@ -138,14 +138,17 @@
     let operatedCount = 0;
     let ordinal = 0;
     let matches = 0;
+    const late = () => now() - start > LIMITS.targetMs;
+    if (late()) return undefined;
     for (const candidate of candidates) {
+      if (late()) return undefined;
       if (!isOperated(candidate)) continue;
-      if (++operatedCount > LIMITS.targetMatches || now() - start > LIMITS.targetMs) return undefined;
+      if (++operatedCount > LIMITS.targetMatches) return undefined;
       if (implicitRole(candidate) !== role || !exposed(candidate) || accessibleName(candidate, doc) !== name) continue;
       matches += 1;
       if (candidate === el) ordinal = matches;
     }
-    return ordinal && matches ? { ordinal, matches } : undefined;
+    return ordinal && matches && !late() ? { ordinal, matches } : undefined;
   }
 
   const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName, semanticPosition };

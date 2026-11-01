@@ -226,7 +226,10 @@
       if (is(TOKEN, t.role)) step.target.role = t.role;
       if (is(TOKEN, t.tag)) step.target.tag = t.tag;
       if (t.name) step.target.name = text(t.name, LIMITS.name);
-      if (Number.isInteger(t.ordinal) && Number.isInteger(t.matches)
+      // The position counts the page's own name: it holds for the recorded name only when that is the
+      // page's name unchanged - not masked, cut or normalized into one another name may share (T7).
+      const verbatim = step.target.name?.length === 1 && step.target.name[0] === t.name;
+      if (verbatim && Number.isInteger(t.ordinal) && Number.isInteger(t.matches)
         && t.ordinal >= 1 && t.ordinal <= t.matches && t.matches <= LIMITS.targetMatches) {
         step.target.ordinal = t.ordinal;
         step.target.matches = t.matches;

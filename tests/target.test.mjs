@@ -182,6 +182,22 @@ test('semanticPosition counts the limit in operated candidates, not every [role]
   assert.deepEqual(T.semanticPosition(target, doc), { ordinal: 1, matches: 1 });
 });
 
+test('semanticPosition checks its time budget across the whole search, not only operated candidates (#42)', () => {
+  const target = el('button', {}, '保存');
+  // A slow collection of candidates, then many non-operated [role] elements, then the last candidate.
+  let t = 0;
+  const slowDoc = { getElementById: () => null, querySelectorAll: () => { t += 25; return [target]; } };
+  assert.equal(T.semanticPosition(target, slowDoc, () => t), undefined);
+  let u = 0;
+  const headings = Array.from({ length: 10 }, () => el('div', { role: 'heading' }, '見出し'));
+  const doc = { getElementById: () => null, querySelectorAll: () => [...headings, target] };
+  assert.equal(T.semanticPosition(target, doc, () => (u += 1)), undefined);
+  let v = 0;
+  const last = { getElementById: () => null, querySelectorAll: () => [target] };
+  const clock = () => (v += 4);
+  assert.equal(T.semanticPosition(target, last, clock), undefined);
+});
+
 test('semanticPosition gives up when the search outlasts its time budget (#42)', () => {
   const target = el('button', {}, '保存');
   const doc = { getElementById: () => null, querySelectorAll: () => [el('button', {}, '保存'), target] };
