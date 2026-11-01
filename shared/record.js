@@ -295,7 +295,8 @@
       return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length }, rec, settings);
     }
     if (op === 'reproduction') {
-      const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
+      // No recording id: one id handed to every site would tie them together (W8; review of #37 R4).
+      const scoped = { ...rec, id: undefined, steps: own, startUrl: own[0]?.url };
       const markdown = D.toMarkdown(D.buildReproduction(scoped));
       const gherkin = D.toGherkin(scoped, { envSteps: rec.steps });
       return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings, own);

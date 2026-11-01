@@ -506,3 +506,13 @@ test('the exits refuse more reported steps than a recording keeps, and saving tr
   R.fitRecord(rec);
   assert.equal(rec.steps.length, LIMITS.agentSteps);
 });
+
+test('a WebMCP reproduction carries no recording id (row W8; review of #37 R4)', () => {
+  const rec = { ...newRec(), id: 'rec-shared-1' };
+  const s = { ...settings, keywords: [] };
+  const step = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, s, { tabUrl: BETA });
+  rec.steps.push(step);
+  const repro = R.webmcpReply(rec, s, step.site, 'reproduction');
+  assert.equal(repro.ok, true);
+  assert.ok(!JSON.stringify(repro).includes('rec-shared-1'));
+});
