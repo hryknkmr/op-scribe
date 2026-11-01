@@ -25,7 +25,10 @@
   // The worker may be waking up or the page may be navigating; retry briefly.
   const TRANSIENT = /Receiving end does not exist|message port closed/i;
 
-  /** { privacyLevel, keywords } while this tab is being recorded, otherwise null. */
+  /**
+   * { commercial, keywords } while this tab is being recorded, otherwise null.
+   * The worker decides commercial from the sender and checks every value again.
+   */
   let config = null;
   let lastStep = null;
   const committed = new WeakMap();
@@ -52,82 +55,20 @@
 
   // ---------------------------------------------------------------- targets
 
-  const INTERACTIVE = [
-    'a[href]', 'button', 'input', 'select', 'textarea', 'summary', 'label',
-    '[role="button"]', '[role="link"]', '[role="menuitem"]', '[role="menuitemcheckbox"]',
-    '[role="menuitemradio"]', '[role="tab"]', '[role="checkbox"]', '[role="radio"]',
-    '[role="switch"]', '[role="option"]', '[role="combobox"]', '[role="treeitem"]',
-    '[contenteditable=""]', '[contenteditable="true"]'
-  ].join(',');
-  const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'password', 'number',
-    'date', 'datetime-local', 'month', 'week', 'time']);
+  const T = globalThis.OpScribeTarget;
+  const { isTextField, implicitRole } = T;
   const TEST_ATTRS = ['data-testid', 'data-test', 'data-test-id', 'data-qa', 'data-cy'];
   const GENERATED_ID = /\d{3,}|[0-9a-f]{8,}|^:|:$/i;
 
   const asElement = (node) => (node instanceof Element ? node : node?.parentElement || null);
+  // Page content that nobody operates is still a click target, but it is named
+  // only by what its author declared (shared/target.js).
   const resolveTarget = (node) => {
     const el = asElement(node);
-    return el ? el.closest(INTERACTIVE) || el : null;
+    return el ? T.operated(el) || el : null;
   };
-  const isTextField = (el) => (el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has(el.type))
-    || el.tagName === 'TEXTAREA' || el.isContentEditable
-    || ['textbox', 'searchbox'].includes(el.getAttribute('role'));
   const isToggle = (el) => el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio');
-
-  function implicitRole(el) {
-    const explicit = el.getAttribute('role');
-    if (explicit) return explicit.split(/\s+/)[0];
-    const tag = el.tagName.toLowerCase();
-    switch (tag) {
-      case 'a': return el.hasAttribute('href') ? 'link' : 'generic';
-      case 'button':
-      case 'summary': return 'button';
-      case 'select': return el.multiple || el.size > 1 ? 'listbox' : 'combobox';
-      case 'textarea': return 'textbox';
-      case 'img': return 'img';
-      case 'input': {
-        const type = el.type || 'text';
-        if (['button', 'submit', 'reset', 'image'].includes(type)) return 'button';
-        if (type === 'checkbox' || type === 'radio') return type;
-        if (type === 'range') return 'slider';
-        if (type === 'search') return 'searchbox';
-        return 'textbox';
-      }
-      default:
-        if (el.isContentEditable) return 'textbox';
-        if (/^h[1-6]$/.test(tag)) return 'heading';
-        return tag;
-    }
-  }
-
-  const textOf = (el) => (el.innerText ?? el.textContent ?? '').replace(/\s+/g, ' ').trim();
-
-  /**
-   * Approximates the accessible name. Never reads the content of a field the
-   * user types into - that is a value, not a name.
-   */
-  function accessibleName(el) {
-    const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) return aria.trim();
-    const labelledBy = el.getAttribute('aria-labelledby');
-    if (labelledBy) {
-      const text = labelledBy.split(/\s+/).map((id) => document.getElementById(id))
-        .filter(Boolean).map(textOf).join(' ');
-      if (text) return text;
-    }
-    if (el.labels?.length) {
-      const text = [...el.labels].map(textOf).join(' ');
-      if (text) return text;
-    }
-    if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return el.value || el.type;
-    if (el.tagName === 'IMG') return el.alt || '';
-    if (el.matches('input, textarea, select') || isTextField(el) || implicitRole(el) === 'combobox') {
-      return el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('name') || '';
-    }
-    const inner = textOf(el);
-    if (inner) return inner;
-    return el.querySelector('img[alt]')?.alt || el.getAttribute('title') || '';
-  }
+  const accessibleName = (el) => T.accessibleName(el, document);
 
   function selectorFor(el) {
     for (const attr of TEST_ATTRS) {
@@ -158,11 +99,12 @@
     if (!el) return undefined;
     const target = {
       role: implicitRole(el),
-      name: accessibleName(el).slice(0, 200),
+      // Whole: the worker masks first and then cuts, so a keyword across the limit is never left half (K2).
+      name: accessibleName(el),
       tag: el.tagName.toLowerCase(),
       selector: selectorFor(el)
     };
-    if (el.tagName === 'A' && el.href) target.href = el.href;
+    if ((el.tagName === 'A' || el.tagName === 'AREA') && el.href) target.href = el.href;
     return target;
   }
 
@@ -174,11 +116,21 @@
       id: el.id,
       autocomplete: el.getAttribute('autocomplete'),
       label: accessibleName(el),
+      // The text of every <label> of the field, apart from its accessible name: an aria-label
+      // must not hide a label that says "password" from the classification (I3, I4; review R38).
+      // aria-labelledby too: an aria-label must not hide either (review R42).
+      labelText: [...(el.labels || []),
+        ...String(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => document.getElementById(id)).filter(Boolean)]
+        .map((l) => l.innerText || l.textContent || '').join(' '),
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
+      role: el.getAttribute('role'),
+      inSearch: T.inSearch(el),
       contentEditable: el.isContentEditable
     };
   }
+
+  const maskOptions = () => ({ env: config.commercial ? 'commercial' : 'standard', keywords: config.keywords });
 
   // ------------------------------------------------------------------ steps
 
@@ -198,10 +150,13 @@
     const value = currentValue(el);
     if (committed.get(el) === value) return;
     committed.set(el, value);
-    const masked = S.maskFieldValue(value, fieldMeta(el), config);
+    const meta = fieldMeta(el);
+    const masked = S.maskFieldValue(value, meta, maskOptions());
     if (!masked) return;
     emit(el.tagName === 'SELECT' ? 'select' : 'input', {
       target: describe(el),
+      // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
+      field: { ...meta, contentEditable: undefined },
       value: masked.value,
       valueKinds: masked.kinds
     });
@@ -224,8 +179,8 @@
       if (!el) return;
       // Fields and toggles are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
-      if (el.tagName === 'LABEL' && el.control
-          && (isToggle(el.control) || isTextField(el.control) || el.control.tagName === 'SELECT')) return;
+      // A label with a control: the browser forwards the click to the control, which records itself.
+      if (!T.isOperated(el) && el.closest('label')?.control) return;
       emit('click', { target: describe(el) });
     },
 
@@ -235,7 +190,7 @@
       if (isToggle(el)) {
         emit('check', { target: describe(el), checked: el.checked });
       } else if (el.tagName === 'INPUT' && el.type === 'file') {
-        emit('upload', { target: describe(el), value: `[[file:${el.files?.length || 0}]]` });
+        emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
       } else if (el.matches('input, select, textarea')) {
         recordValue(el);
       }
@@ -254,7 +209,8 @@
         if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable) && !modifiers.length) return;
         if (el && isTextField(el)) recordValue(el);
         emit('key', { key: [...modifiers, 'Enter'].join('+'), target: el ? describe(resolveTarget(el)) : undefined });
-      } else if (event.key === 'Escape') {
+      } else if (event.key === 'Escape' && !event.shiftKey && !modifiers.length) {
+        // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
         emit('key', { key: 'Escape' });
       }
     },
@@ -295,7 +251,7 @@
     }
     if (data.type === 'TOOL_CALL') {
       // Arguments come from an agent or the page; mask them like typed input.
-      emit('tool', { tool: String(data.name).slice(0, 80), args: S.maskArgs(data.args, config), ok: data.ok !== false });
+      emit('tool', { tool: String(data.name), args: S.maskArgs(data.args, maskOptions()), ok: data.ok !== false });
     }
   });
 
@@ -307,11 +263,12 @@
     }
   });
 
-  // Settings edited mid-recording apply to the next step, not just the next page.
+  // Keywords added mid-recording apply to the next step. The host lists stay as
+  // they were when the recording started (ADR 0001), so commercial does not change.
   chrome.storage.onChanged.addListener((changes, area) => {
     const next = changes.opsSettings?.newValue;
     if (area !== 'local' || !next || !config) return;
-    config = { privacyLevel: next.privacyLevel, keywords: next.keywords || [] };
+    config = { ...config, keywords: next.keywords || [] };
   });
 
   globalThis.__opScribeRecorder = { hello };

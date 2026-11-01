@@ -1,9 +1,10 @@
 /**
- * op-scribe - turns recorded steps into reproduction steps and the payload.
+ * op-scribe - turns recorded steps into reproduction steps.
  *
  * Two renderings of the same steps: Markdown for people (may be rewritten by
  * the on-device model) and Gherkin + attribute tables for agents (always
- * deterministic).
+ * deterministic, and rebuilt from the recording at every exit). The payload
+ * itself is shaped in shared/payload.js.
  *
  * Deterministic on purpose: this is the fallback when the on-device model is
  * unavailable, the input the model rewrites, and what WebMCP tools return.
@@ -12,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const SCHEMA = 'op-scribe.recording/v1';
+  const { LIMITS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
 
   const LABELS = {
     secret: '秘匿値',
@@ -27,15 +28,97 @@
     postal: '郵便番号',
     ip: 'IPアドレス',
     nested: '値',
-    value: '値'
+    value: '値',
+    masked: '伏せ字',
+    keyword: '伏せ字'
   };
+
+  /**
+   * A typed value (ADR 0003) as text. The only place placeholders are made.
+   *   { treatment: 'length', kind: 'text', length: 12 } → [[text:12]]
+   *   { treatment: 'redacted', kind: 'email' }           → [[email]]
+   */
+  function display(value) {
+    if (!value || typeof value !== 'object') return '';
+    // A typed value that may not exist (TYPED_SCHEMA) is never rendered as what it claims.
+    if (!typedAllowed(value.treatment, value.field, value.kind)) return '[[v]]';
+    switch (value.treatment) {
+      case 'kept': return typeof value.number === 'number' ? String(value.number) : String(value.text ?? '');
+      case 'length': return value.kind === 'text' ? `[[text:${value.length}]]` : `[[${value.kind}]]`;
+      case 'redacted': return value.kind === 'file' ? `[[file:${value.count ?? 0}]]` : `[[${value.kind}]]`;
+      default: return '[[v]]';
+    }
+  }
+
+  const isTyped = (node) => Boolean(node && typeof node === 'object' && typeof node.treatment === 'string');
+
+  /** WebMCP arguments with each typed leaf rendered: kept numbers stay numbers. */
+  function displayArgs(node) {
+    if (node === null || typeof node !== 'object') return node;
+    // Each string is one line before JSON.stringify, which would write a line break as "\n" (E7).
+    if (isTyped(node)) return node.treatment === 'kept' && typeof node.number === 'number' ? node.number : line(display(node));
+    if (Array.isArray(node)) return node.map(displayArgs);
+    return Object.fromEntries(Object.entries(node).map(([k, v]) => [k, displayArgs(v)]));
+  }
+
+  /** Every typed value in a step: the input value and each WebMCP argument. */
+  function typedValues(step) {
+    const out = [];
+    const walk = (node) => {
+      if (isTyped(node)) out.push(node);
+      else if (node && typeof node === 'object') Object.values(node).forEach(walk);
+    };
+    walk(step.value);
+    walk(step.args);
+    return out;
+  }
+
+  /**
+   * Where the recording starts, from the steps it still has: the URL of the
+   * first step that has one, or [[url:none]]. Never the recorded start URL by
+   * itself: a deleted first navigation must not come back, not even when a
+   * later step goes to the same URL (#16; review R34).
+   * The Markdown, the Gherkin, the payload and the model input all use this.
+   */
+  function startUrlOf(rec) {
+    return (rec?.steps || []).find((s) => s.url)?.url || '[[url:none]]';
+  }
+
+  /**
+   * A note written in the side panel has no URL and no page to belong to. It is
+   * commercial while the recording has any commercial step (ADR 0001), decided
+   * again whenever the payload is built, since steps come and go after it.
+   */
+  const isPanelNote = (step) => step.type === 'note' && !step.url && step.source !== 'agent';
+
+  function panelNoteEnv(steps) {
+    return (steps || []).some((s) => !isPanelNote(s) && s.env === 'commercial') ? 'commercial' : 'standard';
+  }
+
+  /**
+   * The steps with every panel note's environment decided again from the
+   * recording (all: its whole step list, when steps is a part of it), so each
+   * output reads one environment for the same recording (review R36).
+   */
+  function withPanelNoteEnv(steps, all = steps) {
+    const env = panelNoteEnv(all);
+    return (steps || []).map((s) => (isPanelNote(s) && s.env !== env ? { ...s, env } : s));
+  }
+
+  /** commercial | standard | mixed | none, from the environment of each step. */
+  function coverageOf(steps) {
+    const envs = new Set((steps || []).map((s) => s.env));
+    if (!envs.size) return 'none';
+    if (envs.size > 1) return 'mixed';
+    return envs.has('commercial') ? 'commercial' : 'standard';
+  }
 
   /** [[text:12]] → ‹任意の文字列 12文字›, [[email]] → ‹メールアドレス› */
   function humanize(text) {
     return String(text ?? '').replace(/\[\[([a-z]+)(?::([\w-]+))?\]\]/gi, (match, kind, arg) => {
       if (kind === 'text') return `‹任意の文字列 ${arg}文字›`;
       if (kind === 'file') return `‹ファイル ${arg}件›`;
-      if (kind === 'url') return `‹${arg} ページ›`;
+      if (kind === 'url') return ['invalid', 'none', 'long'].includes(arg) ? '‹URL›' : `‹${arg} ページ›`;
       return `‹${LABELS[kind] || kind}›`;
     });
   }
@@ -64,33 +147,48 @@
     return noun || '要素';
   }
 
+  /**
+   * Everything rendered as a step, heading or list item is one line (#18): a
+   * line break from the page, a kept textarea value or the model would
+   * otherwise start a new Gherkin step or Markdown item.
+   */
+  // Zero-width and bidi controls hide or reorder text for the reader (E7): never rendered.
+  const HIDDEN = new RegExp(HIDDEN_CHARS, 'gu');
+  const line = (text) => String(text ?? '').replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
 
   /** One step as one Japanese sentence. Placeholders stay raw; call humanize() to display. */
   function describeStep(step) {
+    return line(sentenceOf(step));
+  }
+
+  function sentenceOf(step) {
     switch (step.type) {
       case 'navigate':
         return `${step.url} を開く`;
       case 'click':
         return `${targetText(step.target)}をクリックする`;
       case 'input':
-        return step.value === ''
+        return display(step.value) === '' || (step.value?.treatment === 'length' && step.value.length === 0)
           ? `${targetText(step.target)}を空にする`
-          : `${targetText(step.target)}に ${quote(step.value)} を入力する`;
+          : `${targetText(step.target)}に ${quote(display(step.value))} を入力する`;
       case 'select':
-        return `${targetText(step.target)}で ${quote(step.value)} を選択する`;
+        return `${targetText(step.target)}で ${quote(display(step.value))} を選択する`;
       case 'check':
         return step.checked
           ? `${targetText(step.target)}をオンにする`
           : `${targetText(step.target)}をオフにする`;
       case 'upload':
-        return `${targetText(step.target)}に ${step.value} をアップロードする`;
+        return `${targetText(step.target)}に ${display(step.value)} をアップロードする`;
       case 'key':
         return step.target ? `${targetText(step.target)}で ${step.key} キーを押す` : `${step.key} キーを押す`;
       case 'submit':
         return 'フォームを送信する';
       case 'tool': {
-        const args = step.args && typeof step.args === 'object' ? JSON.stringify(step.args) : '';
+        const json = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
+        // The sentence shows the arguments up to argsInSentence; the Gherkin table keeps them all.
+        const args = [...json].length > LIMITS.argsInSentence ? `${[...json].slice(0, LIMITS.argsInSentence).join('')}…` : json;
         return `WebMCP ツール「${step.tool}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':
@@ -135,17 +233,22 @@
       previous = step;
     }
 
-    const first = steps.find((s) => s.url)?.url || rec?.startUrl;
-    if (rec?.startUrl && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
-      out.unshift({ action: `${rec.startUrl} を開く` });
+    const startUrl = startUrlOf(rec);
+    const first = steps.find((s) => s.url)?.url;
+    if (startUrl !== '[[url:none]]' && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
+      out.unshift({ action: `${startUrl} を開く` });
     }
 
     const preconditions = [];
-    if (first) preconditions.push(`${new URL(first).origin} にアクセスできる状態であること`);
-    if (steps.some((s) => /\[\[(?:secret|email|phone|card|personal)\]\]/.test(JSON.stringify(s)))) {
+    // A URL that could not be parsed was recorded as [[url:invalid]].
+    let origin = '';
+    try { origin = first ? new URL(first).origin : ''; } catch { /* no origin to show */ }
+    if (origin) preconditions.push(`${origin} にアクセスできる状態であること`);
+    const values = steps.flatMap(typedValues);
+    if (values.some((v) => v.field === 'secret' || v.field === 'pii')) {
       preconditions.push('‹…› で伏せた値（ログイン情報など）はテスト用の値を用意して入力すること');
     }
-    if (steps.some((s) => /\[\[text:/.test(JSON.stringify(s)))) {
+    if (values.some((v) => v.treatment === 'length' && v.kind === 'text')) {
       notes.push('‹任意の文字列 N文字› は記録時の入力を伏せたもの。再現時は同じ程度の長さの値を使う');
     }
     if (steps.some((s) => s.url && /\.invalid\b/.test(s.url))) {
@@ -161,22 +264,24 @@
   }
 
   function toMarkdown(repro) {
-    const lines = [`# ${repro.title}`, ''];
+    const lines = [`# ${line(repro.title)}`, ''];
     if (repro.preconditions?.length) {
-      lines.push('## 前提条件', ...repro.preconditions.map((p) => `- ${p}`), '');
+      lines.push('## 前提条件', ...repro.preconditions.map((p) => `- ${line(p)}`), '');
     }
     lines.push('## 手順');
     (repro.steps || []).forEach((step, i) => {
-      lines.push(`${i + 1}. ${step.action}`);
-      if (step.expected) lines.push(`   - 期待結果: ${step.expected}`);
+      lines.push(`${i + 1}. ${line(step.action)}`);
+      if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
     });
-    if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${n}`));
-    return `${lines.join('\n')}\n`;
+    if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${line(n)}`));
+    // Every line one line, whatever field it came from (E7; review R27).
+    return `${lines.map(line).join('\n')}\n`;
   }
 
   // ------------------------------------------------------------ Gherkin + α
 
-  const cell = (value) => String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, '\\n');
+  const cell = (value) => String(value).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n/g, '\\n')
+    .replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, ' ');
 
   /**
    * Attributes an agent needs to find the same element and screen again.
@@ -197,11 +302,11 @@
       add('selector', step.target.selector);
       add('href', step.target.href);
     }
-    add('value', step.value);
+    if (step.value !== undefined) add('value', display(step.value));
     add('checked', step.checked);
     add('key', step.key);
     add('tool', step.tool);
-    add('args', step.args);
+    if (step.args !== undefined) add('args', displayArgs(step.args));
     add('source', step.source === 'agent' ? 'agent' : undefined);
     return rows;
   }
@@ -218,20 +323,22 @@
    *   When   - each operation, with its attribute table
    *   Then   - navigation it caused, and notes / expected results
    */
-  function toGherkin(rec) {
+  function toGherkin(rec, { envSteps } = {}) {
     const steps = rec?.steps || [];
+    const coverage = coverageOf(withPanelNoteEnv(steps, envSteps || steps));
     const out = [
       '# op-scribe: Gherkin + attributes',
-      `# recording: ${rec?.id || 'unknown'} / privacy: ${rec?.privacyLevel || 'strict'}`,
+      `# recording: ${rec?.id || 'unknown'} / environments: ${coverage}`,
       '# ‹…› and [[…]] are masked values: supply test values, never guess the original.',
       '# site-N.invalid is an alias for a host that is not disclosed.',
-      `@op-scribe @privacy-${rec?.privacyLevel || 'strict'}`,
+      `@op-scribe @env-${coverage}`,
       'Feature: 記録された操作の再現',
       ''
     ];
     const start = steps[0]?.type === 'navigate' ? steps[0] : null;
-    const startUrl = start?.url || rec?.startUrl;
-    if (startUrl) {
+    const startUrl = start?.url || startUrlOf(rec);
+    // [[url:none]]: the payload of a recording whose steps were all deleted.
+    if (startUrl && startUrl !== '[[url:none]]') {
       out.push('  Background:', `    Given "${startUrl}" を開いている`, ...table([['url', startUrl]], '      '), '');
     }
     out.push('  Scenario: 記録された操作');
@@ -248,7 +355,7 @@
     for (const step of steps) {
       if (step === start) { previous = step; continue; }
       if (step.type === 'note') {
-        push('Then', humanize(step.note), step.source === 'agent' ? [['source', 'agent']] : null);
+        push('Then', line(humanize(step.note)), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
         if (caused) push('Then', `"${step.url}" に遷移する`, [['url', step.url]]);
@@ -259,54 +366,11 @@
       previous = step;
     }
     if (!steps.length || (steps.length === 1 && start)) out.push('    # (操作はまだ記録されていません)');
-    return `${out.join('\n')}\n`;
+    // Every line one line, whatever field it came from: a URL, an argument key or a value (E7; review R27).
+    return `${out.map(line).join('\n')}\n`;
   }
 
-  const STEP_FIELDS = ['type', 't', 'url', 'value', 'checked', 'key', 'tool', 'args', 'ok', 'note', 'source'];
-  const TARGET_FIELDS = ['role', 'name', 'tag', 'selector', 'href'];
-
-  const pick = (obj, fields) => {
-    const out = {};
-    for (const f of fields) if (obj[f] !== undefined) out[f] = obj[f];
-    return out;
-  };
-
-  /**
-   * The exact object that is previewed and sent. Built by allowlisting fields
-   * so local-only state (tab id, real-origin alias map, granted origins) can
-   * never ride along by accident.
-   */
-  function buildPayload(rec, reproduction, environment) {
-    return {
-      schema: SCHEMA,
-      recording: {
-        id: rec.id,
-        startedAt: new Date(rec.startedAt).toISOString(),
-        endedAt: rec.endedAt ? new Date(rec.endedAt).toISOString() : null,
-        startUrl: rec.startUrl,
-        privacy: {
-          level: rec.privacyLevel,
-          hostsAliased: Object.keys(rec.aliases || {}).length,
-          redactions: { ...(rec.redactions || {}) }
-        },
-        environment: pick(environment || {}, ['browser', 'platform', 'language']),
-        steps: (rec.steps || []).map((step, i) => {
-          const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
-          if (step.target) out.target = pick(step.target, TARGET_FIELDS);
-          return out;
-        }),
-        webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site, tools }))
-      },
-      reproduction: {
-        generator: reproduction?.generator || 'none',
-        markdown: reproduction?.markdown || '',
-        gherkin: reproduction?.gherkin || toGherkin(rec)
-      },
-      sentAt: new Date().toISOString()
-    };
-  }
-
-  const api = { SCHEMA, humanize, describeStep, buildReproduction, toMarkdown, toGherkin, buildPayload };
+  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

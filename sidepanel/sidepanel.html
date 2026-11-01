@@ -16,9 +16,17 @@
       <summary>記録 <span id="rec-state" class="pill">停止中</span></summary>
       <div class="body">
         <p class="hint">
-          開始すると、このタブのサイトに対する記録許可を求めます。入力値は既定で文字数だけを残し、
+          開始すると、このタブのサイトに対する記録許可を求めます。「商用環境のホスト」での自由入力は文字数だけを残し、
           記録データはブラウザを閉じると消えます。
         </p>
+        <div id="policy-notice" class="callout" hidden>
+          <p>
+            入力値の扱いが変わりました。自由入力は「商用環境のホスト」に登録したホストでだけ文字数だけになり、
+            それ以外のホストでは入力した文字を（個人情報らしい部分を伏せて）残します。
+            本番のホストを「プライバシーと送信先」で登録してください。
+          </p>
+          <button id="policy-notice-ok" type="button" class="secondary">確認した</button>
+        </div>
         <div class="row">
           <button id="rec-start" type="button">記録開始</button>
           <button id="rec-stop" type="button" class="secondary" disabled>停止</button>
@@ -57,8 +65,8 @@
             placeholder="生成した再現手順がここに入ります。送信前に自由に編集できます。"></textarea>
         </label>
         <label class="field">
-          <span>Gherkin + 属性表（AI・自動化向け。記録から機械的に生成）</span>
-          <textarea id="gherkin" rows="14" spellcheck="false"
+          <span>Gherkin + 属性表（AI・自動化向け。記録から機械的に生成し、編集はできません）</span>
+          <textarea id="gherkin" rows="14" spellcheck="false" readonly
             placeholder="Feature / Scenario 形式。各ステップの下に画面 URL や対象要素の属性表が付きます。"></textarea>
         </label>
       </div>
@@ -85,11 +93,15 @@
       <div class="body">
         <form id="settings-form" class="settings">
           <p class="hint">ここでの設定はこのブラウザ内（chrome.storage.local）にだけ保存されます。</p>
-          <fieldset>
-            <legend>入力値の扱い</legend>
-            <label><input type="radio" name="privacyLevel" value="strict"> 厳格: 自由入力は文字数だけ残す（推奨）</label>
-            <label><input type="radio" name="privacyLevel" value="balanced"> 標準: 自由入力も残し、個人情報らしい部分を伏せる</label>
-          </fieldset>
+          <label class="field">
+            <span>商用環境のホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
+            <textarea name="commercialHosts" rows="3" placeholder="www.example.com"></textarea>
+            <small>
+              ここでの自由入力は文字数だけを残し、URL のクエリ値とフラグメントも伏せます。
+              ここに無いホスト（検証環境など）では、入力した文字を個人情報らしい部分を伏せて残します。
+              記録の途中で変えた場合は、次の記録から効きます。
+            </small>
+          </label>
           <label class="field">
             <span>実名で記録してよいホスト（1 行 1 件、<code>*.example.com</code> 可）</span>
             <textarea name="hostAllowlist" rows="3" placeholder="example.com"></textarea>
@@ -130,8 +142,10 @@
     </form>
   </dialog>
 
+  <script src="../shared/limits.js"></script>
   <script src="../shared/sanitize.js"></script>
   <script src="../shared/describe.js"></script>
+  <script src="../shared/payload.js"></script>
   <script src="sidepanel.js" type="module"></script>
 </body>
 </html>

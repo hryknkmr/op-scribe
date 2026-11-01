@@ -6,24 +6,35 @@
  * browser closes, so nothing recorded is written to disk unless the user
  * downloads or sends it.
  *
- * Every step is sanitized again here, whatever the content script already
- * did: URLs are aliased, user keywords masked, and redactions counted.
+ * Every step is sanitized again here (shared/record.js), whatever the content
+ * script already did: the environment is decided again from the sender,
+ * typed values are checked, URLs are aliased, user keywords masked, and
+ * redactions counted.
  */
-importScripts('shared/sanitize.js', 'shared/describe.js');
+importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
-const { scrubText, scrubUrl, defaults } = self.OpScribeSanitize;
-const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
+const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
+const { LIMITS } = self.OpScribeLimits;
+const { policyOf, envOf, cleanStep, appendStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
+const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
-const MAX_STEPS = 500;
 
-chrome.runtime.onInstalled.addListener(async () => {
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (error) {
     console.warn('[op-scribe] setPanelBehavior failed', error);
+  }
+  // Earlier versions were strict everywhere by default. Free text is now kept
+  // outside the listed production hosts (ADR 0001), so tell those users once.
+  if (reason === 'update') {
+    const stored = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
+    if (!stored?.commercialHosts?.length && stored?.privacyLevel !== 'balanced') {
+      await chrome.storage.local.set({ [NOTICE_KEY]: 'commercial-hosts' });
+    }
   }
 });
 
@@ -51,7 +62,12 @@ function mutate(fn) {
   const run = queue.then(async () => {
     const rec = await getRecording();
     const result = await fn(rec);
-    if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
+    // Every save fits the recording's share first (fitRecord); one that still fails is an error
+    // to the caller, never a step that silently went missing (reviews R40, R43).
+    if (result?.save) {
+      fitRecord(result.save);
+      await chrome.storage.session.set({ [REC_KEY]: result.save });
+    }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
     return result?.reply;
@@ -81,7 +97,7 @@ async function syncContentScripts(patterns) {
     {
       id: SCRIPT_IDS.recorder,
       matches: patterns,
-      js: ['shared/sanitize.js', 'content/recorder.js'],
+      js: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'],
       runAt: 'document_start',
       persistAcrossSessions: false
     },
@@ -99,7 +115,7 @@ async function syncContentScripts(patterns) {
 /** Registered scripts only reach future navigations; the open page needs a direct injection. */
 async function injectNow(tabId) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/sanitize.js', 'content/recorder.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
   } catch (error) {
     console.warn('[op-scribe] inject failed', error);
@@ -118,65 +134,10 @@ function newId() {
   return `rec-${Date.now().toString(36)}-${[...random].map((b) => b.toString(36)).join('')}`;
 }
 
-function bump(rec, kinds) {
-  for (const kind of kinds) rec.redactions[kind] = (rec.redactions[kind] || 0) + 1;
-}
-
-function cleanStep(raw, rec, settings) {
-  const ctx = {
-    hostAllowlist: settings.hostAllowlist,
-    aliases: rec.aliases,
-    privacyLevel: settings.privacyLevel,
-    keywords: settings.keywords
-  };
-  const kinds = [];
-  const text = (value, maxLength) => {
-    const r = scrubText(value, { keywords: settings.keywords, maxLength });
-    kinds.push(...r.kinds);
-    return r.text;
-  };
-  const url = (value) => {
-    const r = scrubUrl(value, ctx);
-    kinds.push(...r.kinds.filter((k) => k !== 'host'));
-    return r.url;
-  };
-
-  const step = { type: String(raw.type).slice(0, 16), t: Math.max(0, Date.now() - rec.startedAt), source: raw.source || 'user' };
-  if (raw.pageUrl) step.url = url(raw.pageUrl);
-  if (raw.target) {
-    const t = raw.target;
-    step.target = { role: text(t.role, 24), tag: text(t.tag, 16) };
-    const nameMax = settings.privacyLevel === 'strict' ? 40 : 80;
-    if (t.name) step.target.name = text(t.name, nameMax);
-    // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
-    if (t.selector) {
-      const r = scrubText(t.selector, { keywords: settings.keywords });
-      if (!r.kinds.length) step.target.selector = r.text.slice(0, 160);
-    }
-    if (t.href) step.target.href = url(t.href);
-  }
-  if (raw.value !== undefined) step.value = text(raw.value, 200);
-  if (raw.checked !== undefined) step.checked = Boolean(raw.checked);
-  if (raw.key) step.key = text(raw.key, 24);
-  if (raw.tool) {
-    step.tool = text(raw.tool, 80);
-    step.ok = raw.ok !== false;
-    step.source = 'agent';
-    if (raw.args && typeof raw.args === 'object') {
-      const r = scrubText(JSON.stringify(raw.args), { keywords: settings.keywords });
-      kinds.push(...r.kinds);
-      try { step.args = JSON.parse(r.text); } catch { step.args = { masked: '[[value]]' }; }
-    }
-  }
-  if (raw.note) step.note = text(raw.note, 300);
-  bump(rec, [...kinds, ...(raw.valueKinds || [])]);
-  return step;
-}
-
-function appendStep(rec, step) {
-  rec.steps.push(step);
-  if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
-}
+/**
+ * Every change to the steps bumps the revision, so the panel can tell that a
+ * reproduction it generated earlier no longer matches the recording (#16).
+ */
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
 
@@ -185,8 +146,9 @@ const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId =
 async function start({ tabId, url }) {
   const settings = await getSettings();
   const pattern = originPattern(url);
+  // Outside mutate, so this is the reply itself, not a { reply } for mutate to unwrap.
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
-    return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
+    return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
     if (previous?.state === 'recording') await stopTab(previous);
@@ -196,15 +158,18 @@ async function start({ tabId, url }) {
       tabId,
       startedAt: Date.now(),
       endedAt: null,
-      privacyLevel: settings.privacyLevel,
+      revision: 0,
+      // Host lists are fixed for the whole recording; keywords apply as soon as they are added.
+      policy: policyOf(settings),
       aliases: {},
       grantedPatterns: [pattern],
       redactions: {},
       webmcpTools: {},
       steps: []
     };
-    rec.startUrl = scrubUrl(url, { ...settings, aliases: rec.aliases }).url;
-    appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings));
+    const env = envOf([url], rec.policy);
+    rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
+    appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
     await syncContentScripts(rec.grantedPatterns);
     await injectNow(tabId);
     await setBadge(true);
@@ -234,7 +199,11 @@ const addPattern = (url) => mutate(async (rec) => {
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
   }
-  if (!rec.grantedPatterns.includes(pattern)) rec.grantedPatterns.push(pattern);
+  if (!rec.grantedPatterns.includes(pattern)) {
+    // As many sites as the alias table holds, no more (E2; review R43).
+    if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
+    rec.grantedPatterns.push(pattern);
+  }
   await syncContentScripts(rec.grantedPatterns);
   await injectNow(rec.tabId);
   return { save: rec, reply: { ok: true } };
@@ -242,7 +211,7 @@ const addPattern = (url) => mutate(async (rec) => {
 
 /** Origin as it appears in the recording (real if allowlisted, otherwise its alias). */
 function siteOf(rec, settings, origin) {
-  const { url } = scrubUrl(`${origin}/`, { ...settings, aliases: { ...rec.aliases } });
+  const { url } = scrubUrl(`${origin}/`, { ...rec.policy, keywords: settings.keywords, aliases: { ...rec.aliases } });
   try { return new URL(url).origin; } catch { return url; }
 }
 
@@ -250,28 +219,22 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
-  // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
-
-  if (op === 'status') {
-    return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
-  }
-  if (op === 'reproduction') {
-    const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    return {
-      reply: { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) }
-    };
-  }
+  // Steps on other sites are never handed to this page; every answer goes through the final scan (W8, E6).
+  const answer = webmcpReply(rec, settings, site, op);
+  if (answer) return { reply: answer };
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings));
-    return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
+    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, fromOf(sender)));
+    return { save: rec, reply: guardReply({ ok: true, added: rec.steps[rec.steps.length - 1].note }, rec, settings) };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
 }
 
 // ------------------------------------------------------------------ messages
+
+/** Where a content script message came from, as Chrome reports it (not as the page claims). */
+const fromOf = (sender) => ({ tabUrl: sender.tab?.url, frameUrl: sender.url });
 
 async function handle(message, sender) {
   const { type, detail = {} } = message;
@@ -288,6 +251,7 @@ async function handle(message, sender) {
       case 'DELETE_STEP': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false } };
         rec.steps.splice(Number(detail.index), 1);
+        rec.revision = (rec.revision || 0) + 1;
         return { save: rec, reply: { ok: true } };
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
@@ -305,18 +269,24 @@ async function handle(message, sender) {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
       const settings = await getSettings();
-      return { active: true, config: { privacyLevel: settings.privacyLevel, keywords: settings.keywords } };
+      const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
+      return { active: true, config: { commercial, keywords: settings.keywords } };
     }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        appendStep(rec, cleanStep(detail, rec, settings));
+        appendStep(rec, cleanStep(detail, rec, settings, fromOf(sender)));
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
-        rec.webmcpTools[site] = (detail.names || []).map((n) => scrubText(n, { keywords: settings.keywords, maxLength: 80 }).text);
+        // A site past the alias limit is not recorded (K5): neither are its tools.
+        if (site.startsWith('[[')) return { reply: { ok: true } };
+        // The payload holds tools for at most toolList sites (row W6).
+        if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
+        rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
+          .map((n) => cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);
@@ -345,7 +315,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
-    const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings);
+    const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings, { tabUrl: changeInfo.url });
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
     if (last?.url === step.url && rec.steps[rec.steps.length - 1] === last) return null;
     appendStep(rec, step);

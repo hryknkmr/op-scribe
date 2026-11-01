@@ -18,9 +18,10 @@ AI エージェント向けの作業ルール。人向けの説明は README.md�
 
 - 入力値は `content/recorder.js` 内で `maskFieldValue` を通してから拡張へ渡す（生の値をページ外に出さない）。
 - service worker は届いたステップを必ず `cleanStep` で再サニタイズする。
-- 送信ペイロードは `buildPayload` の許可リストで組み立てる。ブラウザ内専用の状態（タブ ID、実ホスト対応表）を足さない。
-- 送信・コピー・保存のすべての出口で `finalScan` を通し、検出があれば止める。
+- 送信ペイロードの形は `shared/payload.js` の `SHAPE` だけで定義し、`buildPayload` はその許可リストで組み立てる。ブラウザ内専用の状態（タブ ID、実ホスト対応表、商用ホストの一覧）を足さない。欄を足すときは、先に `docs/adr/0003` の表に行を足す。
+- 送信・コピー・保存のすべての出口と受信サーバで、`checkPayload`（構造の検査）と `finalScan`（できる限りの検出）の両方を通し、どちらかで検出があれば止める。`checkPayload` は `shared/sanitize.js` を使わない。
+- 入力値と WebMCP の引数は型の付いた値（`{ treatment, field, … }`）で持ち、`[[…]]` にするのは `shared/describe.js` の描画だけ。
 - Gherkin は記録から決定的に生成する。AI の出力から作らない。
 - オンデバイス AI の出力は `validate` を通らなければ採用しない。
 
-フィルタを変えたら `tests/sanitize.test.mjs` にケースを足し、`pnpm test` と `pnpm guard` を通すこと。
+フィルタを変えたら `tests/sanitize.test.mjs`（worker 側は `tests/record.test.mjs`、送信データは `tests/payload.test.mjs`）にケースを足し、`pnpm test` と `pnpm guard` を通すこと。

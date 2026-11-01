@@ -5,7 +5,7 @@
 | 表現 | 読み手 | 生成方法 | 編集 |
 | --- | --- | --- | --- |
 | 簡易手順（Markdown） | 人 | テンプレート、またはオンデバイス AI で整形 | 可 |
-| Gherkin + 属性表 | AI エージェント・自動化 | 記録から機械的に生成（AI を通さない） | 可 |
+| Gherkin + 属性表 | AI エージェント・自動化 | 記録から機械的に生成（AI を通さない）。送信・コピー・保存のたびに作り直す | 不可 |
 | steps（JSON） | プログラム | 記録そのもの | 不可（操作ログで削除のみ） |
 
 ## Gherkin + 属性表
@@ -16,10 +16,10 @@
 
 ```gherkin
 # op-scribe: Gherkin + attributes
-# recording: rec-mgx0abcd-1a2b3c / privacy: strict
+# recording: rec-mgx0abcd-1a2b3c / environments: commercial
 # ‹…› and [[…]] are masked values: supply test values, never guess the original.
 # site-N.invalid is an alias for a host that is not disclosed.
-@op-scribe @privacy-strict
+@op-scribe @env-commercial
 Feature: 記録された操作の再現
 
   Background:
@@ -73,11 +73,11 @@ Feature: 記録された操作の再現
 | `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
 | `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/:id` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
-| `name` | 対象要素のアクセシブルネーム（伏せ済み・厳格モードは 40 字まで） | `ログインする` |
+| `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
 | `tag` | HTML タグ名 | `button` |
 | `selector` | 再特定用の CSS セレクタ。`data-testid` 等 → 安定した `id` → 4 階層までのパスの順で選ぶ。伏せる必要があった場合は出さない | `[data-testid="save"]` |
 | `href` | リンク先（伏せ済み） | |
-| `value` | 入力値（伏せ字のまま） | `[[text:12]]` `[[email]]` |
+| `value` | 入力値（伏せ字のまま）。送信データでは型の付いた値で、ここで `[[…]]` に描画する | `[[text:12]]` `[[email]]` |
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
 | `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
@@ -105,22 +105,33 @@ Feature: 記録された操作の再現
 ...
 ```
 
-## 送信ペイロード（`op-scribe.recording/v1`）
+## 送信ペイロード（`op-scribe.recording/v2`）
+
+形の唯一の定義は `shared/payload.js` の `SHAPE` です。各欄が [ADR 0003](adr/0003-privacy-guarantee-matrix.md)
+の表のどの行で扱いが決まるかも、そこに書いてあります（テストで突き合わせます）。
 
 ```jsonc
 {
-  "schema": "op-scribe.recording/v1",
+  "schema": "op-scribe.recording/v2",
+  "privacy": {
+    "policy": "commercial-strict/1",
+    "coverage": "commercial | standard | mixed | none",
+    "hostsAliased": 1,
+    "redactions": { "text": 2, "email": 1 }
+  },
   "recording": {
     "id": "rec-…",
     "startedAt": "2026-10-29T01:00:00.000Z",
     "endedAt": "…",
     "startUrl": "https://site-1.invalid/",
-    "privacy": { "level": "strict", "hostsAliased": 1, "redactions": { "text": 2, "email": 1 } },
     "environment": { "browser": "Google Chrome 141", "platform": "macOS", "language": "ja" },
     "steps": [
-      { "n": 1, "type": "navigate", "t": 0, "url": "https://site-1.invalid/", "source": "user" },
-      { "n": 2, "type": "click", "t": 900, "url": "…", "source": "user",
-        "target": { "role": "link", "name": "ログイン", "tag": "a", "selector": "…", "href": "…" } }
+      { "n": 1, "type": "navigate", "t": 0, "env": "commercial", "source": "user", "url": "https://site-1.invalid/" },
+      { "n": 2, "type": "input", "t": 900, "env": "commercial", "source": "user", "url": "…",
+        "target": { "role": "textbox", "name": "本文", "tag": "textarea", "selector": "#body" },
+        "value": { "treatment": "length", "field": "text", "kind": "text", "length": 12 } },
+      { "n": 3, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": "search_catalog", "ok": true,
+        "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } }
     ],
     "webmcpTools": [{ "site": "https://site-1.invalid", "tools": ["search_catalog"] }]
   },
@@ -133,5 +144,21 @@ Feature: 記録された操作の再現
 }
 ```
 
-`t` は記録開始からの経過ミリ秒です。ペイロードはフィールドを許可リスト方式で組み立てるため、
-タブ ID や実ホスト名との対応表など、ブラウザ内専用の状態は構造上含まれません。
+- `t` は記録開始からの経過ミリ秒です。
+- `env` は、そのステップが「商用環境のホスト」での操作か（`commercial`）、それ以外か（`standard`）です。
+  拡張の service worker が、Chrome が伝える送信元から判定します。`privacy.coverage` は全ステップの `env` のまとめです。
+- 入力値（`value`）と WebMCP の引数の文字列・数値は、**型の付いた値**です。
+
+  | `treatment` | 意味 | ほかの欄 |
+  | --- | --- | --- |
+  | `kept` | 残した（中は伏せ済み） | `text`（WebMCP の数値は `number`） |
+  | `length` | 文字数だけ残した | `kind`・`length` |
+  | `redacted` | 全部伏せた | `kind`（ファイルは `count` も） |
+
+  `field` は欄の種類（`secret` `pii` `choice` `search` `text` `file` `arg`）です。
+  `[[…]]` の文字列は、Markdown・Gherkin に描画するときだけ作ります。
+- `reproduction.gherkin` は、`recording` から作り直したものと一致しなければなりません。
+
+ペイロードはフィールドを許可リスト方式で組み立てるため、タブ ID や実ホスト名との対応表、
+商用環境のホストの一覧など、ブラウザ内専用の状態は構造上含まれません。出口（送信・コピー・保存）と
+同梱の受信サーバは、同じ定義で形・型・扱いを検査し、合わないものを止めます。

@@ -7,19 +7,36 @@
  *
  * Contract: everything that is persisted or sent has been through here, and
  * when a value cannot be shown to be harmless it is replaced, never kept.
- * Replacements are placeholders of the form [[kind]] so a reader (and the
- * on-device model) can tell what was there without seeing it.
+ *
+ * Form values and WebMCP arguments come out as typed values
+ * ({ treatment, field, kind, ... }, see docs/adr/0003) and only become
+ * [[kind]] placeholders when rendered (shared/describe.js). Text that is kept
+ * may still contain placeholders from scrubText, and those are always ours:
+ * a "[[" written by the page is broken up before masking.
  */
 (function (root) {
   'use strict';
 
+  const { LIMITS, cut, primaryRole, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
+  // Only the placeholders this extension makes. finalScan skips these and nothing
+  // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
+  // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
+  // so "[[text:09012345678]]" written by hand is scanned like any other text.
+  // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
+  const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
+  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z][a-z0-9+.-]{0,15})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+
+  /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
+  const placeholderKinds = (text) => [...String(text).matchAll(OWN_PLACEHOLDER)].map(([m]) => {
+    const word = m.slice(2, -2).split(':')[0];
+    return word === 'masked' ? 'keyword' : word;
+  });
 
   const DEFAULT_SETTINGS = Object.freeze({
-    // strict: free-text values are never kept, only their length.
-    // balanced: free-text values are kept after pattern masking.
-    privacyLevel: 'strict',
+    // Real production hosts. Steps there keep only the length of free text (ADR 0001).
+    commercialHosts: [],
     // Hosts that may appear as-is. Every other host becomes site-N.invalid.
     hostAllowlist: [],
     // Words that must never leave the browser (company, product, people).
@@ -28,7 +45,7 @@
     authHeader: ''
   });
 
-  const defaults = () => ({ ...DEFAULT_SETTINGS, hostAllowlist: [], keywords: [] });
+  const defaults = () => ({ ...DEFAULT_SETTINGS, commercialHosts: [], hostAllowlist: [], keywords: [] });
 
   function luhn(digits) {
     let sum = 0;
@@ -56,10 +73,14 @@
       re: /\b(token|api[_-]?key|secret|password|passwd|pwd)(\s*[:=]\s*)[^\s"'&]{4,}/gi,
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
-    { kind: 'email', re: /[\w.%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g },
-    { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
+    // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
+    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|[\w.!#$%&'*+/=?^`{|}~-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
+    { kind: 'card', re: /(?<!\d)\d(?:[ .-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
+    // North American numbers: 212-555-0123, (212) 555-0123 (review R41).
+    { kind: 'phone', re: /(?<![\d-])\d{3}-\d{3}-\d{4}(?![\d-])|\(\d{3}\) ?\d{3}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g },
     { kind: 'postal', re: /〒\s*\d{3}-?\d{4}|(?<![\d-])\d{3}-\d{4}(?![\d-])/g },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi },
@@ -72,33 +93,56 @@
 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // The names inside this extension's placeholders ([[email]], [[text:3]] ...).
+  const PLACEHOLDER_WORDS = ['secret', 'card', 'email', 'phone', 'personal', 'postal', 'id', 'ip', 'number',
+    'masked', 'nested', 'value', 'text', 'file', 'url', 'invalid', 'none', 'long'];
+
+  /**
+   * Whether a keyword is used (row K2): two characters or more, and not part of
+   * a placeholder name. A keyword such as "mail" cannot tell a real [[email]]
+   * from one written by hand, so it is not used rather than used half way.
+   */
+  /** A keyword as the text it is matched against: NFKC and without hidden characters (K2; review R35). */
+  const keywordForm = (raw) => String(raw).normalize('NFKC').replace(INVISIBLE, '').trim();
+
+  function usableKeyword(raw) {
+    const k = keywordForm(raw);
+    return [...k].length >= 2 && !PLACEHOLDER_WORDS.some((w) => w.includes(k.toLowerCase()));
+  }
+
   function keywordPattern(keywords) {
     const list = (keywords || [])
-      .map((k) => String(k).normalize('NFKC').trim())
-      .filter((k) => k.length >= 2)
+      .map(keywordForm)
+      .filter(usableKeyword)
       .sort((a, b) => b.length - a.length);
-    return list.length ? new RegExp(list.map(escapeRe).join('|'), 'gi') : null;
+    // u: case is folded for every character, outside the BMP too ("𐐀" and "𐐨"; review R33).
+    return list.length ? new RegExp(list.map(escapeRe).join('|'), 'giu') : null;
   }
 
   /**
    * Masks personal and confidential fragments in free text.
    * Masking runs before truncation so a cut can never expose half an address.
+   * opts.escape (default true) breaks up "[[" from the source; pass false only
+   * for text that already went through here (it holds our own placeholders).
    */
   function scrubText(input, opts = {}) {
     const kinds = [];
     if (input == null) return { text: '', kinds };
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
-    text = text.replace(/[​-‏‪-‮⁠-⁤﻿]/g, '');
-
-    const keywords = keywordPattern(opts.keywords);
-    if (keywords) {
-      text = text.replace(keywords, () => {
-        kinds.push('keyword');
-        return mark('masked');
-      });
+    text = text.replace(INVISIBLE, '');
+    // After the invisible characters are gone, so a zero-width space between two "[" cannot slip through.
+    if (opts.escape !== false) text = text.replace(/\[(?=\[)/g, '[ ');
+    // Text that went through here before keeps its own placeholders: set them
+    // aside so the keywords and rules below never rewrite inside one.
+    const kept = [];
+    if (opts.escape === false) {
+      text = text.replace(/[\uE000\uE001]/g, '').replace(OWN_PLACEHOLDER, (m) => `\uE000${String.fromCharCode(0xE100 + kept.push(m) - 1)}\uE001`);
     }
 
+    // The patterns first, on the text as written: a keyword masked first would break the
+    // context they need ("token=abcd", "user@example.com" with "example" listed; review R30).
+    // A keyword is never part of a placeholder name (usableKeyword), so it cannot break one.
     for (const rule of RULES) {
       text = text.replace(rule.re, (...args) => {
         const match = args[0];
@@ -108,105 +152,242 @@
       });
     }
 
-    if (opts.maxLength && text.length > opts.maxLength) {
-      text = `${text.slice(0, opts.maxLength).replace(/\[\[[^\]]*$/, '')}…`;
+    // Keywords only between the placeholders: a keyword such as "[[" must not break one
+    // the patterns just made into "[[masked]]email]]" (review R31).
+    const keywords = keywordPattern(opts.keywords);
+    if (keywords) {
+      const mask = (part) => part.replace(keywords, () => {
+        kinds.push('keyword');
+        return mark('masked');
+      });
+      let out = '';
+      let last = 0;
+      for (const m of text.matchAll(OWN_PLACEHOLDER)) {
+        out += mask(text.slice(last, m.index)) + m[0];
+        last = m.index + m[0].length;
+      }
+      text = out + mask(text.slice(last));
+    }
+
+    if (kept.length) text = text.replace(/\uE000([\uE100-\uF8FF])\uE001/g, (m, c) => kept[c.charCodeAt(0) - 0xE100] ?? '');
+    // Cut by characters (code points), never inside a surrogate pair, and drop
+    // a placeholder the cut left unfinished ("[", "[[email" or "[[email]").
+    const chars = [...text];
+    if (opts.maxLength && chars.length > opts.maxLength) {
+      text = `${chars.slice(0, opts.maxLength).join('').replace(/\[(?:\[[^\]]*\]?)?$/, '')}…`;
     }
     return { text, kinds };
   }
+
+  /** One line: a line break from the page could otherwise forge a Gherkin step or a Markdown heading (#18). */
+  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+
+  /**
+   * The one way a free text becomes a text field of the output - a name, a
+   * tool name, a note, the environment: one line, masked, then cut (rows K2,
+   * T1, T2, W6, M3). Never cut a raw text before this: a keyword or an
+   * address across the limit would be left as a piece no rule finds.
+   */
+  const cleanLine = (value, opts = {}) => scrubText(oneLine(value), opts);
 
   // ------------------------------------------------------------------ fields
 
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
   const PII_AUTOCOMPLETE = /\b(?:email|tel[a-z-]*|name|given-name|family-name|additional-name|honorific-[a-z]+|nickname|username|street-address|address-line\d|address-level\d|postal-code|bday[a-z-]*|sex|organization|organization-title)\b/;
-  const SECRET_HINT = /pass|pwd|secret|token|otp|pin\b|cvc|cvv|security.?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
+  const SECRET_HINT = /pass|pwd|secret|token|otp|pin(?![a-z])|cvc|cvv|security.?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
   const PII_HINT = /mail|phone|tel|mobile|fax|name|kana|furigana|address|addr|street|city|zip|postal|birth|bday|gender|card|account|iban|ssn|my.?number|氏名|名前|姓|フリガナ|ふりがな|住所|郵便|電話|携帯|メール|生年月日|誕生日|口座|カード|性別|勤務先|会社名|マイナンバー/i;
-  const TEXT_TYPES = new Set(['', 'text', 'search', 'url', 'number', 'date', 'datetime-local', 'month', 'week', 'time', 'textarea']);
 
   function piiLabel(hints, type) {
     if (type === 'email' || /mail|メール/i.test(hints)) return 'email';
     if (type === 'tel' || /phone|tel|mobile|fax|電話|携帯/i.test(hints)) return 'phone';
-    if (/card|カード/i.test(hints)) return 'card';
     return 'personal';
   }
 
   /**
-   * Decides how a form control's value may be recorded.
-   * kind: secret | pii | choice | free | ignore
+   * Decides how a form control's value may be recorded (ADR 0003, rows I1-I8).
+   * kind: ignore | secret | pii | choice | search | free
    */
   function classifyField(meta = {}) {
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
-    const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel]
-      .filter(Boolean).join(' ').normalize('NFKC');
+    // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
+    const hints = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel]
+      .filter(Boolean).join(' ').normalize('NFKC').replace(INVISIBLE, '');
 
     if (type === 'hidden') return { kind: 'ignore' };
     if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints)) {
       return { kind: 'secret', label: 'secret' };
     }
+    if (/card|カード/i.test(hints)) return { kind: 'secret', label: 'card' };
     if (type === 'email' || type === 'tel' || PII_AUTOCOMPLETE.test(autocomplete) || PII_HINT.test(hints)) {
       return { kind: 'pii', label: piiLabel(hints, type) };
     }
     if (['select', 'checkbox', 'radio', 'range', 'color'].includes(type) || meta.tag === 'select') {
       return { kind: 'choice' };
     }
-    if (TEXT_TYPES.has(type) || meta.tag === 'textarea' || meta.contentEditable) return { kind: 'free' };
+    // Markup only: a field that merely looks like a search box is free text.
+    // role is a list of tokens; the element takes the first real role in it.
+    const role = primaryRole(meta.role);
+    if (type === 'search' || role === 'searchbox' || meta.inSearch) return { kind: 'search' };
     return { kind: 'free' };
   }
+
+  const KEPT_LIMIT = LIMITS.kept;
+  const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
+
+  /**
+   * The treatment of a form control's value, by its classification and the
+   * environment (rows I2-I8). The content script masks by it and the worker
+   * checks what arrives against it, so the two cannot disagree (review R22).
+   */
+  const FIELD_TREATMENT = Object.freeze({
+    secret: Object.freeze({ commercial: 'redacted', standard: 'redacted' }),
+    pii: Object.freeze({ commercial: 'length', standard: 'redacted' }),
+    free: Object.freeze({ commercial: 'length', standard: 'kept' }),
+    choice: Object.freeze({ commercial: 'kept', standard: 'kept' }),
+    search: Object.freeze({ commercial: 'kept', standard: 'kept' })
+  });
+  const fieldTreatment = (cls, env) => FIELD_TREATMENT[cls.kind]?.[env === 'commercial' ? 'commercial' : 'standard'];
+  const lengthOf = (text) => [...text].length;
+
+  /** Typed values (ADR 0003). Rendered as placeholders only by shared/describe.js. */
+  const typed = {
+    kept: (field, text) => ({ treatment: 'kept', field, text }),
+    keptNumber: (number) => ({ treatment: 'kept', field: 'arg', number }),
+    length: (field, kind, text) => ({ treatment: 'length', field, kind, length: Math.min(lengthOf(text), LIMITS.typedLength) }),
+    redacted: (field, kind) => ({ treatment: 'redacted', field, kind }),
+    file: (count) => ({ treatment: 'redacted', field: 'file', kind: 'file', count: Math.min(count, LIMITS.fileCount) })
+  };
 
   /**
    * The value of a form control as it may be stored. Runs inside the page so
    * typed text that must not be kept never reaches the extension at all.
+   * opts.env is 'commercial' or 'standard' (ADR 0001).
+   * Returns { value: typed value, kinds } or null when the field is not recorded.
    */
   function maskFieldValue(raw, meta, opts = {}) {
     const cls = classifyField(meta);
     if (cls.kind === 'ignore') return null;
+    const field = FIELD_OF[cls.kind];
     const text = raw == null ? '' : String(raw);
-    if (!text) return { value: '', kinds: [] };
-    if (cls.kind === 'secret') return { value: mark('secret'), kinds: ['secret'] };
-    if (cls.kind === 'pii') return { value: mark(cls.label), kinds: [cls.label] };
-    if (cls.kind === 'choice' || opts.privacyLevel === 'balanced') {
-      const r = scrubText(text, { keywords: opts.keywords, maxLength: 120 });
-      return { value: r.text, kinds: r.kinds };
-    }
-    return { value: mark(`text:${[...text].length}`), kinds: ['text'] };
+    const kind = cls.label || 'text';
+    const kinds = text ? [kind] : [];
+    // Secret fields are redacted even when empty (rows I2, I3); personal fields keep the
+    // length in commercial (0 when cleared) and are redacted in standard (I4); commercial
+    // free text is a length even when cleared (I8).
+    const treatment = fieldTreatment(cls, opts.env);
+    if (treatment === 'redacted') return { value: typed.redacted(field, kind), kinds };
+    if (treatment === 'length') return { value: typed.length(field, kind, text), kinds };
+    if (!text) return { value: typed.kept(field, ''), kinds: [] };
+    const r = scrubText(text, { keywords: opts.keywords, maxLength: KEPT_LIMIT[field] });
+    return { value: typed.kept(field, r.text), kinds: r.kinds };
   }
 
-  /** Masks WebMCP tool arguments with the same rules as form fields. */
-  function maskArgs(value, opts = {}, depth = 0, key = '') {
-    if (value == null || typeof value === 'boolean') return value;
-    if (typeof value === 'number') {
-      return Number.isFinite(value) && Math.abs(value) < 1e6 ? value : mark('number');
+  /**
+   * The one walk over WebMCP arguments, shared by the content script (maskArgs)
+   * and the worker (shared/record.js), so both apply the same limits and the
+   * same key rule (ADR 0003, rows W1 and W5). Under a key that names a
+   * credential or personal data, the whole subtree becomes one redacted
+   * value: nothing below it is looked at, so depth cannot hide a value.
+   *   isLeaf(node) - true for what leaf() handles
+   *   leaf(node)   - the value to keep for a leaf
+   */
+  const DROP = Symbol('dropped');
+
+  function walkArgs(node, handlers, depth = 0, budget = { leaves: LIMITS.argLeaves }) {
+    const { isLeaf, leaf, keywords } = handlers;
+    // At most argLeaves values in one call's arguments; the rest are dropped (W5).
+    const spend = () => (budget.leaves -= 1) >= 0;
+    if (isLeaf(node)) return spend() ? leaf(node) : DROP;
+    if (depth >= LIMITS.argDepth) return spend() ? typed.redacted('arg', 'nested') : DROP;
+    // An object or array below the root is a value too, empty or not: counted, so nesting
+    // cannot hold thousands of keys past the argLeaves the totals are built on (W5; review R38).
+    if (depth > 0 && !spend()) return DROP;
+    const walk = (child) => walkArgs(child, handlers, depth + 1, budget);
+    if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk).filter((v) => v !== DROP);
+    const out = {};
+    let masked = 0;
+    // Masked keys are numbered, and a name already taken (after the cut or
+    // NFKC) gets -2, -3 ..., so no value overwrites another (W5). The suffix
+    // replaces the end of the name, so the name stays within its limit.
+    const unique = (base) => {
+      let name = base;
+      for (let n = 2; Object.hasOwn(out, name); n += 1) name = `${[...base].slice(0, cut(LIMITS.argKey) - `-${n}`.length).join('')}-${n}`;
+      return name;
+    };
+    for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
+      // A key is rendered like a name: one line, masked, then cut (cleanLine; E7, review R27).
+      const name = cleanLine(k, { keywords, maxLength: LIMITS.argKey });
+      const cls = classifyField({ name: k });
+      const value = cls.kind === 'secret' || cls.kind === 'pii' ? (spend() ? typed.redacted('arg', cls.label) : DROP) : walk(v);
+      if (value === DROP) continue;
+      // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
+      Object.defineProperty(out, unique(name.kinds.length ? `masked-${masked += 1}` : name.text), {
+        value,
+        enumerable: true,
+        writable: true,
+        configurable: true
+      });
     }
-    if (typeof value === 'string') {
-      const masked = maskFieldValue(value, { name: key }, opts);
-      return masked ? masked.value : '';
-    }
-    if (depth >= 3) return mark('nested');
-    if (Array.isArray(value)) return value.slice(0, 10).map((v) => maskArgs(v, opts, depth + 1, key));
-    if (typeof value === 'object') {
-      const out = {};
-      for (const [k, v] of Object.entries(value).slice(0, 20)) {
-        const safeKey = scrubText(k, { keywords: opts.keywords }).kinds.length ? 'masked' : k;
-        out[safeKey] = maskArgs(v, opts, depth + 1, k);
+    return out;
+  }
+
+  /**
+   * Masks WebMCP tool arguments in the page (rows W1-W5). Every string and
+   * number becomes a typed value; booleans and null stay as they are. A
+   * page-made object never looks typed, because its leaves are typed values.
+   */
+  function maskArgs(value, opts = {}) {
+    const commercial = opts.env === 'commercial';
+    return walkArgs(value, {
+      keywords: opts.keywords,
+      isLeaf: (node) => node === null || typeof node !== 'object',
+      leaf: (node) => {
+        // null and booleans as they are; undefined, a BigInt or anything else that is not
+        // text or a number is redacted below, never turned into null (W4; review R24).
+        if (node === null || typeof node === 'boolean') return node;
+        if (typeof node === 'number') {
+          return !commercial && Number.isFinite(node) && Math.abs(node) < LIMITS.keptNumber
+            ? typed.keptNumber(node)
+            : typed.redacted('arg', 'number');
+        }
+        if (typeof node !== 'string') return typed.redacted('arg', 'value');
+        if (commercial) return typed.length('arg', 'text', node);
+        return typed.kept('arg', scrubText(node, { keywords: opts.keywords, maxLength: KEPT_LIMIT.arg }).text);
       }
-      return out;
-    }
-    return mark('value');
+    });
   }
 
   // -------------------------------------------------------------------- URLs
 
+  /**
+   * A host as the URL parser writes it (lowercase, IDN as Punycode), so a
+   * listed "例え.invalid" matches the "xn--r8jz45g.invalid" a URL yields.
+   */
+  function parsedHost(host) {
+    const h = String(host).trim().toLowerCase();
+    let parsed = h;
+    try { parsed = new URL(`http://${h}/`).hostname; } catch { /* keep as written */ }
+    // "shop.example.com." is the same host as "shop.example.com".
+    return parsed.replace(/\.+$/, '');
+  }
+
   function hostAllowed(host, list) {
     return (list || []).some((raw) => {
-      const p = String(raw).trim().toLowerCase();
-      if (!p) return false;
+      const entry = String(raw).trim().toLowerCase();
+      if (!entry) return false;
+      const p = entry.startsWith('*.') ? `*.${parsedHost(entry.slice(2))}` : parsedHost(entry);
       if (p.startsWith('*.')) return host === p.slice(2) || host.endsWith(p.slice(1));
       return host === p;
     });
   }
 
   function aliasFor(origin, aliases) {
-    if (!aliases[origin]) aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
+    if (aliases[origin]) return aliases[origin];
+    // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
+    // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
+    if (Object.keys(aliases).length >= LIMITS.aliases) return null;
+    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
     return aliases[origin];
   }
 
@@ -214,6 +395,11 @@
   const SENSITIVE_PARAM = /token|code|key|secret|sig|session|auth|pass|mail|phone|tel|name|user|state|nonce|ticket|^id$|_id$|Id$/i;
 
   /**
+   * ADR 0003, rows U1-U8. ctx.env is the environment of the step that holds
+   * the URL; the URL is also commercial when its own host is listed in
+   * ctx.commercialHosts. Until the commercial URL rule lands (row U5, ③), a
+   * commercial URL drops every query value and the fragment.
+   *
    * ctx.aliases is mutated: it maps each real origin to its stable alias for
    * this recording, and lives only in the browser (never in the payload).
    */
@@ -224,19 +410,26 @@
     try {
       url = new URL(String(raw));
     } catch {
-      const r = scrubText(raw, { keywords: ctx.keywords, maxLength: 200 });
-      return { url: r.text, kinds: r.kinds };
+      return { url: mark('url:invalid'), kinds: ['url'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return { url: mark(`url:${url.protocol.replace(':', '')}`), kinds };
+      // none, long and invalid name our own markers (no URL, too long, unparsable): a
+      // scheme of that name would read as one of them, so it is just invalid (U2; review R30).
+      const scheme = url.protocol.replace(':', '').slice(0, LIMITS.scheme);
+      return { url: mark(`url:${['none', 'long', 'invalid'].includes(scheme) ? 'invalid' : scheme}`), kinds: ['url'] };
     }
 
-    const host = url.hostname.toLowerCase();
+    const host = parsedHost(url.hostname);
+    const commercial = ctx.env === 'commercial' || ctx.allCommercial === true || hostAllowed(host, ctx.commercialHosts);
     let origin;
+    // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
+    const port = url.port ? `:${url.port}` : '';
     if (hostAllowed(host, ctx.hostAllowlist)) {
-      origin = `${url.protocol}//${url.host}`;
+      origin = `${url.protocol}//${host}${port}`;
     } else {
-      origin = `${url.protocol}//${aliasFor(url.origin, aliases)}`;
+      const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
+      if (!alias) return { url: mark('url:invalid'), kinds: ['url', 'host'], untracked: true };
+      origin = `${url.protocol}//${alias}`;
       kinds.push('host');
     }
 
@@ -248,7 +441,8 @@
       if (ID_SEGMENT.test(decoded)) { kinds.push('id'); return ':id'; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
       if (r.kinds.length) { kinds.push(...r.kinds); return ':masked'; }
-      return seg;
+      // The parser leaves [ and ] as they are; encoded, a page's "[[secret]]" never reads as ours (K1).
+      return seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
     }).join('/');
 
     const params = [];
@@ -256,8 +450,10 @@
       const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
       let value = '';
       if (v) {
-        const harmless = ctx.privacyLevel === 'balanced'
+        const harmless = !commercial
           && !SENSITIVE_PARAM.test(k)
+          // The same vocabulary as form fields (rows I3, I4, U7): address, card, postal ...
+          && !['secret', 'pii'].includes(classifyField({ name: k }).kind)
           && /^[\w.-]{1,24}$/.test(v)
           && !scrubText(v, { keywords: ctx.keywords }).kinds.length;
         value = harmless ? encodeURIComponent(v) : mark('v');
@@ -266,15 +462,18 @@
       params.push(`${encodeURIComponent(key)}=${value}`);
     }
 
-    // SPA routes such as #/settings are kept in balanced mode; anything else is dropped.
+    // SPA routes such as #/settings are kept outside production; anything else is dropped.
     let hash = '';
-    if (url.hash && ctx.privacyLevel === 'balanced' && /^#\/[\w/-]{0,60}$/.test(url.hash)) {
+    if (url.hash && !commercial && /^#\/[\w/-]{0,60}$/.test(url.hash)) {
       hash = url.hash;
     } else if (url.hash) {
       kinds.push('hash');
     }
 
-    return { url: `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`, kinds };
+    const out = `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`;
+    // A URL too long to send is redacted as a whole rather than cut (row U1).
+    if ([...out].length > LIMITS.url) return { url: mark('url:long'), kinds: [...kinds, 'url'] };
+    return { url: out, kinds };
   }
 
   // -------------------------------------------------------------- final gate
@@ -284,10 +483,53 @@
    * still mask. Run on the exact payload right before it leaves the browser;
    * a non-empty result blocks sending.
    */
+  /**
+   * Real host names (row K5), apart from keywords: any length, matched only
+   * as a whole host label sequence, so a one-letter host "x" is found but the
+   * x in "box" is not.
+   */
+  function hostPattern(hosts) {
+    const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, '')).filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+    return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
+  }
+
+  /**
+   * A CSS-escaped text as written (CSS Syntax 4.3.7): the selector escapes
+   * "intranet.corp.invalid" as "intranet\\.corp\\.invalid", which no keyword,
+   * host or pattern would otherwise match (T3, K2, K5; review R23).
+   */
+  const cssUnescape = (text) => String(text).replace(/\\(?:([0-9a-fA-F]{1,6})[ \t\n]?|([^\n0-9a-fA-F]))/g, (m, hex, ch) => {
+    if (ch !== undefined) return ch;
+    const code = parseInt(hex, 16);
+    return code === 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(code);
+  });
+
+  // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
+  const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
+
   function finalScan(value, opts = {}) {
     const findings = [];
+    const hosts = hostPattern(opts.hosts);
     const check = (text, path) => {
-      const { kinds } = scrubText(String(text).replace(PLACEHOLDER, ' '), { keywords: opts.keywords });
+      // Skip the placeholder, not what it carries: "[[url:acme]]" in a hand-edited
+      // Markdown is still scanned for "acme" (E4, E6). The count in [[text:N]] and
+      // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
+      const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
+      // As written and with CSS escapes undone: a selector carries them (review R23).
+      const kinds = [plain, cssUnescape(plain)].flatMap((t) => {
+        // The host of a URL is left out of the patterns (K3) only: it is an alias or a host the
+        // user allowed by name, an IP host too (U4; review R32). Keywords and real hosts still apply.
+        const urlHosts = [];
+        const body = t.replace(URL_HOST, (m, scheme, host) => {
+          urlHosts.push(host.normalize('NFKC'));
+          return `${scheme} `;
+        });
+        const keywords = keywordPattern(opts.keywords);
+        return [...scrubText(body, { keywords: opts.keywords }).kinds,
+          ...(keywords && urlHosts.some((h) => h.match(keywords)) ? ['keyword'] : []),
+          ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
+      });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {
@@ -311,12 +553,21 @@
     mark,
     PLACEHOLDER,
     scrubText,
+    oneLine,
+    cleanLine,
+    placeholderKinds,
+    usableKeyword,
+    typed,
     classifyField,
+    fieldTreatment,
+    walkArgs,
     maskFieldValue,
     maskArgs,
     scrubUrl,
     hostAllowed,
-    finalScan
+    parsedHost,
+    finalScan,
+    cssUnescape
   };
 
   root.OpScribeSanitize = api;
