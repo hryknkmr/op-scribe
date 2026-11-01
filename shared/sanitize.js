@@ -537,8 +537,10 @@
    * x in "box" is not.
    */
   function hostPattern(hosts) {
+    // A host of the alias form is never recorded as a real host (U4), and the same text is the alias of a
+    // site: not looked for, even when a receiver's list names it (K5; reviews of #37 R10, #46 R1).
     const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, ''))
-      .filter(Boolean)
+      .filter((h) => h && !/^site-\d+\.invalid$/.test(h))
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
