@@ -606,3 +606,26 @@ test('WebMCP keeps an allowed asking site by name and numbers the other sites fr
   assert.ok(text.includes('https://site-1.invalid/d'), text);
   assert.ok(!text.includes('site-2.invalid'), text);
 });
+
+test('a step that is not recorded leaves the aliases and the redaction counts as they were (rows W7, M1; review of #37 R14)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const s = { ...settings, keywords: [] };
+  // A site at its own limit: one more tool call that redacts an email is not recorded.
+  const rec = newRec();
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, s, { tabUrl: BETA }));
+  const before = JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision });
+  assert.equal(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true, args: { to: 'someone@example.com' } }, s, { tabUrl: BETA }), null);
+  assert.equal(JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision }), before);
+  // A recording full of the person's steps: a navigation to a new site is not recorded, and names no site.
+  const full = newRec();
+  for (let i = 0; i < LIMITS.steps; i += 1) full.steps.push({ type: 'click', t: 0, env: 'standard', source: 'user' });
+  const nav = R.addStep(full, { type: 'navigate', pageUrl: 'https://new.example.com/?q=a%20b', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' });
+  // A navigation is not the person's: it does not push theirs out.
+  assert.equal(nav, null);
+  assert.deepEqual(full.aliases, {});
+  assert.deepEqual(full.redactions, {});
+  // A step that is recorded keeps what its cleaning added.
+  const ok = newRec();
+  assert.ok(R.addStep(ok, { type: 'navigate', pageUrl: 'https://new.example.com/', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' }));
+  assert.equal(Object.keys(ok.aliases).length, 1);
+});

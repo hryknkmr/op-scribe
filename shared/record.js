@@ -374,6 +374,23 @@
   }
 
   /**
+   * Cleans and adds a step in one go. Cleaning names new sites and counts what it
+   * redacted; a step that is not recorded - not a step, not kept, or past a limit -
+   * leaves both as they were (W7, E4; review of #37 R14).
+   * keep: whether to add the cleaned step at all (a navigation to where the tab already is).
+   * Returns the step when it is recorded, else null.
+   */
+  function addStep(rec, raw, settings, from, keep = () => true) {
+    const aliases = { ...rec.aliases };
+    const redactions = { ...rec.redactions };
+    const step = cleanStep(raw, rec, settings, from);
+    if (step && keep(step) && appendStep(rec, step)) return step;
+    rec.aliases = aliases;
+    rec.redactions = redactions;
+    return null;
+  }
+
+  /**
    * The one way a recording is made to fit its share of the session storage
    * (storeBytes): appendStep runs it, and the worker runs it on every save,
    * whatever changed (review R43).
@@ -403,7 +420,7 @@
     if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, fitRecord, guardReply, webmcpReply };
+  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
