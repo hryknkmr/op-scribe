@@ -291,9 +291,16 @@ ui.noteForm.addEventListener('submit', async (event) => {
 
 // ------------------------------------------------------------ reproduction
 
-const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, generator, basis }
-});
+/** The draft is kept only within its share of the session storage (draftBytes; review R43). */
+async function saveDraft() {
+  const draft = { markdown: ui.repro.value, generator, basis };
+  if (new TextEncoder().encode(JSON.stringify(draft)).length > LIMITS.draftBytes) {
+    await chrome.storage.session.remove(DRAFT_KEY);
+    ui.genStatus.textContent = '再現手順が大きすぎるため、パネルを閉じると残りません';
+    return;
+  }
+  await chrome.storage.session.set({ [DRAFT_KEY]: draft });
+}
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording (render). */
 async function setRepro(rec, markdown, by) {
@@ -528,6 +535,12 @@ ui.settingsForm.addEventListener('submit', (event) => {
   }
   // Ask for the endpoint now, while we still hold the click.
   const granted = pattern ? chrome.permissions.request({ origins: [pattern] }) : Promise.resolve(true);
+  const tooMany = [form.commercialHosts, form.hostAllowlist].some((f) => lines(f.value).length > LIMITS.hosts
+    || lines(f.value).some((h) => [...h].length > LIMITS.host));
+  if (tooMany) {
+    ui.settingsStatus.textContent = `ホストは 1 つの一覧に ${LIMITS.hosts} 件まで、1 件 ${LIMITS.host} 字までです`;
+    return;
+  }
   const next = {
     commercialHosts: lines(form.commercialHosts.value).map((h) => h.toLowerCase()),
     hostAllowlist: lines(form.hostAllowlist.value).map((h) => h.toLowerCase()),

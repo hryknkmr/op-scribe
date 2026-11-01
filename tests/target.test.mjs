@@ -81,7 +81,7 @@ test('operated elements are named by the text they show', () => {
 test('fields are never named by what was typed into them', () => {
   assert.equal(T.accessibleName(el('textarea', { placeholder: '本文' }, SECRET_TEXT)), '本文');
   assert.equal(T.accessibleName(el('div', { contenteditable: 'true' }, SECRET_TEXT)), '');
-  assert.equal(T.accessibleName(el('input', { type: 'text', name: 'q' })), 'q');
+  assert.equal(T.accessibleName(el('input', { type: 'text', name: 'customer-reference' })), '', 'the name attribute is not shown (review R44)');
 });
 
 test('names are one line, whatever the page put in aria-label (#18)', () => {
@@ -118,4 +118,22 @@ test('only the actual role counts, never a later token (rows I6, T2; review R15)
   const inner = el('input', { type: 'text' });
   el('form', { role: 'search region' }, '', [inner]);
   assert.equal(T.inSearch(inner), true);
+});
+
+test('a field inside a <search> element is in a search landmark (row I6; review R33)', () => {
+  const field = el('input', { type: 'text', name: 'q' });
+  const landmark = el('search', {}, '', [field]);
+  field.parentElement = landmark;
+  assert.equal(T.inSearch(field), true);
+  const plain = el('input', { type: 'text', name: 'q' });
+  plain.parentElement = el('div', {}, '', [plain]);
+  assert.equal(T.inSearch(plain), false);
+});
+
+test('a link of an image map is an operated link named by its alt text (row T2; review R34)', () => {
+  const area = el('area', { href: '/shop', alt: 'ショップ' });
+  assert.equal(T.operated(area), area);
+  assert.equal(T.implicitRole(area), 'link');
+  assert.equal(T.accessibleName(area), 'ショップ');
+  assert.equal(T.operated(el('area', { alt: '飾り' })), null);
 });

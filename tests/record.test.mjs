@@ -320,3 +320,97 @@ test('a CSS-escaped selector is checked as written and unescaped, and dropped on
   }
   assert.equal(click('#save\\.button').target.selector, '#save\\.button');
 });
+
+test('every WebMCP answer goes through the final scan, the site and the counts too (rows W8, E6; review R37)', () => {
+  const rec = newRec();
+  rec.aliases['https://intranet.corp.invalid'] = 'site-1.invalid';
+  rec.steps.push(R.cleanStep({ type: 'note', note: 'Acme の件' }, rec, { ...settings, keywords: [] }));
+  const later = { ...settings, keywords: ['Acme'] };
+  // A keyword added after the note was recorded stops the reproduction.
+  assert.deepEqual(R.webmcpReply(rec, later, 'https://site-1.invalid', 'reproduction'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  // A site carrying a keyword or a real host stops the status too.
+  assert.deepEqual(R.webmcpReply(rec, later, 'https://acme.example.com', 'status'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  assert.deepEqual(R.webmcpReply(rec, settings, 'https://intranet.corp.invalid', 'status'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
+  const fine = R.webmcpReply(rec, { ...settings, keywords: [] }, 'https://site-1.invalid', 'status');
+  assert.equal(fine.ok, true);
+  assert.equal(R.webmcpReply(rec, settings, 'https://site-1.invalid', 'expect'), null);
+});
+
+test('the worker classifies by the label text too (rows I3, I4; review R38)', () => {
+  const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { tag: 'input', type: 'text', label: 'Comment', labelText: 'Password' } }),
+    newRec(), settings, { tabUrl: BETA });
+  assert.equal(step, null);
+});
+
+test('the largest recording the limits allow still fits the session storage: the oldest steps go first (review R40)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  const url = `https://site-1.invalid/${'a'.repeat(LIMITS.url - 30)}`;
+  const args = Object.fromEntries(Array.from({ length: LIMITS.argLeaves }, (_, i) => [`k${i}`, typed.kept('arg', `${'\u0001'.repeat(LIMITS.kept.arg)}…`)]));
+  const step = (i) => ({ type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: `${'t'.repeat(LIMITS.tool)}…`, ok: true, args, n: i });
+  // Filled to the step limit at once, then the last steps through appendStep.
+  rec.steps = Array.from({ length: LIMITS.steps - 3 }, (_, i) => step(i));
+  for (let i = LIMITS.steps - 3; i < LIMITS.steps; i += 1) R.appendStep(rec, step(i));
+  const bytes = new TextEncoder().encode(JSON.stringify(rec)).length;
+  assert.ok(bytes <= LIMITS.storeBytes, String(bytes));
+  assert.ok(bytes < 10 * 1024 * 1024);
+  assert.equal(rec.steps.at(-1).n, LIMITS.steps - 1, 'the newest step is kept');
+  assert.ok(rec.steps.length < LIMITS.steps, 'older steps made room');
+});
+
+test('the host lists leave out names no host can have, and one step too large for the room is dropped (E2; review R41)', () => {
+  const policy = R.policyOf({ commercialHosts: ['shop.example.com', 'x'.repeat(300)], hostAllowlist: [] });
+  assert.deepEqual(policy.commercialHosts, ['shop.example.com']);
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  R.appendStep(rec, { type: 'note', t: 0, env: 'standard', source: 'user', note: '\u0001'.repeat(LIMITS.storeBytes / 4) });
+  assert.equal(rec.steps.length, 0);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+});
+
+test('a page past the alias limit is not recorded, and an over-long production list makes every step commercial (K5, E2; review R42)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  for (let i = 0; i < LIMITS.aliases; i += 1) rec.aliases[`https://h${i}.example.com`] = `site-${i + 1}.invalid`;
+  assert.equal(R.cleanStep({ type: 'click', pageUrl: 'https://h500.example.com/', target: { role: 'button', name: 'h500.example.com' } },
+    rec, settings, { tabUrl: 'https://h500.example.com/' }), null);
+  assert.equal(Object.keys(rec.aliases).length, LIMITS.aliases);
+  assert.ok(R.cleanStep({ type: 'click', pageUrl: 'https://h1.example.com/', target: { role: 'button', name: 'x' } }, rec, settings, { tabUrl: 'https://h1.example.com/' }));
+
+  const many = Array.from({ length: LIMITS.hosts + 1 }, (_, i) => `p${i}.example.com`);
+  const policy = R.policyOf({ commercialHosts: many, hostAllowlist: many });
+  assert.equal(policy.commercialHosts.length, LIMITS.hosts);
+  assert.equal(policy.hostAllowlist.length, LIMITS.hosts);
+  assert.equal(policy.allCommercial, true);
+  assert.equal(R.envOf(['https://other.invalid/'], policy), 'commercial');
+});
+
+test('the worker classifies by aria-labelledby text passed as label text (row I3; review R42)', () => {
+  const step = R.cleanStep(input(typed.kept('text', 'hunter2'), { field: { tag: 'input', type: 'text', label: 'Comment', ariaLabel: 'Comment', labelText: 'Password' } }),
+    newRec(), settings, { tabUrl: BETA });
+  assert.equal(step, null);
+});
+
+test('the session storage is shared out once, and any save is fitted, not only a new step (E2; review R43)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  assert.ok(LIMITS.storeBytes + LIMITS.draftBytes < 10 * 1024 * 1024);
+  const rec = newRec();
+  rec.grantedPatterns = Array.from({ length: LIMITS.aliases }, (_, i) => `https://h${i}.${'x'.repeat(240)}.example.com/*`);
+  rec.steps = Array.from({ length: 400 }, (_, i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: '\u0001'.repeat(2000) }));
+  R.fitRecord(rec);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+  assert.ok(rec.steps.length > 0);
+});
+
+test('a save that drops steps to fit makes the recording a new revision (E4; review R44)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  rec.revision = 7;
+  rec.steps = Array.from({ length: 400 }, (_, i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: '\u0001'.repeat(4000) }));
+  R.fitRecord(rec);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+  assert.equal(rec.revision, 8);
+  const small = { ...newRec(), revision: 3 };
+  R.fitRecord(small);
+  assert.equal(small.revision, 3, 'nothing dropped, nothing stale');
+});

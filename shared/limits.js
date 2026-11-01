@@ -33,6 +33,15 @@
     scheme: 16,
     environment: 60,
     steps: 500,
+    // chrome.storage.session holds 10 MiB for everything the extension keeps there, shared out
+    // once here (review R43): the recording (oldest steps go first past it) and the Markdown
+    // draft (not kept past it), with 1 MiB to spare.
+    storeBytes: 6 * 1024 * 1024,
+    draftBytes: 3 * 1024 * 1024,
+    // What a recording holds besides its steps, bounded so the steps always have room (review R41).
+    hosts: 100,
+    host: 253,
+    aliases: 500,
     redactionCount: 1e9
   });
 
@@ -70,6 +79,15 @@
     ? TYPED_SCHEMA.kept.includes(field)
     : Boolean(Object.hasOwn(TYPED_SCHEMA, treatment) && Object.hasOwn(TYPED_SCHEMA[treatment], field)
       && TYPED_SCHEMA[treatment][field].includes(kind)));
+
+  /**
+   * Characters that hide or reorder text for the reader: every bidi control and
+   * every default-ignorable code point (zero-width, tags, fillers), by Unicode
+   * property rather than a hand-made list (E7; review R28 found U+061C and
+   * U+2066-U+2069 missing from three copies of one). The masking removes them,
+   * the renderer never writes them and the gate refuses them - all from here.
+   */
+  const HIDDEN_CHARS = '[\\p{Bidi_Control}\\p{Default_Ignorable_Code_Point}]';
 
   /** The longest text a cut to n can produce. */
   const cut = (n) => n + 1;
@@ -133,7 +151,7 @@
   /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
   const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
 
-  const api = { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
+  const api = { LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

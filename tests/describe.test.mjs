@@ -120,3 +120,13 @@ test('argument strings are one line before they become JSON (row E7; review R13)
   const sentence = D.describeStep({ type: 'tool', tool: 't', args: { q: typed.kept('arg', 'a\nb\u0000c') } });
   assert.equal(sentence, 'WebMCP ツール「t」を実行する（引数: {"q":"a b c"}）');
 });
+
+test('a panel note takes the recording\'s environment in every Gherkin, not the one it was saved with (review R36)', () => {
+  const steps = [
+    { type: 'note', t: 0, env: 'standard', source: 'user', note: 'メモ' },
+    { type: 'navigate', t: 1, env: 'commercial', source: 'user', url: 'https://site-1.invalid/' }
+  ];
+  assert.match(D.toGherkin({ id: 'r', steps }), /environments: commercial$/m);
+  // A part of the recording still reads the whole: the note is commercial even without the commercial step.
+  assert.match(D.toGherkin({ id: 'r', steps: [steps[0]] }, { envSteps: steps }), /environments: commercial$/m);
+});

@@ -25,11 +25,21 @@
   // RegExp#test(undefined) tests the string "undefined".
   const is = (re, value) => typeof value === 'string' && re.test(value);
 
-  /** The recording's fixed host lists, taken from the settings when it started. */
+  /**
+   * The recording's fixed host lists, taken from the settings when it started.
+   * A name longer than a host can be (253) is no host and is left out; the panel
+   * saves at most LIMITS.hosts names a list, so the recording stays bounded (review R41).
+   */
   function policyOf(settings) {
+    const list = (names) => [...new Set((names || []).map(String))].filter((h) => [...h].length <= LIMITS.host);
+    const commercial = list(settings.commercialHosts);
     return {
-      commercialHosts: [...(settings.commercialHosts || [])],
-      hostAllowlist: [...(settings.hostAllowlist || [])]
+      commercialHosts: commercial.slice(0, LIMITS.hosts),
+      // More production hosts than a recording holds (settings saved by an older version):
+      // every step is commercial, the strict side, rather than some production host left out (review R42).
+      allCommercial: commercial.length > LIMITS.hosts,
+      // Fewer allowed names only alias more hosts: cutting this list is the strict side.
+      hostAllowlist: list(settings.hostAllowlist).slice(0, LIMITS.hosts)
     };
   }
 
@@ -39,6 +49,7 @@
 
   /** 'commercial' when any of the URLs (top page, frame) is on a listed production host. */
   function envOf(urls, policy) {
+    if (policy.allCommercial) return 'commercial';
     return urls.some((url) => url && hostAllowed(hostOf(url), policy.commercialHosts)) ? 'commercial' : 'standard';
   }
 
@@ -127,7 +138,7 @@
   const FIELD_OF = { secret: 'secret', pii: 'pii', choice: 'choice', search: 'search', free: 'text' };
   const NO_VALUE_TYPES = new Set(['file', 'checkbox', 'radio']);
   const STRICTNESS = { kept: 0, length: 1, redacted: 2 };
-  const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'placeholder', 'ariaLabel', 'role'];
+  const META_NAMES = ['tag', 'type', 'name', 'id', 'autocomplete', 'label', 'labelText', 'placeholder', 'ariaLabel', 'role'];
 
   /**
    * Rows I1-I8 again in the worker, before the value is looked at (review of
@@ -193,7 +204,11 @@
     };
 
     const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: raw.source === 'agent' ? 'agent' : 'user' };
-    if (raw.pageUrl) step.url = url(raw.pageUrl);
+    if (raw.pageUrl) {
+      // A page on a host past the alias limit is not recorded (K5; review R42).
+      if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
+      step.url = url(raw.pageUrl);
+    }
     if (raw.target) {
       const t = raw.target;
       step.target = {};
@@ -244,7 +259,72 @@
     return step;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep };
+  /**
+   * Every answer WebMCP gives the page is an exit (rows W8, E6): the whole
+   * object goes through the final scan with the keywords as they are now and
+   * the real hosts behind the aliases, and is withheld on a find (review R37).
+   */
+  function guardReply(reply, rec, settings) {
+    const hosts = Object.keys(rec.aliases || {}).map(hostOf).filter(Boolean);
+    return S.finalScan(reply, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
+  }
+
+  /**
+   * What WebMCP tells a page on site about the recording (row W8): its own
+   * steps and the notes without a URL. A panel note's environment comes from
+   * the whole recording, not this site's part of it. Null for another op.
+   */
+  function webmcpReply(rec, settings, site, op) {
+    const D = root.OpScribeDescribe || require('./describe.js');
+    const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+    if (op === 'status') {
+      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length }, rec, settings);
+    }
+    if (op === 'reproduction') {
+      const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
+      const markdown = D.toMarkdown(D.buildReproduction(scoped));
+      const gherkin = D.toGherkin(scoped, { envSteps: rec.steps });
+      return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings);
+    }
+    return null;
+  }
+
+  const bytesOf = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+
+  /**
+   * Adds a cleaned step. Past the step limit, or past the size the session
+   * storage holds, the oldest steps go first, so the newest step is always
+   * kept and the recording can always be saved (review R40).
+   */
+  function appendStep(rec, step) {
+    if (!step) return;
+    rec.revision = (rec.revision || 0) + 1;
+    rec.steps.push(step);
+    if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
+    fitRecord(rec);
+  }
+
+  /**
+   * The one way a recording is made to fit its share of the session storage
+   * (storeBytes): appendStep runs it, and the worker runs it on every save,
+   * whatever changed (review R43).
+   */
+  function fitRecord(rec) {
+    if (!rec?.steps) return;
+    // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
+    // then each removed step's own size and its comma.
+    const json = JSON.stringify(rec);
+    if (json.length * 3 <= LIMITS.storeBytes) return;
+    let bytes = new TextEncoder().encode(json).length;
+    // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
+    // a single step too large for the room is dropped too rather than break the save (review R41).
+    const before = rec.steps.length;
+    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+    // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
+    if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
+  }
+
+  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, fitRecord, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

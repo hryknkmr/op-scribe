@@ -28,14 +28,23 @@ jobs:
           chmod +x scripts/pii-guard.sh
           scripts/pii-guard.sh scan-tree || { echo "✗ tracked ファイルに PII/社内情報/secret の疑い" >&2; exit 1; }
 
-      - name: Check commit identities
+      # PR: the PR's own commits. push: the whole history from the root commit,
+      # because <root>..HEAD would leave the root commit out.
+      - name: Choose the commit range
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
-            RANGE="${BASE_SHA}..${HEAD_SHA}"
+            echo "RANGE=${BASE_SHA}..${HEAD_SHA}" >> "$GITHUB_ENV"
           else
-            RANGE="$(git rev-list --max-parents=0 HEAD | tail -1)..HEAD"
+            echo "RANGE=HEAD" >> "$GITHUB_ENV"
           fi
-          scripts/pii-guard.sh check-identities "$RANGE"
+
+      - name: Check commit identities
+        run: scripts/pii-guard.sh check-identities "$RANGE"
+
+      # Each commit on its own: content added in one commit and removed in a later
+      # one, and commit messages, never show up in the latest tree.
+      - name: Scan each commit and its message
+        run: scripts/pii-guard.sh scan-commits "$RANGE"

@@ -171,6 +171,7 @@ test('checkPayload checks the form of every URL value (rows U1-U4, U7, U8; revie
   }
   const ok = clone(build());
   ok.recording.steps[0].url = 'https://site-1.invalid/?q=[[v]]';
+  ok.recording.startUrl = ok.recording.steps[0].url;
   ok.recording.steps[1].url = '[[url:invalid]]';
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
@@ -217,6 +218,7 @@ test('checkPayload: standard URLs keep only the allowed forms, and key steps car
   }
   const ok = base();
   ok.recording.steps[0].url = 'https://site-1.invalid/?tab=items&q=[[v]]#/settings';
+  ok.recording.startUrl = ok.recording.steps[0].url;
   assert.deepEqual(P.checkPayload(regen(ok)), []);
 });
 
@@ -458,7 +460,7 @@ test('checkCanonical finds what is safe but not what the masking writes (E8; rev
   const r = clone(rec);
   r.steps[0].url = '[[url:https]]';
   r.steps[4].args = { ['あ'.repeat(38) + '-21']: typed.redacted('arg', 'v') };
-  r.steps[5].note = 'é';
+  r.steps[5].note = 'e\u0301';
   r.steps[2].url = 'HTTPS://SITE-1.INVALID:443/';
   r.webmcpTools = { 'https://site-1.invalid': ['a'], 'https://site-1.invalid/': ['b'] };
   const payload = build(r);
@@ -488,4 +490,75 @@ test('a line break in a URL or a hidden character in an argument is refused, and
   typedText.steps[3] = { ...typedText.steps[3], env: 'standard', value: typed.kept('text', '一行目\n二行目') };
   typedText.steps.forEach((s) => { s.env = 'standard'; });
   assert.ok(!P.checkPayload(regen(build(typedText))).some((p) => p.problem === 'not one line'));
+});
+
+test('every bidi control and default-ignorable character is removed, never rendered and refused, from one definition (E7; review R28)', () => {
+  for (const c of ['\u061C', '\u2066', '\u2067', '\u2068', '\u2069', '\u00AD', '\u{E0041}']) {
+    assert.equal(S.cleanLine(`a${c}b`).text, 'ab', JSON.stringify(c));
+    const r = clone(rec);
+    r.steps[1].target.name = `a${c}b`;
+    assert.ok(!D.toGherkin(r).includes(c) && !D.toMarkdown(D.buildReproduction(r)).includes(c), JSON.stringify(c));
+    assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'hidden character'), JSON.stringify(c));
+  }
+});
+
+test('the exits refuse a bracket in a URL outside the masking own [[v]] (K1, E2; review R29)', () => {
+  for (const [value, ok] of [['https://site-1.invalid/[[secret]]', false], ['https://site-1.invalid/a?q=[[secret]]x', false],
+    ['https://site-1.invalid/a?[[k]]=1', false], ['https://site-1.invalid/a?q=[[v]]&r=1', true], ['https://site-1.invalid/%5B%5Bx%5D%5D', true]]) {
+    const r = clone(rec);
+    r.steps.forEach((s) => { s.env = 'standard'; });
+    r.steps[2].url = value;
+    assert.equal(P.checkPayload(regen(build(r))).some((p) => p.problem === 'bracket outside a placeholder'), !ok, value);
+  }
+});
+
+test('the no-URL marker is a start URL only, and only when no step has a URL (U2, E2; review R30)', () => {
+  const start = clone(rec);
+  const payload = build(start);
+  payload.recording.startUrl = '[[url:none]]';
+  assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'no URL while a step has one'));
+  const step = clone(rec);
+  step.steps[2].url = '[[url:none]]';
+  assert.ok(P.checkPayload(regen(build(step))).some((p) => p.problem === 'no-URL marker as a URL'));
+});
+
+test('checkCanonical finds an argument key that is not NFKC (E8; review R30)', () => {
+  const r = clone(rec);
+  r.steps[4].args = { 'e\u0301': typed.redacted('arg', 'v') };
+  assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'key not NFKC'));
+});
+
+test('a select holds a choice, never free text with its longer limit (I5, E2; review R31)', () => {
+  const r = clone(rec);
+  r.steps.forEach((s) => { s.env = 'standard'; });
+  r.steps[2] = { ...r.steps[2], type: 'select', value: typed.kept('text', 'x'.repeat(200)) };
+  assert.ok(P.checkPayload(regen(build(r))).some((p) => p.problem === 'text value in select'));
+  r.steps[2].value = typed.kept('choice', '東京');
+  assert.ok(!P.checkPayload(regen(build(r))).some((p) => p.path === 'recording.steps[2].value'));
+});
+
+test('a deleted start URL never comes back, not even when a later step goes there (E3, E4; review R34)', () => {
+  const r = clone(rec);
+  r.startUrl = 'https://site-1.invalid/a';
+  r.steps = [
+    { type: 'click', t: 1, env: 'standard', source: 'user', url: 'https://site-1.invalid/b', target: { role: 'button', name: 'x' } },
+    { type: 'navigate', t: 2, env: 'standard', source: 'user', url: 'https://site-1.invalid/a' }
+  ];
+  assert.equal(D.startUrlOf(r), 'https://site-1.invalid/b');
+  const payload = build(r);
+  assert.equal(payload.recording.startUrl, 'https://site-1.invalid/b');
+  payload.recording.startUrl = 'https://site-1.invalid/a';
+  assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'not the first URL of the steps'));
+});
+
+test('checkCanonical finds a search box or a choice that is not kept (E8, I5, I6; review R41)', () => {
+  const r = clone(rec);
+  r.steps[2].value = typed.redacted('search', 'v');
+  assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'search or choice not kept'));
+});
+
+test('the count of aliased hosts is within the alias limit (M1, E2; review R44)', () => {
+  const p = build();
+  p.privacy.hostsAliased = 1e100;
+  assert.ok(P.checkPayload(regen(p)).some((x) => x.path === 'privacy.hostsAliased'));
 });
