@@ -29,11 +29,11 @@ function worker() {
       getRegisteredContentScripts: async () => (control.failUnregister ? [{ id: 'recorder' }] : []),
       unregisterContentScripts: async () => { if (control.failUnregister) throw new Error('unregister failed'); },
       registerContentScripts: async () => { if (control.failRegister) throw new Error('register failed'); },
-      // What an injected recorder sees when it says HELLO straight away.
+      // As in a browser, the injection ends without waiting for the HELLO the recorder sends.
       executeScript: async ({ files }) => {
         if (control.failInject) throw new Error('inject failed');
-        if (!files.includes('content/recorder.js')) return;
-        seen.push(await send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' }));
+        if (!files.includes('content/recorder.js') || control.silentRecorder) return;
+        control.hello = hello().then((reply) => seen.push(reply));
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
@@ -41,19 +41,29 @@ function worker() {
     sidePanel: { setPanelBehavior: noop }
   };
   const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
+  const hello = () => send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' });
   const context = vm.createContext({ chrome, console, URL, crypto, setTimeout, clearTimeout });
   context.self = context;
   context.importScripts = (...files) => { for (const f of files) vm.runInContext(read(f), context, { filename: f }); };
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });
-  return { send, seen, control, session };
+  return { send, hello, seen, control, session };
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
-  const { send, seen } = worker();
+  const { send, seen, control, session } = worker();
   const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   assert.equal(reply.ok, true, JSON.stringify(reply));
+  await control.hello;
   assert.ok(seen.length > 0, 'the recorder was injected');
   assert.equal(seen[0].active, true);
+  assert.equal(session.opsRecording.attached, true);
+});
+
+test('an injection that ends with no HELLO does not count as attached', async () => {
+  const { send, control, session } = worker();
+  control.silentRecorder = true;
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  assert.equal(session.opsRecording.attached, false);
 });
 
 test('a restart that fails does not leave the earlier recording saved as recording', async () => {
@@ -76,11 +86,17 @@ test('a restart that cannot stop the earlier recording does not leave it saved a
   assert.equal(session.opsRecording.state, 'stopped');
 });
 
-test('a page the recorder could not reach is reported, and the recording goes on for the next page', async () => {
-  const { send, control, session } = worker();
+test('a page the recorder could not reach stays unattached until a recorder says HELLO', async () => {
+  const { send, hello, control, session } = worker();
   control.failInject = true;
   const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   assert.equal(reply.ok, true);
-  assert.equal(reply.warning, 'PAGE_NOT_ATTACHED');
   assert.equal(session.opsRecording.state, 'recording');
+  assert.equal(session.opsRecording.attached, false);
+  // A step from the worker, such as a same-document URL change, shows nothing about the recorder.
+  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } });
+  assert.equal(session.opsRecording.attached, false);
+  assert.equal((await hello()).active, true);
+  assert.equal(session.opsRecording.attached, true);
+
 });

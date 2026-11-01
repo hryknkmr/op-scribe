@@ -70,8 +70,8 @@ function mutate(fn) {
     }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
-    const late = await result?.after?.();
-    return late ?? result?.reply;
+    await result?.after?.();
+    return result?.reply;
   });
   queue = run.catch(() => {});
   return run;
@@ -118,10 +118,8 @@ async function injectNow(tabId) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
-    return true;
   } catch (error) {
     console.warn('[op-scribe] inject failed', error);
-    return false;
   }
 }
 
@@ -161,6 +159,8 @@ async function start({ tabId, url }) {
       startedAt: Date.now(),
       endedAt: null,
       revision: 0,
+      // Set by the recorder's own HELLO: a finished injection does not show it is listening.
+      attached: false,
       // Host lists are fixed for the whole recording; keywords apply as soon as they are added.
       policy: policyOf(settings),
       aliases: {},
@@ -183,7 +183,7 @@ async function start({ tabId, url }) {
     }
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
-    return { save: rec, after: async () => ((await injectNow(tabId)) ? { ok: true } : { ok: true, warning: 'PAGE_NOT_ATTACHED' }) };
+    return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
   });
 }
 
@@ -278,6 +278,13 @@ async function handle(message, sender) {
     if (type === 'HELLO') {
       const rec = await getRecording();
       if (!isRecordingTab(rec, tabId)) return { active: false };
+      if (!rec.attached) {
+        await mutate(async (current) => {
+          if (!isRecordingTab(current, tabId) || current.attached) return null;
+          current.attached = true;
+          return { save: current };
+        }).catch(() => { /* only the panel's notice stays: the recorder still gets its config */ });
+      }
       const settings = await getSettings();
       const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
       return { active: true, config: { commercial, keywords: settings.keywords } };
