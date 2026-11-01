@@ -138,3 +138,17 @@ test('the Markdown shows a URL with any scheme as a label, never [[…]] (E4; re
     assert.ok(!/\[\[/.test(md), `${as}: ${md}`);
   }
 });
+
+test('in the Gherkin, the sentences show ‹…› and the attribute tables [[…]] (E3; review of #34 R4)', () => {
+  const rec = { id: 'rec-g', steps: [
+    { type: 'navigate', t: 0, env: 'standard', source: 'user', url: ['https://site-1.invalid/users/', { redacted: 'id' }] },
+    { type: 'click', t: 9000, env: 'standard', source: 'user', url: ['https://site-1.invalid/'], target: { role: 'button', name: ['OK'] } },
+    { type: 'navigate', t: 9100, env: 'standard', source: 'user', url: [{ redacted: 'url', as: 'invalid' }] },
+    { type: 'navigate', t: 20000, env: 'standard', source: 'user', url: ['https://site-1.invalid/?q=', { redacted: 'v' }] }
+  ] };
+  const lines = D.toGherkin(rec).split('\n');
+  const sentences = lines.filter((l) => /^\s+(Given|When|Then|And) /.test(l));
+  const cells = lines.filter((l) => /^\s+\|/.test(l));
+  assert.ok(sentences.length >= 3 && sentences.every((l) => !l.includes('[[')), sentences.join('\n'));
+  assert.ok(cells.some((l) => l.includes('[[id]]')) && cells.some((l) => l.includes('[[url:invalid]]')) && cells.some((l) => l.includes('[[v]]')), cells.join('\n'));
+});

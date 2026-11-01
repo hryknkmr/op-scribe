@@ -585,16 +585,20 @@
     const walk = (v, path, inArgs = false) => {
       if (typeof v === 'string') return check(v, path);
       if (Array.isArray(v)) {
-        // Runs: the strings next to each other are one text, so a keyword split over two
-        // strings is still found; a masked part is a gap, its scheme scanned as a text of its own.
-        let text = '';
+        // Each item on its own, as any array of texts; and for runs, the strings next to each
+        // other as one text too, so a keyword split over two strings is still found. A masked
+        // part is a gap; its scheme is scanned as a text of its own (review of #34).
+        let joined = [];
+        const flush = (i) => {
+          if (joined.length > 1) check(joined.join(''), `${path}[${i}]`);
+          joined = [];
+        };
         v.forEach((item, i) => {
-          if (typeof item === 'string') { text += item; return; }
-          if (text) check(text, `${path}[${i}]`);
-          text = '';
           walk(item, `${path}[${i}]`, inArgs);
+          if (typeof item === 'string') joined.push(item);
+          else flush(i - 1);
         });
-        if (text) check(text, `${path}[${v.length - 1}]`);
+        flush(v.length - 1);
         return undefined;
       }
       if (v && typeof v === 'object') {

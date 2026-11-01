@@ -346,7 +346,8 @@
     const startUrl = txt(start?.url || startUrlOf(rec));
     // [[url:none]]: the payload of a recording whose steps were all deleted.
     if (startUrl && startUrl !== NO_URL) {
-      out.push('  Background:', `    Given "${startUrl}" を開いている`, ...table([['url', startUrl]], '      '), '');
+      // The step's sentence shows ‹…› like the Markdown; the attribute table keeps [[…]] (E3).
+      out.push('  Background:', `    Given "${humanize(startUrl)}" を開いている`, ...table([['url', startUrl]], '      '), '');
     }
     out.push('  Scenario: 記録された操作');
 
@@ -365,8 +366,8 @@
         push('Then', line(humanize(txt(step.note))), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
-        if (caused) push('Then', `"${txt(step.url)}" に遷移する`, [['url', txt(step.url)]]);
-        else push('When', `"${txt(step.url)}" を開く`, [['action', 'navigate'], ['url', txt(step.url)]]);
+        if (caused) push('Then', `"${humanize(txt(step.url))}" に遷移する`, [['url', txt(step.url)]]);
+        else push('When', `"${humanize(txt(step.url))}" を開く`, [['action', 'navigate'], ['url', txt(step.url)]]);
       } else {
         push('When', humanize(describeStep(step)), attributesOf(step));
       }

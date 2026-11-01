@@ -229,6 +229,9 @@ test('the Gherkin is not scanned as a text, the Markdown is scanned as written (
     assert.equal(S.finalScan({ m }, { keywords: ['site'] }).length, 1, m);
   }
   assert.deepEqual(S.finalScan({ m: 'alice@site-1.invalid' }).map((f) => f.kinds), [['email']]);
+  // An array of texts keeps their bounds: a host at the end of one is still a whole host (review of #34 R4).
+  assert.equal(S.finalScan({ preconditions: ['intranet.corp.invalid', 'x'] }, { hosts: ['intranet.corp.invalid'] }).length, 1);
+  assert.equal(S.finalScan({ note: ['ac', 'me'] }, { keywords: ['acme'] }).length, 1, 'and runs are still read as one text');
 });
 
 test('an argument key named __proto__ stays an ordinary key (row W5; review R4)', () => {

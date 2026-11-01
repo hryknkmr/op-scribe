@@ -24,3 +24,9 @@ test('the model may merge what it was given, never add one more of it (review of
   const url = { title: '手順', steps: [{ action: 'https://site-1.invalid/ を開く' }, { action: 'https://site-1.invalid/ を開く' }] };
   assert.ok(validate(url, input, noFindings).some((p) => p.includes('URL')));
 });
+
+test('a real host at the end of one precondition is found, whatever follows it (review of #34 R4)', async () => {
+  const S = (await import('node:module')).createRequire(import.meta.url)('../shared/sanitize.js');
+  const output = { title: '手順', steps: [{ action: '「メール」入力欄に ‹メールアドレス› を入力する' }], preconditions: ['intranet.corp.invalid', 'x'] };
+  assert.ok(validate(output, input, (o) => S.finalScan(o, { hosts: ['intranet.corp.invalid'] })).length);
+});
