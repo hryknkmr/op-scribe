@@ -171,6 +171,9 @@ async function refreshActiveTab() {
   }
 }
 
+// Why the last START failed; a plain status line would be rewritten by the next render.
+let startError = '';
+
 function renderStatus() {
   const url = activeTab?.url || '';
   if (!pagePattern(url)) {
@@ -179,6 +182,8 @@ function renderStatus() {
   }
   const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
+  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
+  if (startError) ui.tabStatus.textContent = startError;
 }
 
 function render() {
@@ -246,7 +251,7 @@ ui.start.addEventListener('click', () => {
       return;
     }
     const result = await send('START', { tabId: tab.id, url: tab.url });
-    if (!result?.ok) ui.tabStatus.textContent = `記録を開始できません (${result?.error || 'unknown'})`;
+    startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
     ui.repro.value = '';
     generator = 'none';
     basis = null;

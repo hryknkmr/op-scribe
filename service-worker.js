@@ -70,6 +70,7 @@ function mutate(fn) {
     }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
+    await result?.after?.();
     return result?.reply;
   });
   queue = run.catch(() => {});
@@ -151,7 +152,6 @@ async function start({ tabId, url }) {
     return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
-    if (previous?.state === 'recording') await stopTab(previous);
     const rec = {
       id: newId(),
       state: 'recording',
@@ -159,6 +159,8 @@ async function start({ tabId, url }) {
       startedAt: Date.now(),
       endedAt: null,
       revision: 0,
+      // Set by the recorder's own HELLO: a finished injection does not show it is listening.
+      attached: false,
       // Host lists are fixed for the whole recording; keywords apply as soon as they are added.
       policy: policyOf(settings),
       aliases: {},
@@ -170,10 +172,18 @@ async function start({ tabId, url }) {
     const env = envOf([url], rec.policy);
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
-    await syncContentScripts(rec.grantedPatterns);
-    await injectNow(tabId);
-    await setBadge(true);
-    return { save: rec, reply: { ok: true } };
+    try {
+      if (previous?.state === 'recording') await stopTab(previous);
+      await syncContentScripts(rec.grantedPatterns);
+      await setBadge(true);
+    } catch (error) {
+      if (previous?.state !== 'recording') throw error;
+      // stopTab may have ended it already, in part: do not leave it saved as still recording.
+      return { save: { ...previous, state: 'stopped', endedAt: Date.now() }, reply: { ok: false, error: String(error?.message || error) } };
+    }
+    // After the save: the injected script asks at once whether this tab is recording.
+    // A failed injection is not a failed start: the registered scripts still reach the next page.
+    return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
   });
 }
 
@@ -265,13 +275,16 @@ async function handle(message, sender) {
 
   if (message.from === 'op-scribe/content') {
     const tabId = sender.tab?.id;
-    if (type === 'HELLO') {
-      const rec = await getRecording();
-      if (!isRecordingTab(rec, tabId)) return { active: false };
+    // In the queue, so a recorder of the recording that is ending never gets that recording's policy.
+    if (type === 'HELLO') return mutate(async (rec) => {
+      if (!isRecordingTab(rec, tabId)) return { reply: { active: false } };
       const settings = await getSettings();
       const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      return { active: true, config: { commercial, keywords: settings.keywords } };
-    }
+      const reply = { active: true, config: { commercial, keywords: settings.keywords } };
+      if (rec.attached) return { reply };
+      rec.attached = true;
+      return { save: rec, reply };
+    });
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
@@ -321,6 +334,23 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     appendStep(rec, step);
     return { save: rec };
   });
+});
+
+// A URL change cannot tell a new document from a same-document one, so a loaded page is asked.
+// Only the recorder's HELLO sets attached; it is cleared here when no recorder answers.
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  const asked = await getRecording();
+  if (!isRecordingTab(asked, tabId)) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
+  } catch {
+    await mutate(async (rec) => {
+      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || !rec.attached) return null;
+      rec.attached = false;
+      return { save: rec };
+    });
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
