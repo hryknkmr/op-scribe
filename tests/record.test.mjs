@@ -451,3 +451,25 @@ test('WebMCP returns a site only its own steps and notes: no panel note, no coun
   assert.ok(!/別サイトのメモ|パネルのメモ/.test(repro.markdown + repro.gherkin));
   assert.deepEqual(R.webmcpReply(rec, s, site, 'status'), { ok: true, recording: true, site, stepsOnThisSite: 1 });
 });
+
+test('at the step limit a reported step takes the place of a reported one, never the person\'s (row W7; review of #37 R1)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  const click = () => R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA });
+  const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  for (let i = 0; i < LIMITS.steps; i += 1) R.appendStep(rec, click());
+  assert.equal(R.appendStep(rec, tool()), false, 'no reported step to give way: not recorded');
+  assert.equal(rec.steps.filter((s) => s.source === 'user').length, LIMITS.steps);
+  rec.steps.splice(0, 2);
+  assert.ok(R.appendStep(rec, tool()) && R.appendStep(rec, tool()));
+  assert.ok(R.appendStep(rec, tool()), 'full again: the oldest reported step gives way');
+  assert.equal(rec.steps.filter((s) => s.source === 'user').length, LIMITS.steps - 2);
+});
+
+test('a host of the alias form is aliased even when allowed by name, so two sites never share one name (row W8; review of #37 R1)', () => {
+  const aliases = {};
+  const ctx = { aliases, hostAllowlist: ['site-1.invalid'] };
+  const a = S.renderRuns(S.scrubUrl('https://other.example.com/x', ctx).url);
+  const b = S.renderRuns(S.scrubUrl('https://site-1.invalid/y', ctx).url);
+  assert.notEqual(new URL(a).origin, new URL(b).origin);
+});

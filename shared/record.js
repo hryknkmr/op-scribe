@@ -307,8 +307,16 @@
    */
   function appendStep(rec, step) {
     if (!step) return false;
-    // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
-    if (step.source === 'agent' && rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
+    // What the page reports is kept up to agentSteps; past it the new one is not recorded. At the step
+    // limit it takes the place of the oldest step the page reported, never one of the person's (W7, #17).
+    if (step.source === 'agent') {
+      if (rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
+      if (rec.steps.length >= LIMITS.steps) {
+        const oldest = rec.steps.findIndex((s) => s.source === 'agent');
+        if (oldest < 0) return false;
+        rec.steps.splice(oldest, 1);
+      }
+    }
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
@@ -330,8 +338,12 @@
     let bytes = new TextEncoder().encode(json).length;
     // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
     // a single step too large for the room is dropped too rather than break the save (review R41).
+    // The steps the page reported go first, oldest first, then the person's (W7, #17).
     const before = rec.steps.length;
-    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+    while (rec.steps.length && bytes > LIMITS.storeBytes) {
+      const agent = rec.steps.findIndex((s) => s.source === 'agent');
+      bytes -= bytesOf(rec.steps.splice(Math.max(agent, 0), 1)[0]) + 1;
+    }
     // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
     if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }

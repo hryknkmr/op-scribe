@@ -462,7 +462,9 @@
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
-    if (hostAllowed(host, ctx.hostAllowlist)) {
+    // A host of the alias form is always aliased, even when allowed by name: kept, it would read as
+    // the alias of another site, and WebMCP would hand that site's steps to it (W8; review of #37).
+    if (!ALIAS.test(host) && hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
       const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
