@@ -4,8 +4,9 @@ name: PII Guard
 # ローカル hooks は回避できるため、branch protection で required check にすること。
 
 on:
+  # Every branch: a pushed branch is readable once the repository is public, PR or not.
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
     branches: [main]
 
@@ -43,6 +44,22 @@ jobs:
 
       - name: Check commit identities
         run: scripts/pii-guard.sh check-identities "$RANGE"
+
+      # On a push, only what it added: commits on main from before the display name changed
+      # still carry the old name. Whether to rewrite them is decided in #20; use RANGE then.
+      - name: Check commit names
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            # A new branch has no before, and a force push's may not have been fetched.
+            if git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              RANGE="${BEFORE_SHA}..HEAD"
+            elif [ "$GITHUB_REF" != refs/heads/main ]; then
+              RANGE="origin/main..HEAD"
+            fi
+          fi
+          scripts/pii-guard.sh check-names "$RANGE"
 
       # Each commit on its own: content added in one commit and removed in a later
       # one, and commit messages, never show up in the latest tree.
