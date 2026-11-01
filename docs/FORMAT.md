@@ -92,7 +92,7 @@ Feature: 記録された操作の再現
 
 再現する側（人・AI）へのルール:
 
-- 要素は `role` + `name` で探し、見つからなければ `selector` を使う（Playwright の `getByRole` に対応）。
+- 要素は `role` + `name` で探す（Playwright の `getByRole(role, { name, exact: true })` に対応）。一つに決まらない、または見つからない場合は `selector` を使い、なお曖昧なら推測して操作しない。
 - `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。`[[text:N]]` は N 文字程度の任意文字列。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 
