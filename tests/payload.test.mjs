@@ -675,3 +675,9 @@ test('a keyword added after the recording is found in a percent-encoded URL path
   assert.equal(S.finalScan({ url: recorded }, { keywords: ['Acme'] }).length, 1);
   assert.deepEqual(S.finalScan({ url: ['https://example.com/%E3%81%82/x'] }, { keywords: ['Acme'] }), []);
 });
+
+test('an escape that is not UTF-8 does not hide the escapes after it (U5, K2, E6; review of #34 R6)', () => {
+  assert.deepEqual(S.scrubUrl('https://example.com/%FF%41cme/x', { hostAllowlist: ['example.com'], keywords: ['Acme'] }).url,
+    ['https://example.com/', { redacted: 'masked' }, '/x']);
+  assert.equal(S.finalScan({ url: ['https://example.com/%FF%41cme/x'] }, { keywords: ['Acme'] }).length, 1);
+});

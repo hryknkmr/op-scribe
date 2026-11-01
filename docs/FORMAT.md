@@ -71,7 +71,7 @@ Feature: 記録された操作の再現
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
 | `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
-| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/:id` |
+| `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/[[id]]` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
 | `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
 | `tag` | HTML タグ名 | `button` |

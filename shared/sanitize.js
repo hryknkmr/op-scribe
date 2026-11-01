@@ -477,7 +477,8 @@
       if (i > 0) parts.push('/');
       if (!seg) return;
       let decoded = seg;
-      try { decoded = decodeURIComponent(seg); } catch { /* keep raw */ }
+      // Every escape that makes a character, even after one that does not ("%FF%41cme"; review of #34 R6).
+      decoded = percentDecode(seg);
       if (decoded.startsWith('@')) { kinds.push('user'); parts.push(redaction('user')); return; }
       if (ID_SEGMENT.test(decoded)) { kinds.push('id'); parts.push(redaction('id')); return; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
@@ -550,9 +551,11 @@
    * the page wrote it, and a keyword added after the recording must still find it (K2, E6;
    * review of #34 R5).
    */
-  const percentDecode = (text) => String(text).replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => {
-    try { return decodeURIComponent(m); } catch { return m; }
-  });
+  // A byte that is not UTF-8 becomes U+FFFD and the bytes after it are still read.
+  const UTF8 = new TextDecoder();
+  function percentDecode(text) {
+    return String(text).replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => UTF8.decode(Uint8Array.from(m.match(/%(..)/g), (h) => parseInt(h.slice(1), 16))));
+  }
 
   // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
   const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
