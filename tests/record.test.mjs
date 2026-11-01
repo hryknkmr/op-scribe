@@ -495,14 +495,11 @@ test('a step whose URL is redacted for its length is still its site\'s, and the 
   assert.equal(payload.recording.steps[0].site, undefined);
 });
 
-test('the exits refuse more reported steps than a recording keeps, and saving trims them (row W7; review of #37)', () => {
+test('saving trims the reported steps of a site past the limit (row W7; review of #37)', () => {
   const { LIMITS } = require('../shared/limits.js');
-  const P = require('../shared/payload.js');
   const rec = newRec();
   const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
   rec.steps = Array.from({ length: LIMITS.agentSteps + 1 }, tool);
-  const payload = P.buildPayload({ ...rec, id: 'rec-cap', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
-  assert.ok(P.checkPayload(payload).some((p) => p.problem === 'too many reported steps'));
   R.fitRecord(rec);
   assert.equal(rec.steps.length, LIMITS.agentSteps);
 });
@@ -533,7 +530,22 @@ test('a navigation of the tab is recorded as unknown and shares the limit of wha
   assert.equal(rec.steps[0], person);
   const payload = P.buildPayload({ ...rec, id: 'rec-nav', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
   assert.deepEqual(P.checkPayload(payload), []);
-  payload.recording.steps.push({ ...payload.recording.steps[1], n: payload.recording.steps.length + 1 });
-  payload.reproduction.gherkin = require('../shared/describe.js').toGherkin(payload.recording);
-  assert.ok(P.checkPayload(payload).some((p) => p.problem === 'too many reported steps'));
+});
+
+test('the limit is a site\'s own: what one page can add does not depend on the other sites (rows W7, W8; owner decision on #37)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const OTHER = 'https://other.example.com/x';
+  const count = (others) => {
+    const rec = newRec();
+    for (let i = 0; i < others; i += 1) R.appendStep(rec, R.cleanStep({ type: 'tool', pageUrl: OTHER, tool: 'x', ok: true }, rec, settings, { tabUrl: OTHER }));
+    let added = 0;
+    while (R.appendStep(rec, R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA }))) added += 1;
+    return added;
+  };
+  assert.equal(count(0), LIMITS.agentSteps);
+  assert.equal(count(37), LIMITS.agentSteps);
+});
+
+test('a note written in the side panel is the person\'s (row W7; owner decision on #37)', () => {
+  assert.equal(R.cleanStep({ type: 'note', note: 'メモ' }, newRec(), settings).source, 'user');
 });

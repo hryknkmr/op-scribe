@@ -315,11 +315,14 @@
   /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
   const reported = (s) => s.source !== 'user';
   const nextToDrop = (rec) => Math.max(rec.steps.findIndex(reported), 0);
+  // The steps not from the person on one site: the limit is a site's own, so what one page can add
+  // tells it nothing about the other sites (W7, W8; owner decision on #37).
+  const reportedOn = (rec, site) => rec.steps.filter((s) => reported(s) && s.site === site);
 
   function appendStep(rec, step) {
     if (!step) return false;
-    // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
-    if (reported(step) && rec.steps.filter(reported).length >= LIMITS.agentSteps) return false;
+    // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
+    if (reported(step) && reportedOn(rec, step.site).length >= LIMITS.agentSteps) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     // Past the step limit the steps the page reported go first, oldest first, whoever added the
@@ -336,12 +339,12 @@
    */
   function fitRecord(rec) {
     if (!rec?.steps) return;
-    // More reported steps than agentSteps (a recording saved before the limit): the oldest go (W7).
-    let count = rec.steps.filter(reported).length;
+    // More reported steps on a site than agentSteps (a recording saved before the limit): its oldest go (W7).
     let changed = false;
-    while (count > LIMITS.agentSteps) {
-      rec.steps.splice(nextToDrop(rec), 1);
-      count -= 1;
+    for (const site of new Set(rec.steps.filter(reported).map((s) => s.site))) {
+      const extra = reportedOn(rec, site).slice(0, -LIMITS.agentSteps);
+      if (!extra.length) continue;
+      rec.steps = rec.steps.filter((s) => !extra.includes(s));
       changed = true;
     }
     if (changed) rec.revision = (rec.revision || 0) + 1;

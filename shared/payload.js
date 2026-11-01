@@ -490,8 +490,6 @@
     if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
     checkUrl(payload.recording.startUrl, startStep?.env, 'recording.startUrl', problems, { none: true });
     payload.recording.webmcpTools.forEach((w, i) => checkSite(w.site, `recording.webmcpTools[${i}].site`, problems));
-    // Row W7: no more steps the page reported than a recording keeps.
-    if (steps.filter((s) => s.source !== 'user').length > LIMITS.agentSteps) problems.push({ path: 'recording.steps', problem: 'too many reported steps' });
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });
