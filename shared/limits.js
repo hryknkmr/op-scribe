@@ -135,7 +135,7 @@
     key: { required: ['key'], allowed: ['url', 'target', 'key'] },
     submit: { required: [], allowed: ['url', 'target'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
-    note: { required: ['note'], allowed: ['url', 'note'] }
+    note: { required: ['note'], allowed: ['url', 'note', 'kind'] }
   });
 
   /**
@@ -203,7 +203,8 @@
     source: words(['user', 'agent']),
     treatment: words(['kept', 'length', 'redacted']),
     field: words(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']),
-    kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat()),
+    // A typed value's kind, and a note's kind (#32).
+    kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat(), ['bug', 'question', 'idea', 'next']),
     redacted: words(RUN_KINDS.text, RUN_KINDS.url),
     key: (value) => /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/.test(value),
     role: words([...ARIA_ROLES]),

@@ -87,6 +87,8 @@
     return (rec?.steps || []).find((s) => s.url)?.url || [{ redacted: 'url', as: 'none' }];
   }
 
+  const NOTE_KIND_LABELS = { bug: '不具合', question: '疑問', idea: '気づき', next: '次に試す' };
+
   /**
    * A note written in the side panel has no URL and no page to belong to. It is
    * commercial while the recording has any commercial step (ADR 0001), decided
@@ -196,7 +198,7 @@
         return `WebMCP ツール「${txt(step.tool)}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':
-        return `（確認）${txt(step.note)}`;
+        return `（${NOTE_KIND_LABELS[step.kind] || '確認'}）${txt(step.note)}`;
       default:
         return `${step.type} 操作`;
     }
@@ -213,9 +215,15 @@
     const steps = rec?.steps || [];
     const out = [];
     const notes = [];
+    const findings = [];
     let previous = null;
 
     for (const step of steps) {
+      // What the tester noticed is not an expected result: it stays out of the steps.
+      if (step.type === 'note' && step.kind) {
+        findings.push({ kind: step.kind, note: humanize(txt(step.note)), afterStep: out.length });
+        continue;
+      }
       if (step.type === 'note') {
         // Everything in the Markdown is rendered with ‹…› labels, never [[…]] (E4, #28).
         const note = humanize(txt(step.note));
@@ -243,6 +251,7 @@
     const first = txt(steps.find((s) => s.url)?.url);
     if (startUrl !== NO_URL && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
       out.unshift({ action: humanize(`${startUrl} を開く`) });
+      for (const finding of findings) finding.afterStep += 1;
     }
 
     const preconditions = [];
@@ -265,7 +274,8 @@
       title: `操作の再現手順（${out.length} ステップ）`,
       preconditions,
       steps: out,
-      notes
+      notes,
+      findings
     };
   }
 
@@ -279,6 +289,12 @@
       lines.push(`${i + 1}. ${line(step.action)}`);
       if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
     });
+    if (repro.findings?.length) {
+      lines.push('', '## 探索メモ', ...repro.findings.map((f) => {
+        const where = f.afterStep ? `（手順 ${f.afterStep} の後）` : '';
+        return `- [${NOTE_KIND_LABELS[f.kind]}] ${line(f.note)}${where}`;
+      }));
+    }
     if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${line(n)}`));
     // Every line one line, whatever field it came from (E7; review R27), and every placeholder
     // a ‹…› label, the AI's output too: the Markdown is scanned as written (E4, #28).
@@ -362,6 +378,10 @@
 
     for (const step of steps) {
       if (step === start) { previous = step; continue; }
+      if (step.type === 'note' && step.kind) {
+        out.push(`    # [${NOTE_KIND_LABELS[step.kind]}] ${line(humanize(txt(step.note)))}`);
+        continue;
+      }
       if (step.type === 'note') {
         push('Then', line(humanize(txt(step.note))), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {

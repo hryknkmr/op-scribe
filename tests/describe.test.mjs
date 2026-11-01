@@ -121,6 +121,61 @@ test('argument strings are one line before they become JSON (row E7; review R13)
   assert.equal(sentence, 'WebMCP ツール「t」を実行する（引数: {"q":"a b c"}）');
 });
 
+const explored = {
+  id: 'rec-notes',
+  steps: [
+    { type: 'click', t: 0, env: 'standard', source: 'user', target: { role: 'button', name: '保存' } },
+    { type: 'note', t: 1, env: 'standard', source: 'user', note: '保存が2回走る', kind: 'bug' },
+    { type: 'note', t: 2, env: 'standard', source: 'user', note: '保存できる' }
+  ]
+};
+
+test('notes with a kind stay out of the expected results and Then', () => {
+  const repro = D.buildReproduction(explored);
+  assert.equal(repro.steps[0].expected, '保存できる');
+  assert.deepEqual(repro.findings, [{ kind: 'bug', note: '保存が2回走る', afterStep: 1 }]);
+  const markdown = D.toMarkdown(repro);
+  assert.match(markdown, /## 探索メモ\n- \[不具合\] 保存が2回走る（手順 1 の後）/);
+  assert.doesNotMatch(markdown, /期待結果: .*2回走る/);
+  const feature = D.toGherkin(explored);
+  assert.match(feature, /^ {4}# \[不具合\] 保存が2回走る$/m);
+  assert.doesNotMatch(feature, /(Then|And) 保存が2回走る/);
+  assert.match(feature, /Then 保存できる/);
+});
+
+test('a note with a kind cannot add a line to the Gherkin', () => {
+  const feature = D.toGherkin({ id: 'x', steps: [{ type: 'note', t: 0, kind: 'idea', note: 'a\nThen 偽の手順' }] });
+  assert.doesNotMatch(feature, /^ *Then 偽の手順/m);
+});
+
+test('a note with a kind does not change how the next steps read', () => {
+  const steps = [
+    { type: 'click', t: 0, env: 'standard', source: 'user', target: { role: 'link', name: '次へ' } },
+    { type: 'navigate', t: 500, env: 'standard', source: 'user', url: 'https://example.com/next' }
+  ];
+  const note = { type: 'note', t: 100, env: 'standard', source: 'user', note: '遅い', kind: 'idea' };
+  const without = (text) => text.split('\n').filter((l) => !l.includes('[気づき]')).join('\n');
+  const body = (text) => text.split('\n').filter((l) => !l.startsWith('# recording')).join('\n');
+  const plain = D.toGherkin({ id: 'x', steps });
+  const marked = D.toGherkin({ id: 'x', steps: [steps[0], note, steps[1]] });
+  assert.match(marked, /Then "https:\/\/example\.com\/next" に遷移する/);
+  assert.equal(without(body(marked)), body(plain));
+  assert.deepEqual(D.buildReproduction({ id: 'x', steps: [steps[0], note, steps[1]] }).steps, D.buildReproduction({ id: 'x', steps }).steps);
+});
+
+test('a note counts the opening step added in front of the steps', () => {
+  const repro = D.buildReproduction({
+    id: 'x',
+    startUrl: 'https://example.com/',
+    steps: [
+      { type: 'click', t: 0, env: 'standard', source: 'user', url: 'https://example.com/', target: { role: 'button', name: '保存' } },
+      { type: 'note', t: 1, env: 'standard', source: 'user', note: '遅い', kind: 'bug' }
+    ]
+  });
+  assert.equal(repro.steps[1].action, '「保存」ボタンをクリックする');
+  assert.equal(repro.findings[0].afterStep, 2);
+});
+
 test('a panel note takes the recording\'s environment in every Gherkin, not the one it was saved with (review R36)', () => {
   const steps = [
     { type: 'note', t: 0, env: 'standard', source: 'user', note: 'メモ' },

@@ -120,7 +120,8 @@
       tool: opt(runs('W6', LIMITS.tool)),
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
-      note: opt(runs('T1', LIMITS.note))
+      note: opt(runs('T1', LIMITS.note)),
+      kind: opt({ type: 'enum', row: 'T6', values: ['bug', 'question', 'idea', 'next'] })
     }
   };
 

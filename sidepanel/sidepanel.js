@@ -33,6 +33,7 @@ const ui = {
   steps: el('steps'),
   noteForm: el('note-form'),
   noteInput: el('note-input'),
+  noteKind: el('note-kind'),
   redactions: el('redactions'),
   aiState: el('ai-state'),
   genAi: el('gen-ai'),
@@ -171,6 +172,9 @@ async function refreshActiveTab() {
   }
 }
 
+// Why the last START failed; a plain status line would be rewritten by the next render.
+let startError = '';
+
 function renderStatus() {
   const url = activeTab?.url || '';
   if (!pagePattern(url)) {
@@ -179,6 +183,8 @@ function renderStatus() {
   }
   const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
+  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
+  if (startError) ui.tabStatus.textContent = startError;
 }
 
 function render() {
@@ -246,7 +252,7 @@ ui.start.addEventListener('click', () => {
       return;
     }
     const result = await send('START', { tabId: tab.id, url: tab.url });
-    if (!result?.ok) ui.tabStatus.textContent = `記録を開始できません (${result?.error || 'unknown'})`;
+    startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
     ui.repro.value = '';
     generator = 'none';
     basis = null;
@@ -285,7 +291,7 @@ ui.noteForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = ui.noteInput.value.trim();
   if (!text) return;
-  const result = await send('ADD_NOTE', { text });
+  const result = await send('ADD_NOTE', { text, kind: ui.noteKind.value || undefined });
   if (result?.ok) ui.noteInput.value = '';
 });
 
@@ -346,7 +352,9 @@ async function generateAi() {
       title: output.title,
       preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
       steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])]
+      notes: [...new Set([...(output.notes || []), ...base.notes])],
+      // The AI may merge steps, so a step number would no longer point at the right one.
+      findings: base.findings.map(({ kind, note }) => ({ kind, note }))
     };
     await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
     ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';

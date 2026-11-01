@@ -16,6 +16,7 @@
   const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed, renderRuns } = root.OpScribeLimits || require('./limits.js');
   const { scrubText, scrubRuns, runKinds, cleanLine, oneLine, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
+  const NOTE_KINDS = new Set(['bug', 'question', 'idea', 'next']);
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = LIMITS.kept;
@@ -247,7 +248,10 @@
         countArgs(step.args, kinds);
       }
     }
-    if (type === 'note') step.note = text(raw.note, LIMITS.note);
+    if (type === 'note') {
+      step.note = text(raw.note, LIMITS.note);
+      if (NOTE_KINDS.has(raw.kind)) step.kind = raw.kind;
+    }
     // Only what this kind of step may carry, and nothing without what it must (row T6).
     const rule = STEP_RULES[type];
     for (const f of Object.keys(step)) {

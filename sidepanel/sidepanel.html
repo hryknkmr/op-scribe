@@ -44,6 +44,13 @@
       <div class="body">
         <ol id="steps" class="steps"></ol>
         <form id="note-form" class="row">
+          <select id="note-kind" aria-label="メモの種類">
+            <option value="">期待結果</option>
+            <option value="bug">不具合</option>
+            <option value="question">疑問</option>
+            <option value="idea">気づき</option>
+            <option value="next">次に試す</option>
+          </select>
           <input id="note-input" type="text" maxlength="300" placeholder="期待結果・確認点を追加（例: 一覧に結果が表示される）">
           <button type="submit" class="secondary">追加</button>
         </form>
