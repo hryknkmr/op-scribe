@@ -207,7 +207,8 @@
       return r.url;
     };
 
-    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: raw.source === 'agent' ? 'agent' : 'user' };
+    // user only for what the content script saw a person do; the worker says agent or unknown (W7).
+    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: ['agent', 'unknown'].includes(raw.source) ? raw.source : 'user' };
     if (raw.pageUrl) {
       // A page on a host past the alias limit is not recorded (K5; review R42).
       if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
@@ -312,12 +313,13 @@
    * kept and the recording can always be saved (review R40).
    */
   /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
-  const nextToDrop = (rec) => Math.max(rec.steps.findIndex((s) => s.source === 'agent'), 0);
+  const reported = (s) => s.source !== 'user';
+  const nextToDrop = (rec) => Math.max(rec.steps.findIndex(reported), 0);
 
   function appendStep(rec, step) {
     if (!step) return false;
     // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
-    if (step.source === 'agent' && rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
+    if (reported(step) && rec.steps.filter(reported).length >= LIMITS.agentSteps) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     // Past the step limit the steps the page reported go first, oldest first, whoever added the
@@ -335,11 +337,11 @@
   function fitRecord(rec) {
     if (!rec?.steps) return;
     // More reported steps than agentSteps (a recording saved before the limit): the oldest go (W7).
-    let reported = rec.steps.filter((s) => s.source === 'agent').length;
+    let count = rec.steps.filter(reported).length;
     let changed = false;
-    while (reported > LIMITS.agentSteps) {
+    while (count > LIMITS.agentSteps) {
       rec.steps.splice(nextToDrop(rec), 1);
-      reported -= 1;
+      count -= 1;
       changed = true;
     }
     if (changed) rec.revision = (rec.revision || 0) + 1;

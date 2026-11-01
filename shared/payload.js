@@ -111,7 +111,7 @@
       type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
-      source: { type: 'enum', row: 'T6', values: ['user', 'agent'] },
+      source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
       url: opt(URL_VALUE),
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
@@ -491,7 +491,7 @@
     checkUrl(payload.recording.startUrl, startStep?.env, 'recording.startUrl', problems, { none: true });
     payload.recording.webmcpTools.forEach((w, i) => checkSite(w.site, `recording.webmcpTools[${i}].site`, problems));
     // Row W7: no more steps the page reported than a recording keeps.
-    if (steps.filter((s) => s.source === 'agent').length > LIMITS.agentSteps) problems.push({ path: 'recording.steps', problem: 'too many reported steps' });
+    if (steps.filter((s) => s.source !== 'user').length > LIMITS.agentSteps) problems.push({ path: 'recording.steps', problem: 'too many reported steps' });
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });

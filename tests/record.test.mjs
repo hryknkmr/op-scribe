@@ -516,3 +516,24 @@ test('a WebMCP reproduction carries no recording id (row W8; review of #37 R4)',
   assert.equal(repro.ok, true);
   assert.ok(!JSON.stringify(repro).includes('rec-shared-1'));
 });
+
+test('a navigation of the tab is recorded as unknown and shares the limit of what the page reports (row W7; owner decision on #37)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const P = require('../shared/payload.js');
+  const rec = newRec();
+  const nav = (i) => R.cleanStep({ type: 'navigate', pageUrl: `${BETA}?p=${i}`, source: 'unknown' }, rec, settings, { tabUrl: BETA });
+  const person = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA });
+  assert.equal(nav(0).source, 'unknown');
+  assert.equal(person.source, 'user');
+  assert.ok(R.appendStep(rec, person));
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, nav(i)));
+  const tool = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  assert.equal(R.appendStep(rec, tool), false, 'navigations and reports share the limit');
+  assert.equal(R.appendStep(rec, nav(999)), false);
+  assert.equal(rec.steps[0], person);
+  const payload = P.buildPayload({ ...rec, id: 'rec-nav', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
+  assert.deepEqual(P.checkPayload(payload), []);
+  payload.recording.steps.push({ ...payload.recording.steps[1], n: payload.recording.steps.length + 1 });
+  payload.reproduction.gherkin = require('../shared/describe.js').toGherkin(payload.recording);
+  assert.ok(P.checkPayload(payload).some((p) => p.problem === 'too many reported steps'));
+});

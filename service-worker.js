@@ -172,7 +172,7 @@ async function start({ tabId, url }) {
     };
     const env = envOf([url], rec.policy);
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
-    appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
+    appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url, source: 'unknown' }, rec, settings, { tabUrl: url }));
     try {
       if (previous?.state === 'recording') await stopTab(previous);
       await syncContentScripts(rec.grantedPatterns);
@@ -340,7 +340,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
-    const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings, { tabUrl: changeInfo.url });
+    const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, rec, settings, { tabUrl: changeInfo.url });
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
     if (step && last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last) return null;
     appendStep(rec, step);
