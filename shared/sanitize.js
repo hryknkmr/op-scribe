@@ -419,17 +419,12 @@
     });
   }
 
-  function aliasFor(origin, aliases, allowlist = []) {
+  function aliasFor(origin, aliases) {
     if (aliases[origin]) return aliases[origin];
     // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
     // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
     if (Object.keys(aliases).length >= LIMITS.aliases) return null;
-    // Never the name of a host kept by name: two sites would read as one, and WebMCP would hand one
-    // the other's steps (U4, W8; review of #37).
-    const taken = new Set(Object.values(aliases));
-    let n = Object.keys(aliases).length + 1;
-    while (taken.has(`site-${n}.invalid`) || hostAllowed(`site-${n}.invalid`, allowlist)) n += 1;
-    aliases[origin] = `site-${n}.invalid`;
+    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
     return aliases[origin];
   }
 
@@ -467,10 +462,12 @@
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
-    if (hostAllowed(host, ctx.hostAllowlist)) {
+    // A host of the alias form is always aliased, even when allowed by name: kept, it would read as
+    // the alias of another site, and WebMCP would hand that site's steps to it (U4, W8; owner decision on #37).
+    if (!ALIAS.test(host) && hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
-      const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases, ctx.hostAllowlist);
+      const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
       if (!alias) return { url: whole('invalid'), kinds: ['url', 'host'], untracked: true };
       origin = `${url.protocol}//${alias}`;
       kinds.push('host');

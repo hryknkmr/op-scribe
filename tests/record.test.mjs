@@ -471,11 +471,14 @@ test('past the step limit the reported steps go first, whoever adds the new step
   assert.equal(rec.steps.length, LIMITS.steps);
 });
 
-test('an alias never takes the name of a host kept by name (rows U4, W8; reviews of #37 R1, R2)', () => {
-  const aliases = {};
-  const ctx = { aliases, hostAllowlist: ['site-1.invalid'] };
-  const a = S.renderRuns(S.scrubUrl('https://other.example.com/x', ctx).url);
-  const b = S.renderRuns(S.scrubUrl('https://site-1.invalid/y', ctx).url);
-  assert.equal(new URL(b).host, 'site-1.invalid', 'kept by name (U4)');
-  assert.equal(new URL(a).host, 'site-2.invalid');
+test('a host of the alias form is aliased even when allowed by name, so two sites never share one name (rows U4, W8; owner decision on #37)', () => {
+  for (const hostAllowlist of [['site-1.invalid'], ['*.invalid']]) {
+    const aliases = {};
+    const ctx = { aliases, hostAllowlist };
+    const a = new URL(S.renderRuns(S.scrubUrl('https://other.example.com/x', ctx).url)).origin;
+    const b = new URL(S.renderRuns(S.scrubUrl('https://site-1.invalid/y', ctx).url)).origin;
+    assert.notEqual(a, b, JSON.stringify(hostAllowlist));
+    // Every other host the list allows is still kept by name.
+    assert.equal(new URL(S.renderRuns(S.scrubUrl('https://shop.invalid/z', ctx).url)).host, hostAllowlist[0] === '*.invalid' ? 'shop.invalid' : 'site-3.invalid');
+  }
 });
