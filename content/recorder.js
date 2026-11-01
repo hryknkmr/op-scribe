@@ -301,7 +301,7 @@
       // Synthetic events (page scripts, automation) are not human operations.
       if (!config || !event.isTrusted) return;
       try { handler(event); } catch (error) { console.warn('[op-scribe] handler failed', type, error); }
-    }, true);
+    }, { capture: true, passive: true });
   }
 
   // ------------------------------------------------------- MAIN world relay

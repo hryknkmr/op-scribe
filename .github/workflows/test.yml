@@ -28,3 +28,21 @@ jobs:
             const missing = files.filter((f) => !fs.existsSync(f));
             if (missing.length) { console.error('missing:', missing); process.exit(1); }
           "
+
+  # The extension in a real Chromium, on made-up sites (e2e/fixtures.mjs).
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10.34.4
+      # No lockfile in the repository (.gitignore): Playwright is pinned in package.json.
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: End-to-end tests (recording, WebMCP)
+        run: pnpm e2e

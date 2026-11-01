@@ -1,5 +1,9 @@
 .DS_Store
 node_modules/
+# No lockfile: its package@version keys read as addresses to the email check in pii-guard, which scans
+# every commit. The E2E tests pin Playwright in package.json, and Playwright pins its own dependencies;
+# what is given up is the lockfile's integrity hashes. See README (開発者向け) before adding a dependency.
+pnpm-lock.yaml
 *.log
 dist/
 tmp/
