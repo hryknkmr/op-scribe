@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>検索</title>
+</head>
+<body>
+  <h1>検索</h1>
+  <form id="search">
+    <label>キーワード <input id="q" name="q" type="text"></label>
+    <button id="go" type="submit">検索する</button>
+  </form>
+  <p id="result" role="status"></p>
+  <script>
+    document.getElementById('search').addEventListener('submit', (event) => {
+      event.preventDefault();
+      document.getElementById('result').textContent = '結果を表示しました';
+    });
+  </script>
+</body>
+</html>

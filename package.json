@@ -12,6 +12,10 @@
     "guard": "bash scripts/pii-guard.sh scan-tree",
     "setup-hooks": "git config core.hooksPath .githooks",
     "receiver": "node tools/receiver.mjs",
-    "pack": "bash scripts/pack.sh"
+    "pack": "bash scripts/pack.sh",
+    "e2e": "playwright test -c e2e/playwright.config.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
   }
 }

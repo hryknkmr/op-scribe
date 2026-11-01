@@ -217,11 +217,14 @@ open -a "Google Chrome Canary" --args --enable-features=WebMCP,WebMCPTesting
 pnpm setup-hooks   # commit / push 時の PII ガードと unit test を有効化（clone 後に必ず実行）
 pnpm test          # プライバシーフィルタと手順生成の unit test
 pnpm guard         # 追跡中のファイル全体を PII / secret ガードで走査
+pnpm e2e           # 拡張を入れた Chromium で、架空のサイト（*.test）を使って記録と WebMCP を確かめる
 pnpm run pack      # dist/ に配布用 zip（拡張に必要なファイルだけ。`pnpm pack` は pnpm 組み込みの別コマンド）
 pnpm receiver      # 動作確認用のローカル受信サーバ
 ```
 
-外部依存はなく、ビルドも不要です（素の JavaScript）。コードを変えたら `chrome://extensions` で op-scribe の再読み込みボタンを押し、記録したいタブも再読み込みしてください。
+拡張そのものに外部依存はなく、ビルドも不要です（素の JavaScript）。E2E だけ Playwright を使います（初回に `pnpm install` と `pnpm exec playwright install chromium`）。WebMCP は Chrome ではまだフラグの奥にあるので、E2E ではページの `document.modelContext` をテスト用の差し替えで用意しています（`e2e/fixtures.mjs`）。
+
+E2E の依存はロックファイルを置かずに `package.json` で版を固定しています。ロックファイルの「名前と版を `@` でつないだ」書き方は、PII ガードのメールアドレス検出に当たるためです（ガードはコミットごとに見るので、一度コミットすると履歴をまとめ直すまで CI が通りません）。pnpm は CI と同じ版（10.34.4）を使ってください。版が固定されていない依存を足すときは、ガードを緩めず、ロックファイルの書き方だけを除く仕組みを先に用意してください。コードを変えたら `chrome://extensions` で op-scribe の再読み込みボタンを押し、記録したいタブも再読み込みしてください。
 
 ### 公開リポジトリとしての注意
 
