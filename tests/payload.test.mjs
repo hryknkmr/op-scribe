@@ -681,3 +681,14 @@ test('an escape that is not UTF-8 does not hide the escapes after it (U5, K2, E6
     ['https://example.com/', { redacted: 'masked' }, '/x']);
   assert.equal(S.finalScan({ url: ['https://example.com/%FF%41cme/x'] }, { keywords: ['Acme'] }).length, 1);
 });
+
+test('the recording id and times are the extension\'s, not page text (K2, E6; review of #34 R7)', () => {
+  const r = clone(rec);
+  r.steps.forEach((step) => { step.env = 'standard'; });
+  const payload = build(r);
+  const keywords = ['rec', 'test', '20', '00', 'Z'];
+  assert.deepEqual(S.finalScan(payload, { keywords }).filter((f) => /^(recording\.(id|startedAt|endedAt)|sentAt)$/.test(f.path)), []);
+  r.steps[5].note = 'rec 20';
+  assert.ok(S.finalScan(build(r), { keywords }).some((f) => f.path.startsWith('recording.steps[5].note')));
+  assert.equal(S.finalScan({ id: 'acme-rec' }, { keywords: ['rec'] }).length, 1, 'an id not of the form is scanned');
+});

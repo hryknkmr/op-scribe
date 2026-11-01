@@ -188,6 +188,7 @@
    * words, so a word of one never passes as another (a role "email" is scanned;
    * review of #34); anything else there is scanned.
    */
+  const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   const words = (...lists) => {
     const set = new Set(lists.flat());
     return (value) => set.has(value);
@@ -205,7 +206,12 @@
     kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat()),
     redacted: words(RUN_KINDS.text, RUN_KINDS.url),
     key: (value) => /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/.test(value),
-    role: words([...ARIA_ROLES])
+    role: words([...ARIA_ROLES]),
+    // What the extension makes itself: the recording's id and its times (review of #34 R7).
+    id: (value) => /^rec-[a-z0-9-]{1,40}$/.test(value),
+    startedAt: (value) => ISO_TIME.test(value),
+    endedAt: (value) => ISO_TIME.test(value),
+    sentAt: (value) => ISO_TIME.test(value)
   });
   const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 
