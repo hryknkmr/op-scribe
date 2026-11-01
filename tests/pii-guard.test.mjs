@@ -19,7 +19,7 @@ function repo() {
   const dir = mkdtempSync(join(tmpdir(), 'opscribe-guard-'));
   const git = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' });
   git('init', '-q', '-b', 'main');
-  git('config', 'user.name', 'tester');
+  git('config', 'user.name', 'hryknkmr');
   git('config', 'user.email', 'tester@users.noreply.github.com');
   git('config', 'core.hooksPath', '/dev/null');
   mkdirSync(join(dir, 'scripts'));
@@ -166,6 +166,34 @@ test('a range git cannot read is an error for identity and push checks', () => {
   const { guard } = repo();
   assert.equal(guard('check-identities', 'no-such-ref..HEAD').status, 2);
   assert.equal(guard('scan-range', 'no-such-ref', 'HEAD').status, 2);
+});
+
+test('a name that is not allowed fails, as author and as committer, and is not printed', () => {
+  const { git, guard } = repo();
+  assert.equal(guard('check-names', 'HEAD').status, 0);
+  const name = ['Someone', 'Real'].join(' ');
+  const base = git('rev-parse', 'HEAD').trim();
+  git('commit', '-q', '--allow-empty', '-m', 'author', '--author', `${name} <tester@users.noreply.github.com>`);
+  const author = guard('check-names', `${base}..HEAD`);
+  assert.equal(author.status, 1);
+  assert.match(author.stdout, /author name not allowed/);
+  assert.doesNotMatch(author.stdout + author.stderr, /Someone/);
+  assert.equal(guard('scan-range', base, 'HEAD').status, 1);
+  git('reset', '-q', '--hard', base);
+  git('config', 'user.name', name);
+  git('commit', '-q', '--allow-empty', '-m', 'committer', '--author', 'hryknkmr <tester@users.noreply.github.com>');
+  const committer = guard('check-names', `${base}..HEAD`);
+  assert.equal(committer.status, 1);
+  assert.match(committer.stdout, /committer name not allowed/);
+});
+
+test('a web merge passes the name check, and a range git cannot read is an error', () => {
+  const { git, guard, dir } = repo();
+  const tree = git('rev-parse', 'HEAD^{tree}').trim();
+  const env = { ...process.env, GIT_AUTHOR_NAME: 'hryknkmr', GIT_AUTHOR_EMAIL: 'tester@users.noreply.github.com', GIT_COMMITTER_NAME: 'GitHub', GIT_COMMITTER_EMAIL: ['noreply', 'github.com'].join('@') };
+  const sha = execFileSync('git', ['commit-tree', tree, '-m', 'merge'], { cwd: dir, env, encoding: 'utf8' }).trim();
+  assert.equal(guard('check-names', sha).status, 0);
+  assert.equal(guard('check-names', 'no-such-ref..HEAD').status, 2);
 });
 
 test('a push from the root compares with the empty tree, as pre-push does', () => {

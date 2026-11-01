@@ -44,6 +44,12 @@ jobs:
       - name: Check commit identities
         run: scripts/pii-guard.sh check-identities "$RANGE"
 
+      # Only on a PR: commits on main from before the display name changed still carry
+      # the old name. Whether to rewrite them is decided in #20; extend this to every push then.
+      - name: Check commit names
+        if: github.event_name == 'pull_request'
+        run: scripts/pii-guard.sh check-names "$RANGE"
+
       # Each commit on its own: content added in one commit and removed in a later
       # one, and commit messages, never show up in the latest tree.
       - name: Scan each commit and its message

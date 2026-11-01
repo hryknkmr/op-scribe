@@ -11,6 +11,8 @@
 #   scan-tree              tracked 全ファイルを走査（CI 用）
 #   check-identities <rev-range|--all>
 #                          指定範囲のコミットの author/committer email を allowlist 照合
+#   check-names <rev-range>
+#                          指定範囲のコミットの author/committer 名を allowlist 照合
 #   check-config           現在の git user.email が allowlist に合致するか
 #   scan-range <base> <tip>
 #                          base..tip の各コミットの内容・メッセージと identity を走査（pre-push 用）
@@ -33,6 +35,8 @@ LOCAL_PATTERNS_FILE="${GUARD_DIR}/pii-guard.patterns.local.txt"
 
 # author/committer に許可する email（GitHub noreply のみ）
 ALLOWED_EMAIL_RE='@users\.noreply\.github\.com$|^noreply@github\.com$'
+# 実名は denylist にできないので、許す名前を限定する。GitHub は Web UI のマージの committer 名。
+ALLOWED_NAME_RE='^(hryknkmr|GitHub)$'
 
 # 走査から除外するパス（denylist 語・パターン例を正当に含むファイル）。
 # ガード本体・ワークフロー・テストは除外しない（盲点を作らない）。fake secret は連結で組み立てる。
@@ -226,6 +230,32 @@ check_identities() {
   return $bad
 }
 
+# 名前は表示しない（CI のログも公開される）。
+check_names() {
+  local range="$1" bad=0 an cn h log
+  if ! log="$(git log --format='%h|%an' "$range")"; then
+    echo "pii-guard: コミットの一覧を取得できません: $range" >&2
+    return 2
+  fi
+  while IFS='|' read -r h an; do
+    [[ -z "$h" ]] && continue
+    if ! printf '%s' "$an" | grep -qE "$ALLOWED_NAME_RE"; then
+      echo "  ✗ $h: author name not allowed"; bad=1
+    fi
+  done <<< "$log"
+  if ! log="$(git log --format='%h|%cn' "$range")"; then
+    echo "pii-guard: コミットの一覧を取得できません: $range" >&2
+    return 2
+  fi
+  while IFS='|' read -r h cn; do
+    [[ -z "$h" ]] && continue
+    if ! printf '%s' "$cn" | grep -qE "$ALLOWED_NAME_RE"; then
+      echo "  ✗ $h: committer name not allowed"; bad=1
+    fi
+  done <<< "$log"
+  return $bad
+}
+
 check_config() {
   local email; email="$(git config user.email || true)"
   if ! printf '%s' "$email" | grep -qE "$ALLOWED_EMAIL_RE"; then
@@ -246,6 +276,10 @@ scan_range() {
     range="${base}..${tip}"
   fi
   check_identities "$range" || status=$?
+  if (( status > 1 )); then return 2; fi
+  if (( status == 1 )); then rc=1; fi
+  status=0
+  check_names "$range" || status=$?
   if (( status > 1 )); then return 2; fi
   if (( status == 1 )); then rc=1; fi
   # 差分の合計では、途中で足して消した内容とコミットメッセージが見えない。
@@ -305,10 +339,11 @@ case "$cmd" in
   scan-message)      scan_message "${1:?usage: scan-message <file>}" ;;
   scan-tree)         scan_tree ;;
   check-identities)  check_identities "${1:?usage: check-identities <range|--all>}" ;;
+  check-names)       check_names "${1:?usage: check-names <range>}" ;;
   check-config)      check_config ;;
   scan-range)        scan_range "${1:?base}" "${2:?tip}" ;;
   scan-commits)      scan_commits "${1:?usage: scan-commits <rev-range>}" ;;
   *)
-    echo "usage: pii-guard.sh {scan-staged|scan-message <f>|scan-tree|check-identities <range>|check-config|scan-range <base> <tip>|scan-commits <range>}" >&2
+    echo "usage: pii-guard.sh {scan-staged|scan-message <f>|scan-tree|check-identities <range>|check-names <range>|check-config|scan-range <base> <tip>|scan-commits <range>}" >&2
     exit 2 ;;
 esac
