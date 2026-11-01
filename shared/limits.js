@@ -33,6 +33,9 @@
     scheme: 16,
     environment: 60,
     steps: 500,
+    // Tabs explicitly related through openerTabId to this recording. Kept only in
+    // chrome.storage.session; tab ids never enter the payload (#40).
+    tabs: 10,
     // Steps not from a trusted event of the person (source 'agent': WebMCP tool calls and expectations;
     // 'unknown': the tab's navigations, which a page script can cause too): at most this many
     // together, so they never push the person's steps out (W7, #17).

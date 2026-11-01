@@ -141,7 +141,13 @@ function newId() {
  * reproduction it generated earlier no longer matches the recording (#16).
  */
 
-const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
+const tabIdsOf = (rec) => Array.isArray(rec?.tabIds) ? rec.tabIds : (Number.isInteger(rec?.tabId) ? [rec.tabId] : []);
+const pendingTabIdsOf = (rec) => Array.isArray(rec?.pendingTabIds) ? rec.pendingTabIds : [];
+const attachedTabIdsOf = (rec) => Array.isArray(rec?.attachedTabIds)
+  ? rec.attachedTabIds
+  : (rec?.attached && Number.isInteger(rec?.tabId) ? [rec.tabId] : []);
+const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && tabIdsOf(rec).includes(tabId);
+const isPendingTab = (rec, tabId) => rec?.state === 'recording' && pendingTabIdsOf(rec).includes(tabId);
 
 // ------------------------------------------------------------------ actions
 
@@ -157,6 +163,10 @@ async function start({ tabId, url }) {
       id: newId(),
       state: 'recording',
       tabId,
+      // Browser-only session ownership. None of these fields is in the payload SHAPE.
+      tabIds: [tabId],
+      pendingTabIds: [],
+      attachedTabIds: [],
       startedAt: Date.now(),
       endedAt: null,
       revision: 0,
@@ -191,9 +201,11 @@ async function start({ tabId, url }) {
 async function stopTab(rec) {
   await syncContentScripts([]);
   await setBadge(false);
-  try {
-    await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_STOP' });
-  } catch { /* tab gone or never injected */ }
+  await Promise.all(tabIdsOf(rec).map(async (tabId) => {
+    try {
+      await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_STOP' });
+    } catch { /* tab gone or never injected */ }
+  }));
 }
 
 const stop = () => mutate(async (rec) => {
@@ -204,8 +216,12 @@ const stop = () => mutate(async (rec) => {
   return { save: rec, reply: { ok: true } };
 });
 
-const addPattern = (url) => mutate(async (rec) => {
+const addPattern = (url, tabId) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
+  const targetTabId = Number.isInteger(tabId) ? tabId : rec.tabId;
+  if (!isRecordingTab(rec, targetTabId) && !isPendingTab(rec, targetTabId)) {
+    return { reply: { ok: false, error: 'NOT_RECORDING_TAB' } };
+  }
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
@@ -215,10 +231,37 @@ const addPattern = (url) => mutate(async (rec) => {
     if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
     rec.grantedPatterns.push(pattern);
   }
+  if (isPendingTab(rec, targetTabId)) {
+    if (tabIdsOf(rec).length >= LIMITS.tabs) return { reply: { ok: false, error: 'TOO_MANY_TABS' } };
+    rec.pendingTabIds = pendingTabIdsOf(rec).filter((id) => id !== targetTabId);
+    rec.tabIds = [...tabIdsOf(rec), targetTabId];
+    const settings = await getSettings();
+    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url });
+  }
   await syncContentScripts(rec.grantedPatterns);
-  await injectNow(rec.tabId);
-  return { save: rec, reply: { ok: true } };
+  return { save: rec, reply: { ok: true }, after: () => injectNow(targetTabId) };
 });
+
+async function adoptPermittedTab(tabId, url) {
+  let pattern;
+  try { pattern = originPattern(url); } catch { return false; }
+  if (!(await chrome.permissions.contains({ origins: [pattern] }))) return false;
+  const result = await addPattern(url, tabId);
+  return Boolean(result?.ok);
+}
+
+async function noticeChildTab(tab) {
+  if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
+  const candidate = await mutate(async (rec) => {
+    if (!isRecordingTab(rec, tab.openerTabId)) return { reply: false };
+    if (isRecordingTab(rec, tab.id) || isPendingTab(rec, tab.id)) return { reply: true };
+    if (tabIdsOf(rec).length + pendingTabIdsOf(rec).length >= LIMITS.tabs) return { reply: false };
+    rec.pendingTabIds = [...pendingTabIdsOf(rec), tab.id];
+    return { save: rec, reply: true };
+  });
+  // onCreated may have no URL. onUpdated will try again once Chrome supplies it.
+  if (candidate && tab.url) await adoptPermittedTab(tab.id, tab.url);
+}
 
 /**
  * Origin as it appears in the recording (real if allowlisted, otherwise its alias), or null
@@ -265,7 +308,7 @@ async function handle(message, sender) {
     switch (type) {
       case 'START': return start(detail);
       case 'STOP': return stop();
-      case 'ADD_ORIGIN': return addPattern(detail.url);
+      case 'ADD_ORIGIN': return addPattern(detail.url, detail.tabId);
       case 'CLEAR': return mutate(async (rec) => {
         if (rec?.state === 'recording') await stopTab(rec);
         return { remove: true, reply: { ok: true } };
@@ -288,15 +331,20 @@ async function handle(message, sender) {
   if (message.from === 'op-scribe/content') {
     const tabId = sender.tab?.id;
     // In the queue, so a recorder of the recording that is ending never gets that recording's policy.
-    if (type === 'HELLO') return mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId)) return { reply: { active: false } };
-      const settings = await getSettings();
-      const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      const reply = { active: true, config: { commercial, keywords: settings.keywords } };
-      if (rec.attached) return { reply };
-      rec.attached = true;
-      return { save: rec, reply };
-    });
+    if (type === 'HELLO') {
+      const before = await getRecording();
+      if (isPendingTab(before, tabId)) await adoptPermittedTab(tabId, sender.tab?.url || sender.url);
+      return mutate(async (rec) => {
+        if (!isRecordingTab(rec, tabId)) return { reply: { active: false } };
+        const settings = await getSettings();
+        const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
+        const reply = { active: true, config: { commercial, keywords: settings.keywords } };
+        if (attachedTabIdsOf(rec).includes(tabId)) return { reply };
+        rec.attachedTabIds = [...attachedTabIdsOf(rec), tabId];
+        if (tabId === rec.tabId) rec.attached = true;
+        return { save: rec, reply };
+      });
+    }
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
@@ -335,9 +383,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-// Navigations (including SPA history changes) in the recorded tab.
+chrome.tabs.onCreated.addListener(noticeChildTab);
+
+// Navigations (including SPA history changes) in any tab owned by the recording.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (!changeInfo.url) return;
+  const before = await getRecording();
+  if (isPendingTab(before, tabId)) await adoptPermittedTab(tabId, changeInfo.url);
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
@@ -358,16 +410,31 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
   } catch {
     await mutate(async (rec) => {
-      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || !rec.attached) return null;
-      rec.attached = false;
+      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || !attachedTabIdsOf(rec).includes(tabId)) return null;
+      rec.attachedTabIds = attachedTabIdsOf(rec).filter((id) => id !== tabId);
+      if (tabId === rec.tabId) rec.attached = false;
       return { save: rec };
     });
   }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const rec = await getRecording();
-  if (isRecordingTab(rec, tabId)) await stop();
+  await mutate(async (rec) => {
+    if (!rec || rec.state !== 'recording') return null;
+    if (isPendingTab(rec, tabId)) {
+      rec.pendingTabIds = pendingTabIdsOf(rec).filter((id) => id !== tabId);
+      return { save: rec };
+    }
+    if (!isRecordingTab(rec, tabId)) return null;
+    rec.tabIds = tabIdsOf(rec).filter((id) => id !== tabId);
+    rec.attachedTabIds = attachedTabIdsOf(rec).filter((id) => id !== tabId);
+    if (rec.tabIds.length) return { save: rec };
+    await syncContentScripts([]);
+    await setBadge(false);
+    rec.state = 'stopped';
+    rec.endedAt = Date.now();
+    return { save: rec };
+  });
 });
 
 // The session store is wiped when the browser restarts; so is the badge state.
