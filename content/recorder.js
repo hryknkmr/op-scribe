@@ -138,6 +138,8 @@
 
   function emit(type, extra = {}) {
     lastStep = { type, at: Date.now() };
+    // What the last operation caused so far goes first, or it would land after this one.
+    readNotices();
     send('STEP', { type, pageUrl: location.href, ...extra });
     // A person's operation only: what a page reports does not open the window (T7).
     if (type !== 'tool') watchNotices();
@@ -148,6 +150,7 @@
   // Only what the author declared as a notice, only for a moment after an operation, and only
   // what changed since it (ADR 0003, T7). Nothing is read from a commercial page.
   const NOTICE = '[role~="status"], [role~="alert"], [aria-live="polite"], [aria-live="assertive"]';
+  const FIELDS = 'input, textarea, select, [contenteditable]';
   const NOTICE_MS = 5000;
   const NOTICE_SETTLE_MS = 200;
   const NOTICES_PER_OPERATION = 4;
@@ -158,7 +161,7 @@
   /** The text a region shows, or '' when it is not a notice: a region with a field is a form, and a long one is content. */
   function noticeText(el) {
     if (el.closest('[aria-hidden="true"]') || el.isContentEditable) return '';
-    if (el.querySelector('input, textarea, select, [contenteditable]')) return '';
+    if (el.matches(FIELDS) || el.querySelector(FIELDS)) return '';
     if (!el.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return '';
     const text = String(el.innerText || '').replace(/\s+/g, ' ').trim();
     return text.length > NOTICE_CHARS ? '' : text;
@@ -181,8 +184,8 @@
       watch.before.set(el, text);
       watch.sent.add(text);
       // Not emit: a notice is not an operation, and lastStep decides what an operation explains.
-      // Masked here, so what the page shows reaches the worker as runs, never as it was written.
-      send('STEP', { type: 'notice', pageUrl: location.href, notice: S.cleanLine(text, { keywords: config.keywords }).runs, level: noticeLevel(el) });
+      // Masked and cut here, so the worker gets only what may be kept, as runs (T7).
+      send('STEP', { type: 'notice', pageUrl: location.href, notice: S.cleanLine(text, { keywords: config.keywords, maxLength: globalThis.OpScribeLimits.LIMITS.notice }).runs, level: noticeLevel(el) });
     }
   }
 
@@ -196,8 +199,6 @@
 
   function watchNotices() {
     if (!config || config.commercial) return;
-    // What the last operation caused so far belongs to it, not to this one.
-    readNotices();
     stopNotices();
     const watch = {
       before: new Map(noticeRegions()),
