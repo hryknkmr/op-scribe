@@ -10,6 +10,7 @@ const read = (file) => readFileSync(new URL(file, ROOT), 'utf8');
 function worker() {
   const session = {};
   const listeners = {};
+  const updated = [];
   const on = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
   const seen = [];
   const control = {};
@@ -37,7 +38,7 @@ function worker() {
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
-    tabs: { onUpdated: on('updated'), onRemoved: on('removed'), sendMessage: noop },
+    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async () => { if (control.noRecorder) throw new Error('no receiver'); } },
     sidePanel: { setPanelBehavior: noop }
   };
   const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
@@ -46,7 +47,8 @@ function worker() {
   context.self = context;
   context.importScripts = (...files) => { for (const f of files) vm.runInContext(read(f), context, { filename: f }); };
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });
-  return { send, hello, seen, control, session };
+  const pageLoaded = () => Promise.all(updated.map((fn) => fn(7, { status: 'complete' })));
+  return { send, hello, pageLoaded, seen, control, session };
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
@@ -64,6 +66,26 @@ test('an injection that ends with no HELLO does not count as attached', async ()
   control.silentRecorder = true;
   await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   assert.equal(session.opsRecording.attached, false);
+});
+
+test('a loaded page with no recorder is not attached, and one that has a recorder keeps it', async () => {
+  const { send, control, session, pageLoaded } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  await pageLoaded();
+  assert.equal(session.opsRecording.attached, true);
+  control.noRecorder = true;
+  await pageLoaded();
+  assert.equal(session.opsRecording.attached, false);
+});
+
+test('a HELLO queued behind the stop gets no configuration', async () => {
+  const { send, hello, control } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const stopping = send({ from: 'op-scribe/panel', type: 'STOP' });
+  assert.equal((await hello()).active, false);
+  await stopping;
 });
 
 test('a restart that fails does not leave the earlier recording saved as recording', async () => {

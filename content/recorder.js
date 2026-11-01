@@ -255,8 +255,13 @@
     }
   });
 
-  chrome.runtime.onMessage.addListener((message) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.from !== 'op-scribe/worker') return;
+    if (message.type === 'OPS_PING') {
+      sendResponse({ ok: true });
+      if (!config) hello();
+      return;
+    }
     if (message.type === 'OPS_STOP') {
       config = null;
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);

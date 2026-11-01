@@ -182,7 +182,7 @@ function renderStatus() {
   }
   const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
-  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を準備しています。表示が続くときはページを再読み込みしてください';
+  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
   if (startError) ui.tabStatus.textContent = startError;
 }
 

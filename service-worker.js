@@ -275,20 +275,16 @@ async function handle(message, sender) {
 
   if (message.from === 'op-scribe/content') {
     const tabId = sender.tab?.id;
-    if (type === 'HELLO') {
-      const rec = await getRecording();
-      if (!isRecordingTab(rec, tabId)) return { active: false };
-      if (!rec.attached) {
-        await mutate(async (current) => {
-          if (!isRecordingTab(current, tabId) || current.attached) return null;
-          current.attached = true;
-          return { save: current };
-        }).catch(() => { /* only the panel's notice stays: the recorder still gets its config */ });
-      }
+    // In the queue, so a recorder of the recording that is ending never gets that recording's policy.
+    if (type === 'HELLO') return mutate(async (rec) => {
+      if (!isRecordingTab(rec, tabId)) return { reply: { active: false } };
       const settings = await getSettings();
       const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      return { active: true, config: { commercial, keywords: settings.keywords } };
-    }
+      const reply = { active: true, config: { commercial, keywords: settings.keywords } };
+      if (rec.attached) return { reply };
+      rec.attached = true;
+      return { save: rec, reply };
+    });
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
@@ -338,6 +334,22 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     appendStep(rec, step);
     return { save: rec };
   });
+});
+
+// A URL change cannot tell a new document from a same-document one, so a loaded page is asked.
+// Only the recorder's HELLO sets attached; it is cleared here when no recorder answers.
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!isRecordingTab(await getRecording(), tabId)) return;
+  try {
+    await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
+  } catch {
+    await mutate(async (rec) => {
+      if (!isRecordingTab(rec, tabId) || !rec.attached) return null;
+      rec.attached = false;
+      return { save: rec };
+    });
+  }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
