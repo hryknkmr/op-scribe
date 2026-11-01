@@ -571,3 +571,22 @@ test('a real host of the alias form does not stop the exits for another site\'s 
     for (const step of rec.steps) assert.equal(R.webmcpReply(rec, s, step.site, 'reproduction').ok, true, `${order} ${step.site}`);
   }
 });
+
+test('WebMCP names the asking site site-1 and its links after it, whatever the recording numbers them (row W8; review of #37 R12)', () => {
+  const rec = newRec();
+  const s = { ...settings, keywords: [] };
+  const step = (pageUrl, href) => R.cleanStep({ type: 'click', pageUrl, target: { role: 'link', name: 'OK', ...(href && { href }) } }, rec, s, { tabUrl: pageUrl });
+  rec.steps.push(step('https://first.example.com/a'), step('https://second.example.com/b', 'https://first.example.com/c'));
+  const second = rec.steps[1];
+  assert.equal(new URL(second.site).host, 'site-2.invalid');
+  const status = R.webmcpReply(rec, s, second.site, 'status');
+  assert.equal(status.site, 'https://site-1.invalid');
+  const repro = R.webmcpReply(rec, s, second.site, 'reproduction');
+  const text = repro.markdown + repro.gherkin;
+  assert.ok(text.includes('https://site-1.invalid/b'), text);
+  // first.example.com is the recording's site-1; to this page it is the next site its steps name.
+  assert.ok(text.includes('https://site-2.invalid/c'), text);
+  assert.ok(!text.includes('site-3.invalid'), text);
+  // The step stored in the recording keeps its alias.
+  assert.equal(new URL(S.renderRuns(second.url)).host, 'site-2.invalid');
+});

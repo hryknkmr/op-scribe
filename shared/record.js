@@ -289,15 +289,46 @@
     return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
   }
 
+  // The origin of a URL whose host is an alias. A real host of that form is always aliased (U4), so every match is one.
+  const ALIAS_ORIGIN = /^(https?:\/\/)(site-\d+\.invalid)(?=[/?#]|$)/;
+
+  /**
+   * An alias numbers a site in the whole recording: site-2 says another site came first.
+   * The page gets aliases of its own, its site first and then in the order its steps
+   * name them, so a reply tells nothing of the other sites (W8; review of #37 R12).
+   * Only hosts are renamed (url, target.href): text is the page's own and stays as it is.
+   */
+  function localAliases(site, steps) {
+    const names = new Map();
+    const swap = (u) => {
+      const m = ALIAS_ORIGIN.exec(u);
+      if (!m) return u;
+      if (!names.has(m[2])) names.set(m[2], `site-${names.size + 1}.invalid`);
+      return `${m[1]}${names.get(m[2])}${u.slice(m[0].length)}`;
+    };
+    const runs = (url) => typeof url === 'string' ? swap(url)
+      : Array.isArray(url) && typeof url[0] === 'string' ? [swap(url[0]), ...url.slice(1)] : url;
+    const here = swap(site);
+    return {
+      site: here,
+      steps: steps.map((s) => {
+        const local = { ...s };
+        if (s.url !== undefined) local.url = runs(s.url);
+        if (s.target?.href !== undefined) local.target = { ...s.target, href: runs(s.target.href) };
+        return local;
+      }),
+    };
+  }
+
   /**
    * What WebMCP tells a page on site about the recording (row W8): the steps on
    * that site, its own notes included (an agent's note carries the URL of the
    * page it came from), and nothing about the rest - no panel note, no count of
    * the whole recording (#17). Null for another op.
    */
-  function webmcpReply(rec, settings, site, op) {
+  function webmcpReply(rec, settings, recordedSite, op) {
     const D = root.OpScribeDescribe || require('./describe.js');
-    const own = rec.steps.filter((s) => s.site === site);
+    const { site, steps: own } = localAliases(recordedSite, rec.steps.filter((s) => s.site === recordedSite));
     if (op === 'status') {
       return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length }, rec, settings);
     }
