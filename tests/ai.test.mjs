@@ -14,6 +14,13 @@ test('the model may keep the masked parts it was given', () => {
 test('a [[…]] the model wrote is refused: the input never holds one (#28; review of #34 R3)', () => {
   for (const mark of ['[[email]]', '[[secret]]', '[[url:mailto]]', '[[text:12]]']) {
     const output = { title: '手順', steps: [{ action: `「メール」入力欄に ${mark} を入力する` }] };
-    assert.ok(validate(output, input, noFindings).some((p) => p.includes(mark)), mark);
+    assert.ok(validate(output, input, noFindings).some((p) => p.includes('[[…]]')), mark);
   }
+});
+
+test('the model may merge what it was given, never add one more of it (review of #34)', () => {
+  const twice = { title: '手順', steps: [{ action: '「メール」入力欄に ‹メールアドレス› を入力する' }, { action: '‹メールアドレス› を確かめる' }] };
+  assert.ok(validate(twice, input, noFindings).some((p) => p.includes('‹メールアドレス›')));
+  const url = { title: '手順', steps: [{ action: 'https://site-1.invalid/ を開く' }, { action: 'https://site-1.invalid/ を開く' }] };
+  assert.ok(validate(url, input, noFindings).some((p) => p.includes('URL')));
 });

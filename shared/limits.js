@@ -183,19 +183,30 @@
    * The payload's own words (step types, environments, treatments, fields,
    * kinds ...): fixed by the format, never from a page. The final scan does not
    * look for keywords in them, so a keyword such as "mail" does not stop every
-   * recording with an { kind: 'email' } in it (K2, #28). Only as the value of
-   * these keys and only these words; anything else there is scanned.
+   * recording with an { kind: 'email' } in it (K2, #28). Each key has its own
+   * words, so a word of one never passes as another (a role "email" is scanned;
+   * review of #34); anything else there is scanned.
    */
-  const VOCAB_KEYS = Object.freeze(['schema', 'policy', 'coverage', 'generator', 'type', 'env', 'source', 'treatment', 'field', 'kind', 'redacted', 'key', 'role']);
-  const VOCAB = new Set([
-    ...Object.keys(STEP_RULES), 'commercial', 'standard', 'mixed', 'none', 'user', 'agent',
-    'kept', 'length', 'redacted', 'secret', 'pii', 'choice', 'search', 'text', 'file', 'arg',
-    ...Object.values(TYPED_SCHEMA.redacted).flat(), ...PII_KINDS, ...RUN_KINDS.text, ...RUN_KINDS.url,
-    'template', 'on-device-ai', 'manual', 'Escape', ...ARIA_ROLES
-  ]);
-  const isVocab = (key, value) => VOCAB_KEYS.includes(key) && typeof value === 'string'
-    && (VOCAB.has(value) || /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$/.test(value)
-      || /^op-scribe\.recording\/v\d+$|^commercial-strict\/\d+$/.test(value));
+  const words = (...lists) => {
+    const set = new Set(lists.flat());
+    return (value) => set.has(value);
+  };
+  const VOCAB = Object.freeze({
+    schema: (value) => /^op-scribe\.recording\/v\d+$/.test(value),
+    policy: (value) => /^commercial-strict\/\d+$/.test(value),
+    coverage: words(['commercial', 'standard', 'mixed', 'none']),
+    generator: words(['template', 'on-device-ai', 'manual', 'none']),
+    type: words(Object.keys(STEP_RULES)),
+    env: words(['commercial', 'standard']),
+    source: words(['user', 'agent']),
+    treatment: words(['kept', 'length', 'redacted']),
+    field: words(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']),
+    kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat()),
+    redacted: words(RUN_KINDS.text, RUN_KINDS.url),
+    key: (value) => /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/.test(value),
+    role: words([...ARIA_ROLES])
+  });
+  const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 
   const api = {
     LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole,

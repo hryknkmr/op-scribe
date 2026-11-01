@@ -339,6 +339,9 @@ test('a keyword that is part of a placeholder name is used like any other (row K
   // ... only those words under those keys: a page text there is still scanned.
   assert.equal(S.finalScan({ type: 'mail-form' }, { keywords: ['mail'] }).length, 1);
   assert.equal(S.finalScan({ note: ['user mail'] }, { keywords: ['mail'] }).length, 1);
+  // Each key has its own words: a role that is a kind's word is the page's (review of #34).
+  assert.equal(S.finalScan({ role: 'email', kind: 'link' }, { keywords: ['email', 'link'] }).length, 2);
+  assert.deepEqual(S.finalScan({ role: 'link', kind: 'email' }, { keywords: ['email', 'link'] }), []);
 });
 
 test('runs from the content script are masked again, part by part (#28)', () => {
