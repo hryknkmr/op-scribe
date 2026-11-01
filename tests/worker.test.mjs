@@ -26,11 +26,12 @@ function worker() {
     runtime: { onInstalled: on('installed'), onStartup: on('startup'), onMessage: on('message'), sendMessage: noop },
     permissions: { contains: async () => true },
     scripting: {
-      getRegisteredContentScripts: async () => [],
-      unregisterContentScripts: noop,
+      getRegisteredContentScripts: async () => (control.failUnregister ? [{ id: 'recorder' }] : []),
+      unregisterContentScripts: async () => { if (control.failUnregister) throw new Error('unregister failed'); },
       registerContentScripts: async () => { if (control.failRegister) throw new Error('register failed'); },
       // What an injected recorder sees when it says HELLO straight away.
       executeScript: async ({ files }) => {
+        if (control.failInject) throw new Error('inject failed');
         if (!files.includes('content/recorder.js')) return;
         seen.push(await send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' }));
       }
@@ -75,3 +76,21 @@ test('a note keeps a known kind and drops any other', async () => {
   assert.equal(notes[1].kind, undefined);
 });
 
+test('a restart that cannot stop the earlier recording does not leave it saved as recording', async () => {
+  const { send, control, session } = worker();
+  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
+  await send(start);
+  control.failUnregister = true;
+  const reply = await send(start);
+  assert.equal(reply.ok, false);
+  assert.equal(session.opsRecording.state, 'stopped');
+});
+
+test('a page the recorder could not reach is reported, and the recording goes on for the next page', async () => {
+  const { send, control, session } = worker();
+  control.failInject = true;
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.warning, 'PAGE_NOT_ATTACHED');
+  assert.equal(session.opsRecording.state, 'recording');
+});
