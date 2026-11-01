@@ -38,7 +38,8 @@
       return await chrome.runtime.sendMessage({ from: FROM, type, detail });
     } catch (error) {
       const text = String(error?.message || error);
-      if (TRANSIENT.test(text) && attempt < 3) {
+      // Not a notice: sent again, it would land after the next operation and read as that one's (T7).
+      if (TRANSIENT.test(text) && attempt < 3 && detail?.type !== 'notice') {
         await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
         return send(type, detail, attempt + 1);
       }

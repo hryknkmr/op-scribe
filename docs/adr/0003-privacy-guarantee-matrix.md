@@ -82,7 +82,7 @@
 | T4 | 要素の役割（`role`）・タグ名 | 形 `^[a-z][a-z0-9-]{0,23}$` に合えば `kept`、合わなければ `dropped` | 同じ | 構造（形の許可リスト） | ② |
 | T5 | キー入力 | `Enter`・`Escape`、`ctrl`・`meta`・`alt` をこの順に高々 1 つずつ前に付けた `Enter` だけ `kept`。ほかのキーはステップごと `dropped` | 同じ | 構造（許可リスト） | ② |
 | T6 | 決まった値の欄（ステップの種類・番号・時刻・環境・`ok`・`source`・`checked`・メモの種類 `kind`・通知の強さ `level`） | `kept` | 同じ | 構造（型と列挙で検査し、合わなければ出口で止める） | ② |
-| T7 | ページの通知（作り手が `role="status"`・`role="alert"`・`aria-live="polite"`/`"assertive"` で宣言した領域の文。人の操作の直後 5 秒間に変わったものだけ。1 操作 4 件まで。ステップは `notice`、`source` は `unknown` で W7 の上限に入る。入力欄を含む領域、1000 字を超える領域、見えていない領域は読まない） | `dropped`（content script は読まず、worker はステップを作らず、出口は止める） | `kept`（200 字・1 行）。できる限りの検出で伏せる。記録が知る実ホスト名に当たればステップごと `dropped` | 構造（commercial）・できる限り（standard） | #14 |
+| T7 | ページの通知（作り手が `role="status"`・`role="alert"`・`aria-live="polite"`/`"assertive"` で宣言した領域の文。人の操作の直後 5 秒間に変わったものだけ。1 操作 4 件まで。ステップは `notice`、`source` は `unknown` で W7 の上限に入る。入力欄を含む領域、1000 字を超える領域、見えていない領域は読まない。読む領域は 1 ページ 50 件まで。同じ文は 1 操作につき 1 件。200 ミリ秒以内に消えた文と、送信に失敗した文は記録されないことがある。Shadow DOM と iframe の中は読まない） | `dropped`（content script は読まず、worker はステップを作らず、出口は止める） | `kept`（200 字・1 行）。できる限りの検出で伏せる。記録が知る実ホスト名に当たればステップごと `dropped` | 構造（commercial）・できる限り（standard） | #14 |
 
 ### URL の値（U）
 
