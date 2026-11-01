@@ -58,6 +58,20 @@ export async function availability() {
 const URLS = /https?:\/\/[^\s)」』>]+/g;
 const MARKS = /‹[^›]*›/g;
 
+/**
+ * What the output has more often than the input (a multiset): the model may merge
+ * duplicates, never add a URL or a masked part, not even one it has seen (review of #34).
+ */
+function added(inputText, outputText, re) {
+  const left = new Map();
+  for (const m of inputText.match(re) || []) left.set(m, (left.get(m) || 0) + 1);
+  return (outputText.match(re) || []).filter((m) => {
+    const n = left.get(m) || 0;
+    left.set(m, n - 1);
+    return n <= 0;
+  });
+}
+
 /** Returns a list of reasons the model output cannot be trusted; empty means usable. */
 export function validate(output, inputText, scan) {
   const problems = [];
@@ -65,12 +79,16 @@ export function validate(output, inputText, scan) {
     return ['出力が期待した形ではありません'];
   }
   const text = JSON.stringify(output);
-  const inputUrls = new Set(inputText.match(URLS) || []);
-  const newUrls = (text.match(URLS) || []).filter((u) => !inputUrls.has(u));
+  // The renderer removes hidden characters (E7), so one could make "[\u200B[email]]" or a URL
+  // appear only after this check: refuse them instead (one definition, shared/limits.js; review of #34 R10).
+  if (new RegExp(globalThis.OpScribeLimits.HIDDEN_CHARS, 'u').test(text)) return ['見えない文字を含みます'];
+  const newUrls = added(inputText, text, URLS);
   if (newUrls.length) problems.push(`入力にない URL を含みます: ${newUrls.slice(0, 2).join(', ')}`);
-  const inputMarks = new Set(inputText.match(MARKS) || []);
-  const newMarks = (text.match(MARKS) || []).filter((m) => !inputMarks.has(m));
+  const newMarks = added(inputText, text, MARKS);
   if (newMarks.length) problems.push(`入力にない伏せ字を含みます: ${newMarks.slice(0, 2).join(', ')}`);
+  // The input shows every masked part as ‹…› and never holds "[[" (#28): any "[[" in the output was
+  // made up by the model, and the Markdown would render a [[…]] as a masked part the recording lacks.
+  if (text.includes('[[')) problems.push('入力にない伏せ字（[[…]]）を含みます');
   const findings = scan(output);
   if (findings.length) problems.push(`伏せるべき値が残っています (${findings.map((f) => f.kinds.join('/')).join(', ')})`);
   return problems;

@@ -43,7 +43,8 @@ function worker() {
   };
   const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
   const hello = () => send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' });
-  const context = vm.createContext({ chrome, console, URL, crypto, setTimeout, clearTimeout });
+  // What a service worker has as globals and the worker uses (TextDecoder: the masking's percent decoding).
+  const context = vm.createContext({ chrome, console, URL, crypto, setTimeout, clearTimeout, TextDecoder, TextEncoder });
   context.self = context;
   context.importScripts = (...files) => { for (const f of files) vm.runInContext(read(f), context, { filename: f }); };
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });

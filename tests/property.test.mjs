@@ -105,10 +105,20 @@ test('every payload built from generated page input passes the independent check
     }
     // Deleting steps (including the first) must not break the payload either.
     if (rec.steps.length && g.r() < 0.3) rec.steps.splice(g.int(rec.steps.length), 1);
-    rec.webmcpTools['https://site-1.invalid'] = Array.from({ length: g.int(60) }, () => S.scrubText(R.oneLine(g.text(120)), { maxLength: 80 }).text).slice(0, 50);
-    const payload = P.buildPayload(rec, { generator: 'manual', markdown: D.toMarkdown(D.buildReproduction(rec)) }, { browser: S.cleanLine(g.text(100), { keywords: settings.keywords, maxLength: 60 }).text, language: 'ja' });
+    rec.webmcpTools['https://site-1.invalid'] = Array.from({ length: g.int(60) }, () => S.scrubText(R.oneLine(g.text(120)), { maxLength: 80 }).runs).slice(0, 50);
+    const payload = P.buildPayload(rec, { generator: 'manual', markdown: D.toMarkdown(D.buildReproduction(rec)) }, { browser: S.cleanLine(g.text(100), { keywords: settings.keywords, maxLength: 60 }).runs, language: ['ja'] });
     const problems = P.checkPayload(JSON.parse(JSON.stringify(payload)));
     assert.deepEqual(problems, [], `seed ${seed}: ${JSON.stringify(problems.slice(0, 3))}`);
+    // No string of the recording holds a placeholder: a masked part is a part, never text (#28).
+    const strings = [];
+    const collect = (v) => {
+      if (typeof v === 'string') strings.push(v);
+      else if (v && typeof v === 'object') Object.entries(v).forEach(([k, x]) => { strings.push(k); collect(x); });
+    };
+    collect(payload.recording);
+    assert.deepEqual(strings.filter((x) => x.includes('[[')), [], `seed ${seed}`);
+    // The Markdown made from it is all ‹…› labels (E4, #28).
+    assert.ok(!/\[\[[a-z]+(?::[^\]]*)?\]\]/.test(payload.reproduction.markdown), `seed ${seed}: markdown`);
     // And in the form the masking writes (E8): the producer has not drifted.
     const drift = P.checkCanonical(payload);
     assert.deepEqual(drift, [], `seed ${seed}: ${JSON.stringify(drift.slice(0, 3))}`);

@@ -47,7 +47,7 @@ Chrome でのブラウザ操作を記録し、**個人情報・社内情報を�
 | --- | --- | --- |
 | 商用環境のホスト | 本番のサイト。ここでの自由入力は文字数だけが残る。ここに無いサイト（検証環境など）では入力した文字が残る（個人情報らしい部分は伏せる） | `www.example.com`、`*.example.com` |
 | 実名で記録してよいホスト | 記録にホスト名をそのまま残してよいサイト。ここに無いサイトは `site-1.invalid` のような別名になる | `example.com`、`*.example.com` |
-| 必ず伏せる語 | 社名・製品名・人名など、絶対に外へ出したくない語。1 行 1 語 | |
+| 必ず伏せる語 | 社名・製品名・人名など、絶対に外へ出したくない語。1 行 1 語（2 文字以上。`mail` や `url` のような語も使える） | |
 | 送信先 URL | 記録データを送る先。送らないなら空欄でよい | `https://collector.example.com/recordings` |
 | Authorization ヘッダ | 送信先が認証を求める場合だけ | `Bearer xxxx` |
 
@@ -237,7 +237,7 @@ pnpm receiver      # 動作確認用のローカル受信サーバ
 | `shared/sanitize.js` | プライバシーフィルタ（全コンテキスト共通）。入力欄の分類、型の付いた伏せ結果、パターン検出、URL の別名化、最終検査 |
 | `shared/record.js` | worker で届いた操作を記録のステップにする。環境（商用かどうか）の判定と再サニタイズ |
 | `shared/describe.js` | 手順化（自然言語・Gherkin）。伏せ字 `[[…]]` はここで描画する |
-| `shared/payload.js` | 送信データ（v2）の形の唯一の定義。組み立てと、出口・受信サーバの構造の検査 |
+| `shared/payload.js` | 送信データ（v3）の形の唯一の定義。組み立てと、出口・受信サーバの構造の検査 |
 | `content/recorder.js` | ページ内で操作を拾う（ISOLATED world）。入力値はここで伏せる |
 | `content/webmcp-tools.js` | WebMCP ツールの登録とページ側ツール呼び出しの記録（MAIN world） |
 | `service-worker.js` | 記録状態の管理、二重サニタイズ、WebMCP 要求への応答 |

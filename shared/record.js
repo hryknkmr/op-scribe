@@ -13,8 +13,8 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
-  const { scrubText, cleanLine, oneLine, placeholderKinds, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
+  const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed, renderRuns } = root.OpScribeLimits || require('./limits.js');
+  const { scrubText, scrubRuns, runKinds, cleanLine, oneLine, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
   const NOTE_KINDS = new Set(['bug', 'question', 'idea', 'next']);
   const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
@@ -83,17 +83,18 @@
             ? typed.keptNumber(value.number)
             : typed.redacted('arg', 'number');
         }
-        const text = typeof value.text === 'string' ? value.text : '';
         if (f === 'secret' || f === 'pii' || f === 'file') return fail(f);
-        if (!text && env === 'commercial' && (f === 'text' || f === 'arg')) return typed.length(f, 'text', '');
-        if (!text) return typed.kept(f, '');
+        // Runs (#28): each string masked again, each masked part kept if it is one the masking makes.
+        const found = [];
+        const runs = scrubRuns(value.text, { keywords: settings.keywords, maxLength: KEPT_LIMIT[f] }, found);
+        if (!runs) return fail(f);
+        if (!runs.length && env === 'commercial' && (f === 'text' || f === 'arg')) return typed.length(f, 'text', '');
+        if (!runs.length) return typed.kept(f, []);
         if (env === 'commercial' && (f === 'text' || f === 'arg')) return fail(f);
-        // Already escaped by the content script: keep its own placeholders.
-        const r = scrubText(text, { keywords: settings.keywords, maxLength: KEPT_LIMIT[f], escape: false });
-        // The content script sends no kinds for arguments: count every placeholder the text holds,
+        // The content script sends no kinds for arguments: count every masked part the text holds,
         // the ones masked there and here alike (M1). Field values come with their kinds (valueKinds).
-        kinds.push(...(f === 'arg' ? placeholderKinds(r.text) : r.kinds));
-        return typed.kept(f, r.text);
+        kinds.push(...(f === 'arg' ? runKinds(runs) : found));
+        return typed.kept(f, runs);
       }
       default:
         return fail(f);
@@ -196,7 +197,7 @@
     const text = (value, maxLength) => {
       const r = cleanLine(value, { keywords: settings.keywords, maxLength });
       kinds.push(...r.kinds);
-      return r.text;
+      return r.runs;
     };
     const url = (value) => {
       const r = scrubUrl(value, ctx);
@@ -219,12 +220,13 @@
       // A selector is a locator, not prose: if anything had to be masked, drop it entirely.
       if (t.selector) {
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
+        const selector = renderRuns(r.runs);
         // CSS escapes undone, and the real hosts this recording knows, too (T3, K5; review R23).
         const hosts = [...Object.keys(rec.aliases || {}).map(hostOf), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))];
         if (S.finalScan(oneLine(t.selector), { keywords: settings.keywords, hosts: hosts.filter(Boolean) }).length) r.kinds.push('selector');
         // Cut like any kept text, with the "…" that says so (T3; review R21).
-        const chars = [...r.text];
-        if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : r.text;
+        const chars = [...selector];
+        if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : selector;
       }
       if (t.href) step.target.href = url(t.href);
     }
@@ -255,7 +257,7 @@
     for (const f of Object.keys(step)) {
       if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
     }
-    if (rule.required.some((f) => step[f] === undefined || step[f] === '')) return null;
+    if (rule.required.some((f) => step[f] === undefined || step[f] === '' || (Array.isArray(step[f]) && !step[f].length))) return null;
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
       // Only the kinds the payload may count (row M1), and never past the limit.
       if (REDACTION_KINDS.includes(kind)) rec.redactions[kind] = Math.min((rec.redactions[kind] || 0) + 1, LIMITS.redactionCount);
@@ -267,10 +269,12 @@
    * Every answer WebMCP gives the page is an exit (rows W8, E6): the whole
    * object goes through the final scan with the keywords as they are now and
    * the real hosts behind the aliases, and is withheld on a find (review R37).
+   * steps: the steps a Gherkin in the reply was built from. The final scan
+   * does not read a Gherkin as text, so they are scanned in its place (E3, #28).
    */
-  function guardReply(reply, rec, settings) {
+  function guardReply(reply, rec, settings, steps = []) {
     const hosts = Object.keys(rec.aliases || {}).map(hostOf).filter(Boolean);
-    return S.finalScan(reply, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
+    return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
   }
 
   /**
@@ -280,7 +284,7 @@
    */
   function webmcpReply(rec, settings, site, op) {
     const D = root.OpScribeDescribe || require('./describe.js');
-    const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
+    const own = rec.steps.filter((s) => (s.url && renderRuns(s.url).startsWith(`${site}/`)) || (!s.url && s.type === 'note'));
     if (op === 'status') {
       return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length }, rec, settings);
     }
@@ -288,7 +292,7 @@
       const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
       const markdown = D.toMarkdown(D.buildReproduction(scoped));
       const gherkin = D.toGherkin(scoped, { envSteps: rec.steps });
-      return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings);
+      return guardReply({ ok: true, site, steps: own.length, markdown, gherkin }, rec, settings, own);
     }
     return null;
   }

@@ -110,10 +110,10 @@ test('a deleted first navigation does not come back as the start (#16; review R1
   const deleted = { startUrl: 'https://site-1.invalid/secret-page', steps: [
     { type: 'click', t: 1, env: 'standard', url: 'https://site-1.invalid/', target: { role: 'button', name: 'OK' } }
   ] };
-  assert.equal(D.startUrlOf(deleted), 'https://site-1.invalid/');
+  assert.equal(D.rendered(D.startUrlOf(deleted)), 'https://site-1.invalid/');
   assert.ok(!D.toMarkdown(D.buildReproduction(deleted)).includes('secret-page'));
   assert.ok(!D.toGherkin(deleted).includes('secret-page'));
-  assert.equal(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), '[[url:none]]');
+  assert.deepEqual(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), [{ redacted: 'url', as: 'none' }]);
 });
 
 test('argument strings are one line before they become JSON (row E7; review R13)', () => {
@@ -184,4 +184,26 @@ test('a panel note takes the recording\'s environment in every Gherkin, not the 
   assert.match(D.toGherkin({ id: 'r', steps }), /environments: commercial$/m);
   // A part of the recording still reads the whole: the note is commercial even without the commercial step.
   assert.match(D.toGherkin({ id: 'r', steps: [steps[0]] }, { envSteps: steps }), /environments: commercial$/m);
+});
+
+test('the Markdown shows a URL with any scheme as a label, never [[…]] (E4; review of #34 R1)', () => {
+  for (const as of ['web+demo', 'x.y', 'mailto', 'invalid']) {
+    const rec = { steps: [{ type: 'click', t: 1, env: 'standard', source: 'user', url: [{ redacted: 'url', as }], target: { role: 'button', name: ['OK'] } }] };
+    const md = D.toMarkdown(D.buildReproduction(rec));
+    assert.ok(!/\[\[/.test(md), `${as}: ${md}`);
+  }
+});
+
+test('in the Gherkin, the sentences show ‹…› and the attribute tables [[…]] (E3; review of #34 R4)', () => {
+  const rec = { id: 'rec-g', steps: [
+    { type: 'navigate', t: 0, env: 'standard', source: 'user', url: ['https://site-1.invalid/users/', { redacted: 'id' }] },
+    { type: 'click', t: 9000, env: 'standard', source: 'user', url: ['https://site-1.invalid/'], target: { role: 'button', name: ['OK'] } },
+    { type: 'navigate', t: 9100, env: 'standard', source: 'user', url: [{ redacted: 'url', as: 'invalid' }] },
+    { type: 'navigate', t: 20000, env: 'standard', source: 'user', url: ['https://site-1.invalid/?q=', { redacted: 'v' }] }
+  ] };
+  const lines = D.toGherkin(rec).split('\n');
+  const sentences = lines.filter((l) => /^\s+(Given|When|Then|And) /.test(l));
+  const cells = lines.filter((l) => /^\s+\|/.test(l));
+  assert.ok(sentences.length >= 3 && sentences.every((l) => !l.includes('[[')), sentences.join('\n'));
+  assert.ok(cells.some((l) => l.includes('[[id]]')) && cells.some((l) => l.includes('[[url:invalid]]')) && cells.some((l) => l.includes('[[v]]')), cells.join('\n'));
 });

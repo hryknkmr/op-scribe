@@ -6,43 +6,52 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const S = require('../shared/sanitize.js');
+// The masking keeps text as runs (#28); these tests read them rendered, as the Gherkin shows them.
+const scrub = (...args) => {
+  const { runs, kinds } = S.scrubText(...args);
+  return { text: S.renderRuns(runs), kinds };
+};
+const urlOf = (...args) => {
+  const r = S.scrubUrl(...args);
+  return { ...r, url: S.renderRuns(r.url) };
+};
 
 test('scrubText masks contact details, card numbers and tokens', () => {
   const token = ['gh', 'p_', 'A'.repeat(36)].join('');
-  const { text, kinds } = S.scrubText(`連絡先 user@example.com / 090-1234-5678 / 4111 1111 1111 1111 / ${token}`);
+  const { text, kinds } = scrub(`連絡先 user@example.com / 090-1234-5678 / 4111 1111 1111 1111 / ${token}`);
   assert.equal(text, '連絡先 [[email]] / [[phone]] / [[card]] / [[secret]]');
   assert.deepEqual(new Set(kinds), new Set(['email', 'phone', 'card', 'secret']));
 });
 
 test('scrubText leaves ordinary UI text alone', () => {
   for (const label of ['ログイン', '検索する', 'Save draft', '2026-10-29', '3件', 'v1.2.0']) {
-    assert.deepEqual(S.scrubText(label), { text: label, kinds: [] }, label);
+    assert.deepEqual(S.scrubText(label), { runs: [label], kinds: [] }, label);
   }
 });
 
 test('scrubText does not treat a non-Luhn 16 digit run as a card', () => {
-  assert.equal(S.scrubText('1234567812345678').text, '[[number]]');
+  assert.equal(scrub('1234567812345678').text, '[[number]]');
 });
 
 test('scrubText normalizes full-width digits before matching', () => {
-  assert.equal(S.scrubText('０９０－１２３４－５６７８').text, '[[phone]]');
+  assert.equal(scrub('０９０－１２３４－５６７８').text, '[[phone]]');
 });
 
 test('keywords are masked case-insensitively, longest first', () => {
-  const { text, kinds } = S.scrubText('Acme Labs の acme チーム', { keywords: ['acme', 'Acme Labs'] });
+  const { text, kinds } = scrub('Acme Labs の acme チーム', { keywords: ['acme', 'Acme Labs'] });
   assert.equal(text, '[[masked]] の [[masked]] チーム');
   assert.deepEqual(kinds, ['keyword', 'keyword']);
 });
 
 test('truncation happens after masking and never splits a placeholder', () => {
-  const { text } = S.scrubText('mail: someone@example.com and more text', { maxLength: 12 });
+  const { text } = scrub('mail: someone@example.com and more text', { maxLength: 12 });
   assert.ok(!text.includes('@'), text);
   assert.ok(!/\[\[[^\]]*$/.test(text.replace(/…$/, '')), text);
 });
 
 test('addresses on a single-label domain are emails too (K3)', () => {
   for (const address of ['alice@localhost', 'bob.k@intranet', '"alice"@example.com', '"a b"@example.com']) {
-    const { text, kinds } = S.scrubText(`連絡先 ${address} まで`);
+    const { text, kinds } = scrub(`連絡先 ${address} まで`);
     assert.ok(!text.includes('@'), text);
     assert.deepEqual(kinds, ['email']);
     assert.deepEqual(S.finalScan({ note: address }).map((f) => f.kinds), [['email']]);
@@ -73,16 +82,16 @@ test('maskFieldValue: commercial keeps only the length of free text (row I8)', (
 
 test('maskFieldValue: standard keeps free text but still masks patterns (row I8, K3)', () => {
   assert.deepEqual(S.maskFieldValue('問い合わせ user@example.com', { type: 'text' }, standard).value,
-    { treatment: 'kept', field: 'text', text: '問い合わせ [[email]]' });
+    { treatment: 'kept', field: 'text', text: ['問い合わせ ', { redacted: 'email' }] });
 });
 
 test('maskFieldValue: search boxes and choices are kept in both environments (rows I5, I6)', () => {
   for (const meta of [{ type: 'search' }, { type: 'text', role: 'searchbox' }, { type: 'text', inSearch: true }]) {
     assert.deepEqual(S.maskFieldValue('週末 レシピ', meta, commercial).value,
-      { treatment: 'kept', field: 'search', text: '週末 レシピ' }, JSON.stringify(meta));
+      { treatment: 'kept', field: 'search', text: ['週末 レシピ'] }, JSON.stringify(meta));
   }
   assert.deepEqual(S.maskFieldValue('東京', { tag: 'select', type: 'select' }, commercial).value,
-    { treatment: 'kept', field: 'choice', text: '東京' });
+    { treatment: 'kept', field: 'choice', text: ['東京'] });
   // A field that only looks like a search box by its name is free text.
   assert.equal(S.maskFieldValue('週末', { type: 'text', name: 'q' }, commercial).value.treatment, 'length');
 });
@@ -116,21 +125,19 @@ test('maskFieldValue: hidden fields are not recorded; empty secret and personal 
   assert.deepEqual(S.maskFieldValue('', { type: 'text' }, commercial).value,
     { treatment: 'length', field: 'text', kind: 'text', length: 0 });
   assert.deepEqual(S.maskFieldValue('', { type: 'text' }, standard).value,
-    { treatment: 'kept', field: 'text', text: '' });
+    { treatment: 'kept', field: 'text', text: [] });
 });
 
 test('scrubText breaks up "[[" written by the page so only masking makes placeholders (row K1)', () => {
-  assert.equal(S.scrubText('[[secret]] と [[[x]]]').text, '[ [secret]] と [ [ [x]]]');
-  assert.equal(S.scrubText('[\u200B[secret]]').text, '[ [secret]]');
-  assert.equal(S.scrubText('［［secret］］').text, '[ [secret]]');
-  // Text that already went through scrubText keeps its own placeholders.
-  assert.equal(S.scrubText('[[email]]', { escape: false }).text, '[[email]]');
+  assert.equal(scrub('[[secret]] と [[[x]]]').text, '[ [secret]] と [ [ [x]]]');
+  assert.equal(scrub('[\u200B[secret]]').text, '[ [secret]]');
+  assert.equal(scrub('［［secret］］').text, '[ [secret]]');
 });
 
 test('maskArgs types every string and number (rows W1-W5)', () => {
   const args = { query: 'shoes', email: 'a@example.com', count: 3, big: 1234567, on: true, none: null, nested: { phone: '0312345678' } };
   assert.deepEqual(S.maskArgs(args, standard), {
-    query: { treatment: 'kept', field: 'arg', text: 'shoes' },
+    query: { treatment: 'kept', field: 'arg', text: ['shoes'] },
     email: { treatment: 'redacted', field: 'arg', kind: 'email' },
     count: { treatment: 'kept', field: 'arg', number: 3 },
     big: { treatment: 'redacted', field: 'arg', kind: 'number' },
@@ -147,8 +154,8 @@ test('maskArgs types every string and number (rows W1-W5)', () => {
 test('maskArgs: a page-made object that looks typed is still a container (row W5)', () => {
   const out = S.maskArgs({ treatment: 'redacted', kind: 'secret' }, standard);
   assert.deepEqual(out, {
-    treatment: { treatment: 'kept', field: 'arg', text: 'redacted' },
-    kind: { treatment: 'kept', field: 'arg', text: 'secret' }
+    treatment: { treatment: 'kept', field: 'arg', text: ['redacted'] },
+    kind: { treatment: 'kept', field: 'arg', text: ['secret'] }
   });
 });
 
@@ -162,9 +169,9 @@ test('maskArgs limits depth, items and keys (row W5)', () => {
 
 test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', () => {
   const aliases = {};
-  const a = S.scrubUrl('https://intranet.corp.invalid/dashboard', { aliases });
-  const b = S.scrubUrl('https://intranet.corp.invalid/settings', { aliases });
-  const c = S.scrubUrl('https://www.example.com/help', { aliases, hostAllowlist: ['*.example.com'] });
+  const a = urlOf('https://intranet.corp.invalid/dashboard', { aliases });
+  const b = urlOf('https://intranet.corp.invalid/settings', { aliases });
+  const c = urlOf('https://www.example.com/help', { aliases, hostAllowlist: ['*.example.com'] });
   assert.equal(a.url, 'https://site-1.invalid/dashboard');
   assert.equal(b.url, 'https://site-1.invalid/settings');
   assert.equal(c.url, 'https://www.example.com/help');
@@ -173,25 +180,25 @@ test('scrubUrl aliases unknown hosts consistently and keeps allowlisted ones', (
 
 test('scrubUrl in commercial replaces ids, user handles and every query value, and drops the fragment (rows U5-U8)', () => {
   const raw = 'https://example.com/users/@someone/orders/123456?tab=items&token=abc&q=hello#/settings';
-  const expected = 'https://example.com/users/:user/orders/:id?tab=[[v]]&token=[[v]]&q=[[v]]';
-  assert.equal(S.scrubUrl(raw, { hostAllowlist: ['example.com'], env: 'commercial' }).url, expected);
+  const expected = 'https://example.com/users/[[user]]/orders/[[id]]?tab=[[v]]&token=[[v]]&q=[[v]]';
+  assert.equal(urlOf(raw, { hostAllowlist: ['example.com'], env: 'commercial' }).url, expected);
   // The URL's own host decides too, whatever the step's environment.
-  assert.equal(S.scrubUrl(raw, { hostAllowlist: ['example.com'], commercialHosts: ['*.example.com', 'example.com'] }).url, expected);
+  assert.equal(urlOf(raw, { hostAllowlist: ['example.com'], commercialHosts: ['*.example.com', 'example.com'] }).url, expected);
 });
 
 test('scrubUrl in standard keeps short harmless params and SPA routes (rows U7, U8)', () => {
-  const { url } = S.scrubUrl('https://example.com/app?tab=items&session=abcdef#/settings',
+  const { url } = urlOf('https://example.com/app?tab=items&session=abcdef#/settings',
     { hostAllowlist: ['example.com'], env: 'standard' });
   assert.equal(url, 'https://example.com/app?tab=items&session=[[v]]#/settings');
 });
 
 test('scrubUrl redacts values it cannot parse and other schemes as a whole (rows U1, U2)', () => {
-  assert.deepEqual(S.scrubUrl('not a url user@example.com'), { url: '[[url:invalid]]', kinds: ['url'] });
-  assert.equal(S.scrubUrl('javascript:alert(1)').url, '[[url:javascript]]');
+  assert.deepEqual(urlOf('not a url user@example.com'), { url: '[[url:invalid]]', kinds: ['url'] });
+  assert.equal(urlOf('javascript:alert(1)').url, '[[url:javascript]]');
 });
 
 test('scrubUrl drops credentials embedded in the URL', () => {
-  const { url } = S.scrubUrl('https://name:pw@example.com/', { hostAllowlist: ['example.com'] });
+  const { url } = urlOf('https://name:pw@example.com/', { hostAllowlist: ['example.com'] });
   assert.equal(url, 'https://example.com/');
 });
 
@@ -206,10 +213,26 @@ test('finalScan ignores placeholders and reports leftovers with their path', () 
   ]);
 });
 
-test('finalScan skips only the placeholders this extension makes (rows E4, E6; review R4)', () => {
-  assert.deepEqual(S.finalScan({ markdown: '[[Acme]] を開く' }, { keywords: ['Acme'] }),
-    [{ path: 'markdown', kinds: ['keyword'] }]);
-  assert.deepEqual(S.finalScan({ markdown: '[[text:12]] [[email]] [[url:invalid]] [[file:2]]' }), []);
+test('the Gherkin is not scanned as a text, the Markdown is scanned as written (rows E3, E4, E6; #28)', () => {
+  // The Gherkin is rebuilt from the recording, which is scanned in its place: its own words
+  // (url, value, textbox) and placeholders never stop an exit.
+  for (const path of ['gherkin', 'reproduction', 'reply']) {
+    const value = path === 'gherkin' ? { gherkin: '| url | [[email]] | textbox | [[url:invalid]]' } : { [path]: { gherkin: 'url value [[email]]' } };
+    assert.deepEqual(S.finalScan(value, { keywords: ['mail', 'url', 'value', 'text', 'valid'] }), [], path);
+  }
+  // A [[email]] in the Markdown is text like any other.
+  assert.deepEqual(S.finalScan({ reproduction: { markdown: '[[email]]', gherkin: '[[email]]' } }, { keywords: ['mail'] }),
+    [{ path: 'reproduction.markdown', kinds: ['keyword'] }]);
+  // An alias as the host of a URL is ours: "site" and "invalid" are not looked for in it. Anywhere else it is text.
+  assert.deepEqual(S.finalScan({ m: 'https://site-2.invalid/a を開く https://site-3.invalid:8443/b' }, { keywords: ['site', 'invalid'] }), []);
+  assert.equal(S.finalScan({ m: 'https://site-3.invalid:8443/b' }, { keywords: ['8443'] }).length, 1, 'the port is not part of the alias');
+  for (const m of ['site-N.invalid は別名', 'site-2.invalid に移動', 'https://website.invalid/']) {
+    assert.equal(S.finalScan({ m }, { keywords: ['site'] }).length, 1, m);
+  }
+  assert.deepEqual(S.finalScan({ m: 'alice@site-1.invalid' }).map((f) => f.kinds), [['email']]);
+  // An array of texts keeps their bounds: a host at the end of one is still a whole host (review of #34 R4).
+  assert.equal(S.finalScan({ preconditions: ['intranet.corp.invalid', 'x'] }, { hosts: ['intranet.corp.invalid'] }).length, 1);
+  assert.equal(S.finalScan({ note: ['ac', 'me'] }, { keywords: ['acme'] }).length, 1, 'and runs are still read as one text');
 });
 
 test('an argument key named __proto__ stays an ordinary key (row W5; review R4)', () => {
@@ -225,7 +248,7 @@ test('masked argument keys are numbered so none overwrites another (row W5; revi
 
 test('a URL longer than the limit after masking is redacted as a whole (row U1; review R5)', () => {
   const long = `https://example.com/${'a/'.repeat(1200)}`;
-  assert.deepEqual(S.scrubUrl(long, { hostAllowlist: ['example.com'] }), { url: '[[url:long]]', kinds: ['url'] });
+  assert.deepEqual(urlOf(long, { hostAllowlist: ['example.com'] }), { url: '[[url:long]]', kinds: ['url'] });
 });
 
 test('argument keys stay distinct after the cut and after masking (row W5; review new R1)', () => {
@@ -245,7 +268,7 @@ test('finalScan finds real host names of any length, only as whole hosts (row K5
 });
 
 test('URL query keys use the form-field vocabulary too (row U7; review new R2)', () => {
-  const { url } = S.scrubUrl('https://example.com/?address=abc&card=1234&postal=1&tab=items',
+  const { url } = urlOf('https://example.com/?address=abc&card=1234&postal=1&tab=items',
     { hostAllowlist: ['example.com'], env: 'standard' });
   assert.equal(url, 'https://example.com/?address=[[v]]&card=[[v]]&postal=[[v]]&tab=items');
 });
@@ -260,11 +283,11 @@ test('a fallback role list still makes a search box (row I6; review new R4)', ()
 });
 
 test('cutting never splits a character or leaves half a placeholder (review new R4)', () => {
-  const emoji = S.scrubText(`a${'😀'.repeat(100)}`, { maxLength: 50 }).text;
+  const emoji = scrub(`a${'😀'.repeat(100)}`, { maxLength: 50 }).text;
   assert.ok(!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(emoji), 'no lone surrogate');
   assert.equal([...emoji].length, 51);
   for (const n of [71, 72, 73, 74, 75, 76, 77, 78, 79]) {
-    const cut = S.scrubText(`${'あ'.repeat(n)}user@example.com`, { maxLength: 80 }).text;
+    const cut = scrub(`${'あ'.repeat(n)}user@example.com`, { maxLength: 80 }).text;
     // Every "[[" is a whole placeholder, and nothing of one is left before the "…".
     assert.ok(!/\[\[(?![a-z]+\]\])/.test(cut), cut);
     assert.ok(!/\[…$/.test(cut), cut);
@@ -274,7 +297,9 @@ test('cutting never splits a character or leaves half a placeholder (review new 
 test('finalScan still scans what a placeholder carries (rows E4, E6; review new R5)', () => {
   assert.deepEqual(S.finalScan({ markdown: '[[url:acme]] を開く' }, { keywords: ['acme'] }).map((f) => f.kinds), [['keyword']]);
   assert.deepEqual(S.finalScan({ markdown: '[[url:x]] を開く' }, { hosts: ['x'] }).map((f) => f.kinds), [['host']]);
-  assert.deepEqual(S.finalScan({ markdown: '[[text:12]] [[url:invalid]]' }, { keywords: ['acme'], hosts: ['x'] }), []);
+  // The scheme of a URL redacted as a whole is the page's, in runs too.
+  assert.deepEqual(S.finalScan({ url: [{ redacted: 'url', as: 'acme' }] }, { keywords: ['acme'] }).map((f) => f.kinds), [['keyword']]);
+  assert.deepEqual(S.finalScan({ url: [{ redacted: 'url', as: 'invalid' }] }, { keywords: ['valid'] }), []);
 });
 
 test('one call keeps at most 20 argument values (row W5)', () => {
@@ -300,7 +325,7 @@ test('a field labelled as a password is classified by its label, whatever its ar
 });
 
 test('the count in [[text:N]] is not a number to find (review R11)', () => {
-  assert.deepEqual(S.finalScan({ m: '[[text:1000000]] と [[file:999]]' }), []);
+  assert.deepEqual(S.finalScan({ gherkin: '[[text:1000000]] と [[file:999]]' }), []);
 });
 
 test('the element takes the first real role in the list (row I6; review R12)', () => {
@@ -308,17 +333,43 @@ test('the element takes the first real role in the list (row I6; review R12)', (
   assert.equal(S.maskFieldValue('shoes', { type: 'text', role: 'unknown' }, commercial).value.field, 'text');
 });
 
-test('keywords that are part of a placeholder name are not used (row K2; review R12)', () => {
-  for (const k of ['email', 'mail', 'ID', 'text', 'mask']) assert.equal(S.usableKeyword(k), false, k);
-  for (const k of ['Acme', 'Brand', '社名']) assert.equal(S.usableKeyword(k), true, k);
-  assert.deepEqual(S.finalScan({ m: '[[email]] と mail' }, { keywords: ['mail'] }), []);
+test('a keyword that is part of a placeholder name is used like any other (row K2; #28)', () => {
+  for (const k of ['email', 'mail', 'ID', 'text', 'mask', 'url', 'invalid', 'Acme', '社名']) assert.equal(S.usableKeyword(k), true, k);
+  assert.equal(S.usableKeyword('a'), false);
+  assert.deepEqual(scrub('mail の件 user@example.com', { keywords: ['mail'] }), { text: '[[masked]] の件 [[email]]', kinds: ['email', 'keyword'] });
+  // The format's own words are not page text: { kind: 'email' } is not a keyword "mail" in the payload.
+  const step = { type: 'input', env: 'standard', source: 'user', value: { treatment: 'redacted', field: 'pii', kind: 'email' } };
+  assert.deepEqual(S.finalScan({ recording: { steps: [step] } }, { keywords: ['mail', 'input', 'standard', 'redacted', 'user'] }), []);
+  // ... only those words under those keys: a page text there is still scanned.
+  assert.equal(S.finalScan({ type: 'mail-form' }, { keywords: ['mail'] }).length, 1);
+  assert.equal(S.finalScan({ note: ['user mail'] }, { keywords: ['mail'] }).length, 1);
+  // Each key has its own words: a role that is a kind's word is the page's (review of #34).
+  assert.equal(S.finalScan({ role: 'email', kind: 'link' }, { keywords: ['email', 'link'] }).length, 2);
+  assert.deepEqual(S.finalScan({ role: 'link', kind: 'email' }, { keywords: ['email', 'link'] }), []);
 });
 
-test('masking text again never rewrites inside its own placeholders (review R12)', () => {
-  assert.equal(S.scrubText('[[email]] / Acme / [[text:123456]]', { keywords: ['Acme'], escape: false }).text,
-    '[[email]] / [[masked]] / [[text:123456]]');
-  // Private-use characters from the page cannot pose as a set-aside placeholder.
-  assert.equal(S.scrubText('ab [[id]]', { escape: false }).text, 'ab [[id]]');
+test('runs from the content script are masked again, part by part (#28)', () => {
+  const found = [];
+  const runs = S.scrubRuns(['Acme の ', { redacted: 'email' }, ' a@example.com'], { keywords: ['Acme'] }, found);
+  assert.deepEqual(runs, [{ redacted: 'masked' }, ' の ', { redacted: 'email' }, ' ', { redacted: 'email' }]);
+  assert.deepEqual(found, ['keyword', 'email']);
+  // A "[[" from the page is broken up again, and anything that is not runs is refused.
+  assert.deepEqual(S.scrubRuns(['x [[email]]']), ['x [ [email]]']);
+  for (const bad of ['text', [{ redacted: 'url', as: 'x' }], [{ redacted: 'email', extra: 1 }], [{ redacted: 'nope' }], [1]]) {
+    assert.equal(S.scrubRuns(bad), null, JSON.stringify(bad));
+  }
+});
+
+test('runs never hold a placeholder as text, and their strings are joined (#28)', () => {
+  const { runs } = S.scrubText('a@example.com b [[email]] 0312345678');
+  assert.ok(runs.every((p, i) => typeof p !== 'string' || (p && !p.includes('[[') && typeof runs[i - 1] !== 'string')), JSON.stringify(runs));
+  assert.deepEqual(S.cutRuns(['abc', { redacted: 'email' }, 'def'], 6), ['abc…']);
+  assert.deepEqual(S.cutRuns(['abc', { redacted: 'email' }, 'def'], 13), ['abc', { redacted: 'email' }, 'd…']);
+});
+
+test('a page key of the masked form is masked too, so every masked-N is ours (W5; #28)', () => {
+  const out = S.maskArgs({ 'masked-7': 'x', Masked_note: 'y', q: 'z' }, { env: 'standard' });
+  assert.deepEqual(Object.keys(out), ['masked-1', 'Masked_note', 'q']);
 });
 
 test('pin_code is a credential field (row I3; review R13)', () => {
@@ -328,11 +379,10 @@ test('pin_code is a credential field (row I3; review R13)', () => {
   assert.equal(S.classifyField({ name: 'pinterest' }).kind, 'free');
 });
 
-test('only counts within the limits are this extension\'s placeholders (K3, E4, E6; review R14)', () => {
-  assert.deepEqual(S.finalScan({ m: '[[text:09012345678]]' }).map((f) => f.kinds), [['phone']]);
-  assert.deepEqual(S.finalScan({ m: '[[text:1000000]] [[text:0]] [[file:999]]' }), []);
-  assert.equal(S.finalScan({ m: '[[text:12345678]]' }).length, 1);
-  assert.equal(S.finalScan({ m: '[[file:1234567]]' }).length, 1);
+test('a placeholder written by hand in the Markdown is scanned like any text (K3, E4, E6; review R14, #28)', () => {
+  assert.deepEqual(S.finalScan({ markdown: '[[text:09012345678]]' }).map((f) => f.kinds), [['phone']]);
+  assert.equal(S.finalScan({ markdown: '[[text:12345678]]' }).length, 1);
+  assert.deepEqual(S.finalScan({ markdown: '‹任意の文字列 12文字› ‹ファイル 2件›' }), []);
 });
 
 test('non-finite numbers are redacted as numbers, and no string poses as one (rows W2, W3; review R15)', () => {
@@ -360,17 +410,17 @@ test('undefined and BigInt arguments are redacted as values, never dropped or ma
   assert.deepEqual(args, {
     a: { treatment: 'redacted', field: 'arg', kind: 'value' },
     b: { treatment: 'redacted', field: 'arg', kind: 'value' },
-    list: [S.typed.kept('arg', 'x'), { treatment: 'redacted', field: 'arg', kind: 'value' }, null]
+    list: [S.typed.kept('arg', ['x']), { treatment: 'redacted', field: 'arg', kind: 'value' }, null]
   });
 });
 
 test('a host with a trailing dot is the same site (row U4; review R24)', () => {
   const aliases = {};
-  const a = S.scrubUrl('https://example.com./a', { aliases }).url;
-  const b = S.scrubUrl('https://example.com/b', { aliases }).url;
+  const a = urlOf('https://example.com./a', { aliases }).url;
+  const b = urlOf('https://example.com/b', { aliases }).url;
   assert.equal(new URL(a).host, new URL(b).host);
   assert.equal(Object.keys(aliases).length, 1);
-  assert.equal(S.scrubUrl('https://example.com.:8443/', { hostAllowlist: ['example.com'] }).url, 'https://example.com:8443/');
+  assert.equal(urlOf('https://example.com.:8443/', { hostAllowlist: ['example.com'] }).url, 'https://example.com:8443/');
 });
 
 test('argument keys are one line before they are kept (E7; review R27)', () => {
@@ -379,28 +429,28 @@ test('argument keys are one line before they are kept (E7; review R27)', () => {
 });
 
 test('a URL path never carries a page-made placeholder (K1, U5; review R29)', () => {
-  const { url } = S.scrubUrl('https://example.com/[[secret]]/a', { hostAllowlist: ['example.com'] });
+  const { url } = urlOf('https://example.com/[[secret]]/a', { hostAllowlist: ['example.com'] });
   assert.equal(url, 'https://example.com/%5B%5Bsecret%5D%5D/a');
   assert.deepEqual(S.finalScan({ url }), []);
 });
 
 test('a scheme named like a marker of ours is just invalid (U2; review R30)', () => {
-  for (const scheme of ['none', 'long', 'invalid']) assert.equal(S.scrubUrl(`${scheme}:private`).url, '[[url:invalid]]', scheme);
-  assert.equal(S.scrubUrl('mailto:x').url, '[[url:mailto]]');
+  for (const scheme of ['none', 'long', 'invalid']) assert.equal(urlOf(`${scheme}:private`).url, '[[url:invalid]]', scheme);
+  assert.equal(urlOf('mailto:x').url, '[[url:mailto]]');
 });
 
 test('patterns see the text before keywords are masked (K2, K3; review R30)', () => {
-  const token = S.scrubText('token=abcdef', { keywords: ['token'] });
+  const token = scrub('token=abcdef', { keywords: ['token'] });
   assert.ok(token.kinds.includes('secret') && !token.text.includes('abcdef'), token.text);
-  const mail = S.scrubText('user@example.com', { keywords: ['example'] });
+  const mail = scrub('user@example.com', { keywords: ['example'] });
   assert.ok(mail.kinds.includes('email') && !mail.text.includes('user'), mail.text);
-  assert.deepEqual(S.scrubText('Acme の件', { keywords: ['Acme'] }), { text: '[[masked]] の件', kinds: ['keyword'] });
+  assert.deepEqual(scrub('Acme の件', { keywords: ['Acme'] }), { text: '[[masked]] の件', kinds: ['keyword'] });
 });
 
 test('a keyword never breaks a placeholder the patterns made (K2; review R31)', () => {
-  const r = S.scrubText('to user@example.com', { keywords: ['[['] });
+  const r = scrub('to user@example.com', { keywords: ['[['] });
   assert.equal(r.text, 'to [[email]]');
-  assert.equal(S.scrubText('x [[ y', { keywords: ['[['] }).text, 'x [ [ y', 'a page "[[" is broken first (K1), so the word never appears');
+  assert.equal(scrub('x [[ y', { keywords: ['[['] }).text, 'x [ [ y', 'a page "[[" is broken first (K1), so the word never appears');
 });
 
 test('the host of a URL is left out of the patterns only: an allowed IP host passes, user info and keywords do not (U4, E6; review R32)', () => {
@@ -413,43 +463,43 @@ test('the host of a URL is left out of the patterns only: an allowed IP host pas
 });
 
 test('an address with an IP domain literal is one email (K3; review R32)', () => {
-  assert.equal(S.scrubText('alice@[127.0.0.1] x').text, '[[email]] x');
+  assert.equal(scrub('alice@[127.0.0.1] x').text, '[[email]] x');
 });
 
 test('keywords fold case outside the BMP, and a local part keeps none of its ASCII symbols (K2, K3; review R33)', () => {
-  assert.equal(S.scrubText('\u{10428}\u{10429} x', { keywords: ['\u{10400}\u{10401}'] }).text, '[[masked]] x');
-  assert.equal(S.scrubText('sales!ops@example.com').text, '[[email]]');
-  assert.equal(S.scrubText("o'brien+tag@example.com").text, '[[email]]');
+  assert.equal(scrub('\u{10428}\u{10429} x', { keywords: ['\u{10400}\u{10401}'] }).text, '[[masked]] x');
+  assert.equal(scrub('sales!ops@example.com').text, '[[email]]');
+  assert.equal(scrub("o'brien+tag@example.com").text, '[[email]]');
 });
 
 test('a keyword is normalized like the text it is matched against (K2, E6; review R35)', () => {
   for (const hidden of ['\u200B', '\u2060', '\u00AD']) {
     const keyword = `Ac${hidden}me`;
-    assert.deepEqual(S.scrubText(`${keyword} の件`, { keywords: [keyword] }), { text: '[[masked]] の件', kinds: ['keyword'] }, JSON.stringify(hidden));
+    assert.deepEqual(scrub(`${keyword} の件`, { keywords: [keyword] }), { text: '[[masked]] の件', kinds: ['keyword'] }, JSON.stringify(hidden));
     assert.deepEqual(S.finalScan({ s: 'Acme' }, { keywords: [keyword] }), [{ path: 's', kinds: ['keyword'] }]);
   }
   assert.equal(S.usableKeyword('a\u200B'), false, 'one character once the hidden one is gone');
 });
 
 test('a quoted local part with an escaped quote is one email (K3; review R39)', () => {
-  assert.equal(S.scrubText('"customer-name\\"x"@example.com').text, '[[email]]');
+  assert.equal(scrub('"customer-name\\"x"@example.com').text, '[[email]]');
 });
 
 test('North American phone numbers are found (K3; review R41)', () => {
-  assert.equal(S.scrubText('call 212-555-0123 or (212) 555-0123').text, 'call [[phone]] or [[phone]]');
+  assert.equal(scrub('call 212-555-0123 or (212) 555-0123').text, 'call [[phone]] or [[phone]]');
 });
 
 test('past the alias limit a new host is redacted whole and marked untracked; the table stops growing (U4, K5; reviews R41, R42)', () => {
   const { LIMITS } = require('../shared/limits.js');
   const aliases = {};
   for (let i = 0; i < LIMITS.aliases; i += 1) S.scrubUrl(`https://h${i}.example.com/`, { aliases });
-  const r = S.scrubUrl('https://one-more.example.com/', { aliases });
+  const r = urlOf('https://one-more.example.com/', { aliases });
   assert.equal(r.url, '[[url:invalid]]');
   assert.equal(r.untracked, true);
   assert.equal(Object.keys(aliases).length, LIMITS.aliases);
-  assert.equal(new URL(S.scrubUrl('https://h3.example.com/x', { aliases }).url).host, 'site-4.invalid', 'known hosts keep theirs');
+  assert.equal(new URL(urlOf('https://h3.example.com/x', { aliases }).url).host, 'site-4.invalid', 'known hosts keep theirs');
 });
 
 test('a card number with dots is found (K3; review R43)', () => {
-  assert.equal(S.scrubText(['4111', '1111', '1111', '1111'].join('.')).text, '[[card]]');
+  assert.equal(scrub(['4111', '1111', '1111', '1111'].join('.')).text, '[[card]]');
 });

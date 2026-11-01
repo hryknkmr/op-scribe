@@ -74,6 +74,34 @@
     })
   });
 
+  /**
+   * A text the masking keeps, as runs (ADR 0003, "残した文の型"; #28): the page's
+   * text as strings and each masked part as { redacted: kind }, never a
+   * placeholder written into the text. A URL is runs too; a URL redacted as a
+   * whole is one part { redacted: 'url', as: 'invalid' | 'long' | 'none' | scheme }.
+   * Only a renderer writes [[kind]] (renderRuns), so no string of the payload
+   * holds one and a keyword is never confused with a placeholder name.
+   */
+  const RUN_KINDS = Object.freeze({
+    text: Object.freeze(['secret', 'card', 'email', 'phone', 'postal', 'id', 'ip', 'number', 'masked']),
+    // Path segments (id, user, masked), a query key (masked), a query value (v), the whole URL (url).
+    url: Object.freeze(['id', 'user', 'masked', 'v', 'url'])
+  });
+  // The markers of a URL redacted as a whole: unparsable, too long, no URL at all.
+  const URL_MARKERS = Object.freeze(['invalid', 'long', 'none']);
+  const SCHEME = /^[a-z][a-z0-9+.-]{0,15}$/;
+
+  /** A redacted part as a placeholder; anything that is not one renders as [[v]]. */
+  function placeholder(part) {
+    const kind = part?.redacted;
+    // as must be a string of its own: SCHEME.test(undefined) reads "undefined" (review of #34 R5).
+    if (kind === 'url') return `[[url:${typeof part.as === 'string' && (URL_MARKERS.includes(part.as) || SCHEME.test(part.as)) ? part.as : 'invalid'}]]`;
+    return RUN_KINDS.text.includes(kind) || RUN_KINDS.url.includes(kind) ? `[[${kind}]]` : '[[v]]';
+  }
+
+  /** Runs as one text with [[kind]] placeholders: the rendering, and what lengths are counted on. */
+  const renderRuns = (runs) => (Array.isArray(runs) ? runs.map((p) => (typeof p === 'string' ? p : placeholder(p))).join('') : String(runs ?? ''));
+
   /** Whether a treatment, field and kind make a typed value that may exist. */
   const typedAllowed = (treatment, field, kind) => (treatment === 'kept'
     ? TYPED_SCHEMA.kept.includes(field)
@@ -121,8 +149,9 @@
   // The arguments as JSON with their typed wrappers ({"treatment":"kept","field":"arg","text":...}).
   const ARGS_JSON = LIMITS.argLeaves * (6 * cut(LIMITS.argKey) + 6 * cut(LIMITS.kept.arg) + 64) + 64;
   const STEP = Object.freeze({
-    // One step in the payload JSON.
-    json: 6 * TEXT + ARGS_JSON + 512,
+    // One step in the payload JSON. Runs take at most 6 bytes a rendered character too: a
+    // string part as a JSON string, and { "redacted": ... } is shorter than 6 times its placeholder.
+    json: 6 * TEXT + ARGS_JSON + 1024,
     // Its Markdown: the action and the expected result (a note or the next navigation), args cut to argsInSentence.
     markdown: TEXT + cut(LIMITS.argsInSentence) + 512,
     // Its Gherkin: the sentence, then each field again in an escaped table cell, and the arguments' JSON (cell-escaped).
@@ -151,7 +180,46 @@
   /** The role an element takes from its role attribute: the first token that is a real role ("unknown searchbox"). */
   const primaryRole = (value) => String(value || '').trim().toLowerCase().split(/\s+/).find((t) => ARIA_ROLES.has(t)) || '';
 
-  const api = { LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole };
+  /**
+   * The payload's own words (step types, environments, treatments, fields,
+   * kinds ...): fixed by the format, never from a page. The final scan does not
+   * look for keywords in them, so a keyword such as "mail" does not stop every
+   * recording with an { kind: 'email' } in it (K2, #28). Each key has its own
+   * words, so a word of one never passes as another (a role "email" is scanned;
+   * review of #34); anything else there is scanned.
+   */
+  const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+  const words = (...lists) => {
+    const set = new Set(lists.flat());
+    return (value) => set.has(value);
+  };
+  const VOCAB = Object.freeze({
+    schema: (value) => /^op-scribe\.recording\/v\d+$/.test(value),
+    policy: (value) => /^commercial-strict\/\d+$/.test(value),
+    coverage: words(['commercial', 'standard', 'mixed', 'none']),
+    generator: words(['template', 'on-device-ai', 'manual', 'none']),
+    type: words(Object.keys(STEP_RULES)),
+    env: words(['commercial', 'standard']),
+    source: words(['user', 'agent']),
+    treatment: words(['kept', 'length', 'redacted']),
+    field: words(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']),
+    // A typed value's kind, and a note's kind (#32).
+    kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat(), ['bug', 'question', 'idea', 'next']),
+    redacted: words(RUN_KINDS.text, RUN_KINDS.url),
+    key: (value) => /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/.test(value),
+    role: words([...ARIA_ROLES]),
+    // What the extension makes itself: the recording's id and its times (review of #34 R7).
+    id: (value) => /^rec-[a-z0-9-]{1,40}$/.test(value),
+    startedAt: (value) => ISO_TIME.test(value),
+    endedAt: (value) => ISO_TIME.test(value),
+    sentAt: (value) => ISO_TIME.test(value)
+  });
+  const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
+
+  const api = {
+    LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole,
+    RUN_KINDS, URL_MARKERS, SCHEME, renderRuns, isVocab
+  };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
