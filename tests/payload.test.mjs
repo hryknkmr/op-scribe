@@ -659,3 +659,19 @@ test('the site of a WebMCP tool list is runs of one origin, nothing masked (W6, 
     assert.ok(P.checkPayload(payload).some((p) => p.path === 'recording.webmcpTools[0].site'), JSON.stringify(site));
   }
 });
+
+test('a URL marker carries its as as a string of its own (U1, U2, E1; review of #34 R5)', () => {
+  for (const marker of [{ redacted: 'url' }, { redacted: 'url', as: null }, { redacted: 'url', as: true }]) {
+    const payload = build();
+    payload.recording.steps[1].url = [marker];
+    assert.ok(P.checkPayload(regen(payload)).some((p) => p.path.startsWith('recording.steps[1].url') && p.problem === 'bad URL marker'), JSON.stringify(marker));
+  }
+  assert.equal(S.renderRuns([{ redacted: 'url' }]), '[[url:invalid]]');
+});
+
+test('a keyword added after the recording is found in a percent-encoded URL path (K2, E6; review of #34 R5)', () => {
+  const recorded = S.scrubUrl('https://example.com/%41cme/x', { hostAllowlist: ['example.com'] }).url;
+  assert.deepEqual(recorded, ['https://example.com/%41cme/x']);
+  assert.equal(S.finalScan({ url: recorded }, { keywords: ['Acme'] }).length, 1);
+  assert.deepEqual(S.finalScan({ url: ['https://example.com/%E3%81%82/x'] }, { keywords: ['Acme'] }), []);
+});

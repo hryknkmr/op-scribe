@@ -82,7 +82,8 @@
         if (p.includes('[[')) return 'placeholder in text';
       } else if (isObject(p) && kinds.includes(p.redacted)) {
         if (p.redacted !== 'url' && !hasOnly(p, ['redacted'])) return 'unknown field in a masked part';
-        if (p.redacted === 'url' && (!hasOnly(p, ['redacted', 'as']) || !(URL_MARKERS.includes(p.as) || SCHEME.test(p.as)) || v.length !== 1)) return 'bad URL marker';
+        if (p.redacted === 'url' && (!hasOnly(p, ['redacted', 'as']) || typeof p.as !== 'string'
+          || !(URL_MARKERS.includes(p.as) || SCHEME.test(p.as)) || v.length !== 1)) return 'bad URL marker';
       } else {
         return 'not a masked part';
       }

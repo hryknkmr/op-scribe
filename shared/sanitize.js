@@ -545,6 +545,15 @@
     return code === 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(code);
   });
 
+  /**
+   * A text with its percent-escapes undone where they make UTF-8: a URL path keeps "%41cme" as
+   * the page wrote it, and a keyword added after the recording must still find it (K2, E6;
+   * review of #34 R5).
+   */
+  const percentDecode = (text) => String(text).replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => {
+    try { return decodeURIComponent(m); } catch { return m; }
+  });
+
   // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
   const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
 
@@ -566,8 +575,9 @@
     const check = (text, path) => {
       if (RENDERED.has(path)) return;
       const plain = String(text);
-      // As written and with CSS escapes undone: a selector carries them (review R23).
-      const kinds = [plain, cssUnescape(plain)].flatMap((t) => {
+      // As written, with CSS escapes undone (a selector carries them; review R23) and with
+      // percent-escapes undone (a URL carries them).
+      const kinds = [plain, cssUnescape(plain), percentDecode(plain)].flatMap((t) => {
         // The host of a URL is left out of the patterns (K3) only: it is an alias or a host the
         // user allowed by name, an IP host too (U4; review R32). Keywords and real hosts still apply.
         const urlHosts = [];

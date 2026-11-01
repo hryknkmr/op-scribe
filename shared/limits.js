@@ -94,7 +94,8 @@
   /** A redacted part as a placeholder; anything that is not one renders as [[v]]. */
   function placeholder(part) {
     const kind = part?.redacted;
-    if (kind === 'url') return `[[url:${URL_MARKERS.includes(part.as) || SCHEME.test(part.as) ? part.as : 'invalid'}]]`;
+    // as must be a string of its own: SCHEME.test(undefined) reads "undefined" (review of #34 R5).
+    if (kind === 'url') return `[[url:${typeof part.as === 'string' && (URL_MARKERS.includes(part.as) || SCHEME.test(part.as)) ? part.as : 'invalid'}]]`;
     return RUN_KINDS.text.includes(kind) || RUN_KINDS.url.includes(kind) ? `[[${kind}]]` : '[[v]]';
   }
 
