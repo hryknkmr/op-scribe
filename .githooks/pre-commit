@@ -23,7 +23,7 @@ echo "pii-guard: staged 内容を走査中..."
 if command -v node >/dev/null 2>&1; then
   # git が hook に渡す GIT_DIR・GIT_INDEX_FILE などは外す。worktree では本物の repo を指し、
   # テストが一時 repo のつもりで本物の設定・ブランチ・index を書き換えてしまう。
-  (cd "$ROOT" && env $(env | sed -n 's/^\(GIT_[A-Za-z0-9_]*\)=.*/-u \1/p') node --test tests/*.test.mjs >/dev/null 2>&1) || { echo "✗ unit test が失敗しました（pnpm test）。" >&2; fail=1; }
+  (cd "$ROOT" && for name in "${!GIT_@}"; do unset "$name"; done && node --test tests/*.test.mjs >/dev/null 2>&1) || { echo "✗ unit test が失敗しました（pnpm test）。" >&2; fail=1; }
 fi
 
 [[ "$fail" == "0" ]] || { echo "コミットを中止しました。" >&2; exit 1; }
