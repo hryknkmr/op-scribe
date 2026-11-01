@@ -32,7 +32,7 @@ op-scribe は公開リポジトリで管理する前提で作っています。�
 | --- | --- | --- |
 | commit | `.githooks/pre-commit`（identity・staged 内容・unit test）、`commit-msg` | `PII_GUARD_SKIP=1` で一時回避可 |
 | push | `.githooks/pre-push`（push 範囲の各コミットの追加行とコミットメッセージ、identity、author/committer の名前） | 同上 |
-| merge | `.github/workflows/pii-guard.yml`（全 tracked ファイル、範囲内の**各コミット**の追加行とコミットメッセージ、author/committer の email と名前。全ブランチの push でも動く。範囲は PR ではその PR のコミット、push では root からの全履歴） | required check にすれば回避できない（今のプランの private リポジトリでは設定できないので、公開時に設定する。#20） |
+| merge | `.github/workflows/pii-guard.yml`（全 tracked ファイル、範囲内の**各コミット**の追加行とコミットメッセージ、author/committer の email と名前。全ブランチの push でも動く。範囲は PR ではその PR のコミット、push では root からの全履歴。ただし名前は push で増えたコミットだけを見る。main の古いコミット 2 件は例外として以前の名前を残している。#20） | required check にすれば回避できない（今のプランの private リポジトリでは設定できないので、公開時に設定する。#20） |
 
 CI にはローカル denylist が無いため、CI が見るのは汎用パターンだけです。author/committer の**名前**は許可した値だけを通します。push で見るのは、その push で増えたコミットだけです（表示名を変える前のコミットが残っているため。書き換えるかは #20 で決めます）。社名などの検出はローカル hooks
 が担うので、**clone したら最初に `pnpm setup-hooks` と local denylist の配置**を行ってください。

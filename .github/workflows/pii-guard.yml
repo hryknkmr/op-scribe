@@ -45,8 +45,8 @@ jobs:
       - name: Check commit identities
         run: scripts/pii-guard.sh check-identities "$RANGE"
 
-      # On a push, only what it added: commits on main from before the display name changed
-      # still carry the old name. Whether to rewrite them is decided in #20; use RANGE then.
+      # On a push, only what it added: two commits on main from before the display name
+      # changed keep the old name (owner decision, #20), so the whole history cannot pass.
       - name: Check commit names
         env:
           BEFORE_SHA: ${{ github.event.before }}
