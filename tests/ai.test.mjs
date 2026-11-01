@@ -1,7 +1,11 @@
 // The check on what the on-device model writes (sidepanel/ai.js, AGENTS.md: AI output is used only if it passes validate).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { validate } from '../sidepanel/ai.js';
+
+// The side panel loads shared/limits.js before ai.js; so does this test.
+createRequire(import.meta.url)('../shared/limits.js');
 
 const input = '開始ページ: https://site-1.invalid/\n操作ログ:\n1. 「メール」入力欄に ‹メールアドレス› を入力する';
 const noFindings = () => [];
@@ -29,4 +33,11 @@ test('a real host at the end of one precondition is found, whatever follows it (
   const S = (await import('node:module')).createRequire(import.meta.url)('../shared/sanitize.js');
   const output = { title: '手順', steps: [{ action: '「メール」入力欄に ‹メールアドレス› を入力する' }], preconditions: ['intranet.corp.invalid', 'x'] };
   assert.ok(validate(output, input, (o) => S.finalScan(o, { hosts: ['intranet.corp.invalid'] })).length);
+});
+
+test('a hidden character in the output is refused: the renderer would remove it after the check (E7; review of #34 R10)', () => {
+  for (const action of ['[\u200B[email]] を入力する', 'https:\u200B//new.example/ を開く', '[\u202E[secret]]', '[\u2060[v]]']) {
+    const output = { title: '手順', steps: [{ action }] };
+    assert.ok(validate(output, input, noFindings).length, JSON.stringify(action));
+  }
 });
