@@ -16,7 +16,8 @@
       <summary>記録 <span id="rec-state" class="pill">停止中</span></summary>
       <div class="body">
         <p class="hint">
-          開始すると、このタブのサイトに対する記録許可を求めます。「商用環境のホスト」での自由入力は文字数だけを残し、
+          開始すると、このタブのサイトに対する記録許可を求めます。このタブから開いた別タブも、許可したサイトだけ同じ記録に加えます。
+          「商用環境のホスト」での自由入力は文字数だけを残し、
           記録データはブラウザを閉じると消えます。
         </p>
         <div id="policy-notice" class="callout" hidden>
@@ -33,7 +34,7 @@
           <button id="rec-clear" type="button" class="secondary" disabled>破棄</button>
         </div>
         <div id="origin-gate" class="callout" hidden>
-          <p>このサイトはまだ記録を許可していないため、ページ遷移以外の操作は記録されません。</p>
+          <p>このサイト、または記録元から開いたこのタブはまだ記録を許可していないため、操作は記録されません。</p>
           <button id="add-origin" type="button" class="secondary">このサイトも記録する</button>
         </div>
       </div>

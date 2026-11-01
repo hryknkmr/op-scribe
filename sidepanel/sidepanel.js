@@ -181,9 +181,14 @@ function renderStatus() {
     ui.tabStatus.textContent = 'このタブは記録できません（http / https のページのみ）';
     return;
   }
-  const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
+  const owned = recording?.tabIds || (recording?.tabId != null ? [recording.tabId] : []);
+  const pending = recording?.pendingTabIds || [];
+  const attached = recording?.attachedTabIds || (recording?.attached ? [recording.tabId] : []);
+  const isRecTab = recording?.state === 'recording' && owned.includes(activeTab.id);
+  const isPendingTab = recording?.state === 'recording' && pending.includes(activeTab.id);
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
-  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
+  if (isPendingTab) ui.tabStatus.textContent = `記録元から開いたタブ: ${new URL(url).host}`;
+  if (isRecTab && !attached.includes(activeTab.id)) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
   if (startError) ui.tabStatus.textContent = startError;
 }
 
@@ -197,7 +202,11 @@ function render() {
   ui.clear.disabled = !rec;
 
   const pattern = pagePattern(activeTab?.url);
-  ui.originGate.hidden = !(isRecording && activeTab?.id === rec.tabId && pattern && !rec.grantedPatterns.includes(pattern));
+  const ownedTabs = rec?.tabIds || (rec?.tabId != null ? [rec.tabId] : []);
+  const pendingTabs = rec?.pendingTabIds || [];
+  const belongsToRecording = ownedTabs.includes(activeTab?.id) || pendingTabs.includes(activeTab?.id);
+  ui.originGate.hidden = !(isRecording && belongsToRecording && pattern
+    && (pendingTabs.includes(activeTab?.id) || !rec.grantedPatterns.includes(pattern)));
 
   const steps = rec?.steps || [];
   ui.stepCount.textContent = String(steps.length);
@@ -267,7 +276,7 @@ ui.addOrigin.addEventListener('click', () => {
   if (!pattern) return;
   const granted = chrome.permissions.request({ origins: [pattern] });
   (async () => {
-    if (await granted) await send('ADD_ORIGIN', { url: tab.url });
+    if (await granted) await send('ADD_ORIGIN', { tabId: tab.id, url: tab.url });
     await refresh();
   })();
 });
