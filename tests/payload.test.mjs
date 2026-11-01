@@ -61,7 +61,7 @@ const rec = {
   redactions: { text: 1, secret: 1 },
   webmcpTools: { 'https://site-1.invalid': ['search_catalog'] },
   steps: [
-    { type: 'navigate', t: 0, env: 'commercial', source: 'user', url: 'https://site-1.invalid/' },
+    { type: 'navigate', t: 0, env: 'commercial', source: 'unknown', url: 'https://site-1.invalid/' },
     { type: 'input', t: 1000, env: 'commercial', source: 'user', url: 'https://site-1.invalid/',
       target: { role: 'textbox', tag: 'input', name: 'パスワード' }, value: typed.redacted('secret', 'secret') },
     { type: 'input', t: 2000, env: 'commercial', source: 'user', url: 'https://site-1.invalid/',
@@ -357,9 +357,9 @@ test('the largest recording the limits allow, with the worst characters, passes 
 test('a panel note takes its environment from the recording when the payload is built (M1, E2; review R12)', () => {
   const note = { type: 'note', t: 1, env: 'standard', source: 'user', note: 'メモ' };
   const r = { ...clone(rec), steps: [
-    { type: 'navigate', t: 0, env: 'standard', source: 'user', url: 'https://site-2.invalid/' },
+    { type: 'navigate', t: 0, env: 'standard', source: 'unknown', url: 'https://site-2.invalid/' },
     note,
-    { type: 'navigate', t: 2, env: 'commercial', source: 'user', url: 'https://site-1.invalid/' }
+    { type: 'navigate', t: 2, env: 'commercial', source: 'unknown', url: 'https://site-1.invalid/' }
   ] };
   const payload = build(r);
   assert.equal(payload.recording.steps[1].env, 'commercial');
@@ -595,7 +595,7 @@ test('a deleted start URL never comes back, not even when a later step goes ther
   r.startUrl = 'https://site-1.invalid/a';
   r.steps = [
     { type: 'click', t: 1, env: 'standard', source: 'user', url: 'https://site-1.invalid/b', target: { role: 'button', name: 'x' } },
-    { type: 'navigate', t: 2, env: 'standard', source: 'user', url: 'https://site-1.invalid/a' }
+    { type: 'navigate', t: 2, env: 'standard', source: 'unknown', url: 'https://site-1.invalid/a' }
   ];
   assert.equal(D.rendered(D.startUrlOf(r)), 'https://site-1.invalid/b');
   const payload = build(r);
@@ -692,4 +692,13 @@ test('the recording id and times are the extension\'s, not page text (K2, E6; re
   r.steps[5].note = 'rec 20';
   assert.ok(S.finalScan(build(r), { keywords }).some((f) => f.path.startsWith('recording.steps[5].note')));
   assert.equal(S.finalScan({ id: 'acme-rec' }, { keywords: ['rec'] }).length, 1, 'an id not of the form is scanned');
+});
+
+test('each kind of step has the source W7 gives it (row W7; review of #37 R9)', () => {
+  for (const [index, source] of [[0, 'user'], [1, 'agent'], [4, 'user'], [5, 'unknown'], [5, 'agent']]) {
+    const payload = build();
+    payload.recording.steps[index].source = source;
+    assert.ok(P.checkPayload(regen(payload)).some((p) => p.path === `recording.steps[${index}].source`), `${index} ${source}`);
+  }
+  assert.deepEqual(P.checkPayload(build()), []);
 });

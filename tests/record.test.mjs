@@ -459,8 +459,10 @@ test('past the step limit the reported steps go first, whoever adds the new step
   const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
   const people = () => rec.steps.filter((s) => s.source === 'user').length;
   for (let i = 0; i < LIMITS.steps; i += 1) R.appendStep(rec, click());
+  const revision = rec.revision;
   assert.equal(R.appendStep(rec, tool()), false, 'no reported step to give way: not recorded');
   assert.equal(people(), LIMITS.steps);
+  assert.equal(rec.revision, revision, 'nothing changed, so no Markdown goes stale (review of #37 R11)');
   // Mixed and full: the person's new step pushes out a reported one, not the oldest of the person's.
   rec.steps.splice(0, LIMITS.agentSteps);
   for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, tool()));
@@ -495,14 +497,11 @@ test('a step whose URL is redacted for its length is still its site\'s, and the 
   assert.equal(payload.recording.steps[0].site, undefined);
 });
 
-test('the exits refuse more reported steps than a recording keeps, and saving trims them (row W7; review of #37)', () => {
+test('saving trims the reported steps of a site past the limit (row W7; review of #37)', () => {
   const { LIMITS } = require('../shared/limits.js');
-  const P = require('../shared/payload.js');
   const rec = newRec();
   const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
   rec.steps = Array.from({ length: LIMITS.agentSteps + 1 }, tool);
-  const payload = P.buildPayload({ ...rec, id: 'rec-cap', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
-  assert.ok(P.checkPayload(payload).some((p) => p.problem === 'too many reported steps'));
   R.fitRecord(rec);
   assert.equal(rec.steps.length, LIMITS.agentSteps);
 });
@@ -515,4 +514,118 @@ test('a WebMCP reproduction carries no recording id (row W8; review of #37 R4)',
   const repro = R.webmcpReply(rec, s, step.site, 'reproduction');
   assert.equal(repro.ok, true);
   assert.ok(!JSON.stringify(repro).includes('rec-shared-1'));
+});
+
+test('a navigation of the tab is recorded as unknown and shares the limit of what the page reports (row W7; owner decision on #37)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const P = require('../shared/payload.js');
+  const rec = newRec();
+  const nav = (i) => R.cleanStep({ type: 'navigate', pageUrl: `${BETA}?p=${i}`, source: 'unknown' }, rec, settings, { tabUrl: BETA });
+  const person = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA });
+  assert.equal(nav(0).source, 'unknown');
+  assert.equal(person.source, 'user');
+  assert.ok(R.appendStep(rec, person));
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, nav(i)));
+  const tool = R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  assert.equal(R.appendStep(rec, tool), false, 'navigations and reports share the limit');
+  assert.equal(R.appendStep(rec, nav(999)), false);
+  assert.equal(rec.steps[0], person);
+  const payload = P.buildPayload({ ...rec, id: 'rec-nav', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
+  assert.deepEqual(P.checkPayload(payload), []);
+});
+
+test('the limit is a site\'s own: what one page can add does not depend on the other sites (rows W7, W8; owner decision on #37)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const OTHER = 'https://other.example.com/x';
+  const count = (others) => {
+    const rec = newRec();
+    for (let i = 0; i < others; i += 1) R.appendStep(rec, R.cleanStep({ type: 'tool', pageUrl: OTHER, tool: 'x', ok: true }, rec, settings, { tabUrl: OTHER }));
+    let added = 0;
+    while (R.appendStep(rec, R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA }))) added += 1;
+    return added;
+  };
+  assert.equal(count(0), LIMITS.agentSteps);
+  assert.equal(count(37), LIMITS.agentSteps);
+});
+
+test('a note written in the side panel is the person\'s (row W7; owner decision on #37)', () => {
+  assert.equal(R.cleanStep({ type: 'note', note: 'メモ' }, newRec(), settings).source, 'user');
+});
+
+test('a host of the alias form never keeps its own name as its alias (rows U4, K5; review of #37 R8)', () => {
+  for (const host of ['site-1.invalid', 'site-2.invalid']) {
+    const aliases = {};
+    if (host === 'site-2.invalid') S.scrubUrl('https://other.example.com/', { aliases });
+    const got = new URL(S.renderRuns(S.scrubUrl(`https://${host}/private`, { aliases }).url)).host;
+    assert.notEqual(got, host);
+  }
+});
+
+test('a real host of the alias form does not stop the exits for another site\'s alias, in either order (rows U4, K5, W8; review of #37 R10)', () => {
+  for (const order of [['https://other.example.com/a', 'https://site-1.invalid/b'], ['https://site-1.invalid/b', 'https://other.example.com/a']]) {
+    const rec = newRec();
+    const s = { ...settings, keywords: [] };
+    for (const pageUrl of order) rec.steps.push(R.cleanStep({ type: 'click', pageUrl, target: { role: 'button', name: 'OK' } }, rec, s, { tabUrl: pageUrl }));
+    const hosts = new Set(Object.values(rec.aliases));
+    assert.equal(hosts.size, 2, JSON.stringify(rec.aliases));
+    for (const step of rec.steps) assert.equal(R.webmcpReply(rec, s, step.site, 'reproduction').ok, true, `${order} ${step.site}`);
+  }
+});
+
+test('WebMCP names the asking site site-1 and its links after it, whatever the recording numbers them (row W8; review of #37 R12)', () => {
+  const rec = newRec();
+  const s = { ...settings, keywords: [] };
+  const step = (pageUrl, href) => R.cleanStep({ type: 'click', pageUrl, target: { role: 'link', name: 'OK', ...(href && { href }) } }, rec, s, { tabUrl: pageUrl });
+  rec.steps.push(step('https://first.example.com/a'), step('https://second.example.com/b', 'https://first.example.com/c'));
+  const second = rec.steps[1];
+  assert.equal(new URL(second.site).host, 'site-2.invalid');
+  const status = R.webmcpReply(rec, s, second.site, 'status');
+  assert.equal(status.site, 'https://site-1.invalid');
+  const repro = R.webmcpReply(rec, s, second.site, 'reproduction');
+  const text = repro.markdown + repro.gherkin;
+  assert.ok(text.includes('https://site-1.invalid/b'), text);
+  // first.example.com is the recording's site-1; to this page it is the next site its steps name.
+  assert.ok(text.includes('https://site-2.invalid/c'), text);
+  assert.ok(!text.includes('site-3.invalid'), text);
+  // The step stored in the recording keeps its alias.
+  assert.equal(new URL(S.renderRuns(second.url)).host, 'site-2.invalid');
+});
+
+test('WebMCP keeps an allowed asking site by name and numbers the other sites from site-1 (rows U4, W8; review of #37 R13)', () => {
+  const s = { ...settings, keywords: [], hostAllowlist: ['allowed.example.com'] };
+  const rec = { ...newRec(), policy: R.policyOf(s) };
+  const step = (pageUrl, href) => R.cleanStep({ type: 'click', pageUrl, target: { role: 'link', name: 'OK', ...(href && { href }) } }, rec, s, { tabUrl: pageUrl });
+  rec.steps.push(step('https://first.example.com/a'), step('https://second.example.com/b'), step('https://allowed.example.com/c', 'https://second.example.com/d'));
+  const site = rec.steps[2].site;
+  assert.equal(site, 'https://allowed.example.com');
+  assert.equal(R.webmcpReply(rec, s, site, 'status').site, site);
+  const repro = R.webmcpReply(rec, s, site, 'reproduction');
+  const text = repro.markdown + repro.gherkin;
+  assert.ok(text.includes('https://allowed.example.com/c'), text);
+  // second.example.com is the recording's site-2; to this page it is the first alias its steps name.
+  assert.ok(text.includes('https://site-1.invalid/d'), text);
+  assert.ok(!text.includes('site-2.invalid'), text);
+});
+
+test('a step that is not recorded leaves the aliases and the redaction counts as they were (rows W7, M1; review of #37 R14)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const s = { ...settings, keywords: [] };
+  // A site at its own limit: one more tool call that redacts an email is not recorded.
+  const rec = newRec();
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, s, { tabUrl: BETA }));
+  const before = JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision });
+  assert.equal(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true, args: { to: 'someone@example.com' } }, s, { tabUrl: BETA }), null);
+  assert.equal(JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision }), before);
+  // A recording full of the person's steps: a navigation to a new site is not recorded, and names no site.
+  const full = newRec();
+  for (let i = 0; i < LIMITS.steps; i += 1) full.steps.push({ type: 'click', t: 0, env: 'standard', source: 'user' });
+  const nav = R.addStep(full, { type: 'navigate', pageUrl: 'https://new.example.com/?q=a%20b', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' });
+  // A navigation is not the person's: it does not push theirs out.
+  assert.equal(nav, null);
+  assert.deepEqual(full.aliases, {});
+  assert.deepEqual(full.redactions, {});
+  // A step that is recorded keeps what its cleaning added.
+  const ok = newRec();
+  assert.ok(R.addStep(ok, { type: 'navigate', pageUrl: 'https://new.example.com/', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' }));
+  assert.equal(Object.keys(ok.aliases).length, 1);
 });

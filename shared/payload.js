@@ -111,7 +111,7 @@
       type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
-      source: { type: 'enum', row: 'T6', values: ['user', 'agent'] },
+      source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
       url: opt(URL_VALUE),
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
@@ -407,7 +407,11 @@
     const field = step.value?.field;
     if (step.type === 'upload' && step.value !== undefined && field !== 'file') problems.push({ path: `${path}.value`, problem: 'upload is not a file value' });
     if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
-    if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
+    // Row W7: the source each kind of step has. A note is the page's (agent, with the URL of its page)
+    // or the person's in the side panel (user, with none).
+    const source = step.type === 'navigate' ? 'unknown' : step.type === 'tool' ? 'agent'
+      : step.type === 'note' ? (step.url === undefined ? 'user' : 'agent') : 'user';
+    if (step.source !== source) problems.push({ path: `${path}.source`, problem: `${step.type} step not from ${source}` });
     // The fields each kind of step can hold (I5): a select is a choice (or secret or personal by its names),
     // never free text with the longer limit; an input is never a file (review R31).
     const allowed = { select: ['choice', 'secret', 'pii'], input: ['text', 'search', 'choice', 'secret', 'pii'] }[step.type];
@@ -490,8 +494,6 @@
     if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
     checkUrl(payload.recording.startUrl, startStep?.env, 'recording.startUrl', problems, { none: true });
     payload.recording.webmcpTools.forEach((w, i) => checkSite(w.site, `recording.webmcpTools[${i}].site`, problems));
-    // Row W7: no more steps the page reported than a recording keeps.
-    if (steps.filter((s) => s.source === 'agent').length > LIMITS.agentSteps) problems.push({ path: 'recording.steps', problem: 'too many reported steps' });
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });

@@ -16,7 +16,7 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS, renderRuns } = self.OpScribeLimits;
 const { humanize } = self.OpScribeDescribe;
-const { policyOf, envOf, cleanStep, appendStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
+const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -172,7 +172,7 @@ async function start({ tabId, url }) {
     };
     const env = envOf([url], rec.policy);
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
-    appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
+    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url });
     try {
       if (previous?.state === 'recording') await stopTab(previous);
       await syncContentScripts(rec.grantedPatterns);
@@ -243,9 +243,9 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     // The note belongs to the page it came from, so only that site gets it back (W8, #17).
-    const step = cleanStep({ type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, rec, settings, fromOf(sender));
+    const step = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender));
     // Past the limit of what the page may report, nothing is added (W7).
-    if (!appendStep(rec, step)) return { reply: { ok: false, error: 'NOT_RECORDED' } };
+    if (!step) return { reply: { ok: false, error: 'NOT_RECORDED' } };
     // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
     const added = humanize(renderRuns(step.note));
     return { save: rec, reply: guardReply({ ok: true, added }, rec, settings) };
@@ -278,7 +278,7 @@ async function handle(message, sender) {
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
-        appendStep(rec, cleanStep({ type: 'note', note: String(detail.text || ''), kind: detail.kind }, rec, await getSettings()));
+        addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
         return { save: rec, reply: { ok: true } };
       });
       default: return { ok: false, error: 'UNKNOWN' };
@@ -301,7 +301,7 @@ async function handle(message, sender) {
       if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        appendStep(rec, cleanStep(detail, rec, settings, fromOf(sender)));
+        addStep(rec, detail, settings, fromOf(sender));
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
@@ -341,10 +341,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
-    const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings, { tabUrl: changeInfo.url });
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
-    if (step && last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last) return null;
-    appendStep(rec, step);
+    const moved = (step) => !(last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last);
+    if (!addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved)) return null;
     return { save: rec };
   });
 });
