@@ -555,10 +555,9 @@
   // scans the steps its Gherkin was built from (guardReply). The Markdown a person edits is scanned
   // as written (E4).
   const RENDERED = new Set(['reproduction.gherkin', 'reply.gherkin', 'gherkin']);
-  // An alias this extension made ("site-3.invalid", "site-N.invalid" in the notes): ours, so a
-  // keyword such as "site" or "invalid" is not looked for in it.
+  // The host of an http(s) URL in the alias form ("site-3.invalid"): a keyword such as "site" or
+  // "invalid" is not looked for in it (E6). Only there: the same form anywhere else is scanned.
   const ALIAS = /^site-\d+\.invalid$/;
-  const ALIAS_TEXT = /(?<![\p{L}\p{N}.-])site-(?:\d+|N)\.invalid(?![\p{L}\p{N}-])/giu;
 
   function finalScan(value, opts = {}) {
     const findings = [];
@@ -575,7 +574,7 @@
         const body = t.replace(URL_HOST, (m, scheme, host) => {
           urlHosts.push(host.normalize('NFKC'));
           return `${scheme} `;
-        }).replace(ALIAS_TEXT, ' ');
+        });
         return [...scrubText(body, { keywords: opts.keywords }).kinds,
           ...(keywords && urlHosts.some((h) => !ALIAS.test(h.toLowerCase()) && h.match(keywords)) ? ['keyword'] : []),
           ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];

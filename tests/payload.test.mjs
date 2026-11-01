@@ -638,7 +638,9 @@ test('a keyword that is a placeholder name passes the exits when the page never 
   assert.deepEqual(P.checkPayload(payload), []);
   assert.ok(payload.reproduction.gherkin.includes('[[email]]'), 'the Gherkin keeps the placeholder for agents');
   assert.ok(!payload.reproduction.markdown.includes('[['), payload.reproduction.markdown);
-  assert.deepEqual(S.finalScan(payload, { keywords: ['mail', 'email', 'masked', 'url', 'invalid', 'text', 'site', 'value'] }), []);
+  assert.deepEqual(S.finalScan(payload, { keywords: ['mail', 'email', 'masked', 'url', 'invalid', 'text', 'site', 'value'] })
+    .map((f) => f.path), ['reproduction.markdown'], 'only the Markdown note about site-N.invalid, a known limit of K2');
+  assert.deepEqual(S.finalScan(payload, { keywords: ['mail', 'email', 'masked', 'url', 'text', 'value'] }), []);
   // ... and stops a payload where the page did write it.
   r.steps[5].note = 'mail の件';
   assert.deepEqual(S.finalScan(build(r), { keywords: ['mail'] }).map((f) => f.path), ['recording.steps[5].note[0]']);

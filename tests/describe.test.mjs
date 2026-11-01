@@ -130,3 +130,11 @@ test('a panel note takes the recording\'s environment in every Gherkin, not the 
   // A part of the recording still reads the whole: the note is commercial even without the commercial step.
   assert.match(D.toGherkin({ id: 'r', steps: [steps[0]] }, { envSteps: steps }), /environments: commercial$/m);
 });
+
+test('the Markdown shows a URL with any scheme as a label, never [[…]] (E4; review of #34 R1)', () => {
+  for (const as of ['web+demo', 'x.y', 'mailto', 'invalid']) {
+    const rec = { steps: [{ type: 'click', t: 1, env: 'standard', source: 'user', url: [{ redacted: 'url', as }], target: { role: 'button', name: ['OK'] } }] };
+    const md = D.toMarkdown(D.buildReproduction(rec));
+    assert.ok(!/\[\[/.test(md), `${as}: ${md}`);
+  }
+});

@@ -223,9 +223,12 @@ test('the Gherkin is not scanned as a text, the Markdown is scanned as written (
   // A [[email]] in the Markdown is text like any other.
   assert.deepEqual(S.finalScan({ reproduction: { markdown: '[[email]]', gherkin: '[[email]]' } }, { keywords: ['mail'] }),
     [{ path: 'reproduction.markdown', kinds: ['keyword'] }]);
-  // The aliases are ours: "site" and "invalid" are not looked for in them.
-  assert.deepEqual(S.finalScan({ m: 'https://site-2.invalid/a と site-N.invalid は別名' }, { keywords: ['site', 'invalid'] }), []);
-  assert.equal(S.finalScan({ m: 'website.invalid' }, { keywords: ['site'] }).length, 1);
+  // An alias as the host of a URL is ours: "site" and "invalid" are not looked for in it. Anywhere else it is text.
+  assert.deepEqual(S.finalScan({ m: 'https://site-2.invalid/a を開く' }, { keywords: ['site', 'invalid'] }), []);
+  for (const m of ['site-N.invalid は別名', 'site-2.invalid に移動', 'https://website.invalid/']) {
+    assert.equal(S.finalScan({ m }, { keywords: ['site'] }).length, 1, m);
+  }
+  assert.deepEqual(S.finalScan({ m: 'alice@site-1.invalid' }).map((f) => f.kinds), [['email']]);
 });
 
 test('an argument key named __proto__ stays an ordinary key (row W5; review R4)', () => {
