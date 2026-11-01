@@ -199,9 +199,11 @@
       kinds.push(...r.kinds);
       return r.runs;
     };
-    const url = (value) => {
+    let site;
+    const url = (value, page = false) => {
       const r = scrubUrl(value, ctx);
       kinds.push(...r.kinds.filter((k) => k !== 'host'));
+      if (page) site = r.origin;
       return r.url;
     };
 
@@ -209,7 +211,7 @@
     if (raw.pageUrl) {
       // A page on a host past the alias limit is not recorded (K5; review R42).
       if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
-      step.url = url(raw.pageUrl);
+      step.url = url(raw.pageUrl, true);
     }
     if (raw.target) {
       const t = raw.target;
@@ -257,6 +259,9 @@
     for (const f of Object.keys(step)) {
       if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
     }
+    // The site of the page, as the recording names it: WebMCP returns a site its own steps by it (W8, #17).
+    // Kept in the browser only; buildPayload copies the fields of SHAPE, which has none for it.
+    if (site) step.site = site;
     if (rule.required.some((f) => step[f] === undefined || step[f] === '' || (Array.isArray(step[f]) && !step[f].length))) return null;
     for (const kind of [...kinds, ...(Array.isArray(raw.valueKinds) ? raw.valueKinds : [])]) {
       // Only the kinds the payload may count (row M1), and never past the limit.
@@ -285,7 +290,7 @@
    */
   function webmcpReply(rec, settings, site, op) {
     const D = root.OpScribeDescribe || require('./describe.js');
-    const own = rec.steps.filter((s) => s.url && renderRuns(s.url).startsWith(`${site}/`));
+    const own = rec.steps.filter((s) => s.site === site);
     if (op === 'status') {
       return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length }, rec, settings);
     }
@@ -305,6 +310,9 @@
    * storage holds, the oldest steps go first, so the newest step is always
    * kept and the recording can always be saved (review R40).
    */
+  /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
+  const nextToDrop = (rec) => Math.max(rec.steps.findIndex((s) => s.source === 'agent'), 0);
+
   function appendStep(rec, step) {
     if (!step) return false;
     // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
@@ -313,10 +321,7 @@
     rec.steps.push(step);
     // Past the step limit the steps the page reported go first, oldest first, whoever added the
     // new one; a reported step with none to give way goes itself. The person's go only after them.
-    while (rec.steps.length > LIMITS.steps) {
-      const agent = rec.steps.findIndex((s) => s.source === 'agent');
-      rec.steps.splice(Math.max(agent, 0), 1);
-    }
+    while (rec.steps.length > LIMITS.steps) rec.steps.splice(nextToDrop(rec), 1);
     fitRecord(rec);
     return rec.steps[rec.steps.length - 1] === step;
   }
@@ -328,6 +333,15 @@
    */
   function fitRecord(rec) {
     if (!rec?.steps) return;
+    // More reported steps than agentSteps (a recording saved before the limit): the oldest go (W7).
+    let reported = rec.steps.filter((s) => s.source === 'agent').length;
+    let changed = false;
+    while (reported > LIMITS.agentSteps) {
+      rec.steps.splice(nextToDrop(rec), 1);
+      reported -= 1;
+      changed = true;
+    }
+    if (changed) rec.revision = (rec.revision || 0) + 1;
     // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
     // then each removed step's own size and its comma.
     const json = JSON.stringify(rec);
@@ -337,10 +351,7 @@
     // a single step too large for the room is dropped too rather than break the save (review R41).
     // The steps the page reported go first, oldest first, then the person's (W7, #17).
     const before = rec.steps.length;
-    while (rec.steps.length && bytes > LIMITS.storeBytes) {
-      const agent = rec.steps.findIndex((s) => s.source === 'agent');
-      bytes -= bytesOf(rec.steps.splice(Math.max(agent, 0), 1)[0]) + 1;
-    }
+    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.splice(nextToDrop(rec), 1)[0]) + 1;
     // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
     if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }

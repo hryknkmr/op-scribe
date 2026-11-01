@@ -515,8 +515,9 @@
 
     const runs = joinRuns(parts);
     // A URL too long to send is redacted as a whole rather than cut (row U1).
-    if ([...renderRuns(runs)].length > LIMITS.url) return { url: whole('long'), kinds: [...kinds, 'url'] };
-    return { url: runs, kinds };
+    // origin: the site as the recording names it (real or alias), also when the URL is redacted whole for its length.
+    if ([...renderRuns(runs)].length > LIMITS.url) return { url: whole('long'), kinds: [...kinds, 'url'], origin };
+    return { url: runs, kinds, origin };
   }
 
   // -------------------------------------------------------------- final gate

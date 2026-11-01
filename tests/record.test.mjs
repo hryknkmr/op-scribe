@@ -482,3 +482,27 @@ test('a host of the alias form is aliased even when allowed by name, so two site
     assert.equal(new URL(S.renderRuns(S.scrubUrl('https://shop.invalid/z', ctx).url)).host, hostAllowlist[0] === '*.invalid' ? 'shop.invalid' : 'site-3.invalid');
   }
 });
+
+test('a step whose URL is redacted for its length is still its site\'s, and the site is not sent (rows W8, E1; review of #37)', () => {
+  const P = require('../shared/payload.js');
+  const rec = newRec();
+  const s = { ...settings, keywords: [] };
+  const long = R.cleanStep({ type: 'click', pageUrl: `${BETA}/${'a/'.repeat(1200)}`, target: { role: 'button', name: 'OK' } }, rec, s, { tabUrl: BETA });
+  assert.deepEqual(long.url, [{ redacted: 'url', as: 'long' }]);
+  rec.steps.push(long);
+  assert.equal(R.webmcpReply(rec, s, long.site, 'status').stepsOnThisSite, 1);
+  const payload = P.buildPayload({ ...rec, id: 'rec-site', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
+  assert.equal(payload.recording.steps[0].site, undefined);
+});
+
+test('the exits refuse more reported steps than a recording keeps, and saving trims them (row W7; review of #37)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const P = require('../shared/payload.js');
+  const rec = newRec();
+  const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  rec.steps = Array.from({ length: LIMITS.agentSteps + 1 }, tool);
+  const payload = P.buildPayload({ ...rec, id: 'rec-cap', webmcpTools: {} }, { generator: 'none', markdown: '' }, {});
+  assert.ok(P.checkPayload(payload).some((p) => p.problem === 'too many reported steps'));
+  R.fitRecord(rec);
+  assert.equal(rec.steps.length, LIMITS.agentSteps);
+});
