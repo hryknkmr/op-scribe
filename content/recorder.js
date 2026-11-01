@@ -247,7 +247,7 @@
     }
     if (!config) return;
     if (data.type === 'TOOLS' && Array.isArray(data.names)) {
-      send('WEBMCP_TOOLS', { pageUrl: location.href, names: data.names.slice(0, 50).map(String) });
+      send('WEBMCP_TOOLS', { names: data.names.slice(0, 50).map(String) });
     }
     if (data.type === 'TOOL_CALL') {
       // Arguments come from an agent or the page; mask them like typed input.

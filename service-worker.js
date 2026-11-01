@@ -306,7 +306,7 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         // The alias is kept: rec.webmcpTools is stored under it, and the next new site would take it otherwise.
-        const site = siteOf(rec, settings, new URL(detail.pageUrl).origin, rec.aliases);
+        const site = siteOf(rec, settings, sender.origin, rec.aliases);
         // A site past the alias limit is not recorded (K5): neither are its tools.
         if (!site) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).
