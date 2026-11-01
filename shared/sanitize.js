@@ -424,7 +424,12 @@
     // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
     // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
     if (Object.keys(aliases).length >= LIMITS.aliases) return null;
-    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
+    // A host of the alias form never gets its own name back ("site-1.invalid" as site-1; review of #37 R8).
+    const host = new URL(origin).hostname;
+    const taken = new Set(Object.values(aliases));
+    let n = Object.keys(aliases).length + 1;
+    while (taken.has(`site-${n}.invalid`) || host === `site-${n}.invalid`) n += 1;
+    aliases[origin] = `site-${n}.invalid`;
     return aliases[origin];
   }
 

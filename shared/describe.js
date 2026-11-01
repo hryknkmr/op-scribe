@@ -365,7 +365,8 @@
     if (startUrl && startUrl !== NO_URL) {
       // The step's sentence shows ‹…› like the Markdown; the attribute table keeps [[…]] (E3).
       out.push('  Background:', `    Given "${humanize(startUrl)}" を開いている`,
-        ...table([['url', startUrl], ...(start?.source ? [['source', start.source]] : [])], '      '), '');
+        // A start made up from a later step's URL is not something anyone did there: unknown (W7).
+        ...table([['url', startUrl], ['source', start?.source || 'unknown']], '      '), '');
     }
     out.push('  Scenario: 記録された操作');
 

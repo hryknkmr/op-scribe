@@ -549,3 +549,12 @@ test('the limit is a site\'s own: what one page can add does not depend on the o
 test('a note written in the side panel is the person\'s (row W7; owner decision on #37)', () => {
   assert.equal(R.cleanStep({ type: 'note', note: 'メモ' }, newRec(), settings).source, 'user');
 });
+
+test('a host of the alias form never keeps its own name as its alias (rows U4, K5; review of #37 R8)', () => {
+  for (const host of ['site-1.invalid', 'site-2.invalid']) {
+    const aliases = {};
+    if (host === 'site-2.invalid') S.scrubUrl('https://other.example.com/', { aliases });
+    const got = new URL(S.renderRuns(S.scrubUrl(`https://${host}/private`, { aliases }).url)).host;
+    assert.notEqual(got, host);
+  }
+});

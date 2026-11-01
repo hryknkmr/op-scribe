@@ -219,3 +219,9 @@ test('every Gherkin step says where it came from: user, agent or unknown (row W7
   const sources = [...D.toGherkin(rec).matchAll(/\| source +\| (\w+) +\|/g)].map((m) => m[1]);
   assert.deepEqual(sources, ['unknown', 'user', 'unknown', 'agent', 'unknown']);
 });
+
+test('a Background made from a later step says unknown (row W7; review of #37 R8)', () => {
+  const rec = { id: 'rec-b', steps: [{ type: 'click', t: 1, env: 'standard', source: 'user', url: ['https://site-1.invalid/'], target: { role: 'button', name: ['OK'] } }] };
+  const sources = [...D.toGherkin(rec).matchAll(/\| source +\| (\w+) +\|/g)].map((m) => m[1]);
+  assert.deepEqual(sources, ['unknown', 'user']);
+});
