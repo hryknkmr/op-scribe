@@ -137,7 +137,7 @@ Feature: 記録された操作の再現
       { "n": 5, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": ["search_catalog"], "ok": true,
         "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } }
     ],
-    "webmcpTools": [{ "site": "https://site-1.invalid", "tools": [["search_catalog"]] }]
+    "webmcpTools": [{ "site": ["https://site-1.invalid"], "tools": [["search_catalog"]] }]
   },
   "reproduction": {
     "generator": "template | on-device-ai | manual | none",

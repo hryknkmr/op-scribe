@@ -576,7 +576,8 @@
           return `${scheme} `;
         });
         return [...scrubText(body, { keywords: opts.keywords }).kinds,
-          ...(keywords && urlHosts.some((h) => !ALIAS.test(h.toLowerCase()) && h.match(keywords)) ? ['keyword'] : []),
+          // The alias is the host name; a port after it is not part of it (review of #34 R2).
+          ...(keywords && urlHosts.some((h) => !ALIAS.test(h.toLowerCase().replace(/:\d*$/, '')) && h.match(keywords)) ? ['keyword'] : []),
           ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
       });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });

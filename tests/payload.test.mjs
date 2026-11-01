@@ -36,7 +36,12 @@ function withRuns(r) {
     fixTyped(step.value);
     fixTyped(step.args);
   }
-  if (Array.isArray(r.webmcpTools)) r.webmcpTools.forEach((w) => { w.tools = w.tools.map((t) => (typeof t === 'string' ? runsOf(t) : t)); });
+  if (Array.isArray(r.webmcpTools)) {
+    r.webmcpTools.forEach((w) => {
+      if (typeof w.site === 'string') w.site = [w.site];
+      w.tools = w.tools.map((t) => (typeof t === 'string' ? runsOf(t) : t));
+    });
+  }
   else if (r.webmcpTools) for (const site of Object.keys(r.webmcpTools)) r.webmcpTools[site] = r.webmcpTools[site].map((t) => (typeof t === 'string' ? runsOf(t) : t));
   if (r.environment) for (const k of Object.keys(r.environment)) if (typeof r.environment[k] === 'string') r.environment[k] = runsOf(r.environment[k]);
   return r;
@@ -496,7 +501,7 @@ test('checkCanonical finds what is safe but not what the masking writes (E8; rev
   r.steps[2].url = 'HTTPS://SITE-1.INVALID:443/';
   r.webmcpTools = { 'https://site-1.invalid': ['a'], 'https://site-1.invalid/': ['b'] };
   const payload = build(r);
-  payload.recording.webmcpTools[1].site = 'https://site-1.invalid';
+  payload.recording.webmcpTools[1].site = ['https://site-1.invalid'];
   const problems = P.checkCanonical(payload).map((p) => p.problem);
   for (const problem of ['http placeholder', 'key suffix past the key count', 'not NFKC', 'not the parsed URL', 'site twice']) {
     assert.ok(problems.includes(problem), problem);
@@ -644,4 +649,13 @@ test('a keyword that is a placeholder name passes the exits when the page never 
   // ... and stops a payload where the page did write it.
   r.steps[5].note = 'mail の件';
   assert.deepEqual(S.finalScan(build(r), { keywords: ['mail'] }).map((f) => f.path), ['recording.steps[5].note[0]']);
+});
+
+test('the site of a WebMCP tool list is runs of one origin, nothing masked (W6, E1; review of #34 R2)', () => {
+  assert.deepEqual(build().recording.webmcpTools[0].site, ['https://site-1.invalid']);
+  for (const site of ['https://site-1.invalid', [{ redacted: 'url', as: 'invalid' }], ['https://site-1.invalid/', { redacted: 'id' }], ['https://site-1.invalid/a']]) {
+    const payload = build();
+    payload.recording.webmcpTools[0].site = site;
+    assert.ok(P.checkPayload(payload).some((p) => p.path === 'recording.webmcpTools[0].site'), JSON.stringify(site));
+  }
 });

@@ -64,7 +64,8 @@
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
   // A URL is runs too; where each masked part may sit is checked by checkUrl (U1-U8, K1).
   const URL_VALUE = { type: 'runs', row: 'U1', max: LIMITS.url, url: true };
-  const SITE = str('W6', LIMITS.url);
+  // The site of a WebMCP tool list: a URL like any other, runs of one origin and nothing masked (W6).
+  const SITE = { type: 'runs', row: 'W6', max: LIMITS.url, url: true };
 
   /**
    * Why v is not runs of these kinds, or '' (#28): strings and { redacted } parts, the strings
@@ -219,7 +220,7 @@
         if (step.target) out.target = pick(step.target, TARGET_FIELDS);
         return out;
       }),
-      webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site, tools }))
+      webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site: [site], tools }))
     };
     return {
       schema: SCHEMA,
@@ -458,11 +459,13 @@
     if (url.hash && !SPA_ROUTE.test(url.hash)) return bad('fragment is not an SPA route');
   }
 
-  /** Row W6: the site of a WebMCP tool list is an http(s) origin, as the URL parser writes it. */
+  /** Row W6: the site of a WebMCP tool list is an http(s) origin, as the URL parser writes it, with nothing masked. */
   function checkSite(value, path, problems) {
+    const [origin] = value;
+    if (value.length !== 1 || typeof origin !== 'string') return problems.push({ path, problem: 'not an origin' });
     let url;
-    try { url = new URL(value); } catch { return problems.push({ path, problem: 'not a URL' }); }
-    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || value !== url.origin) problems.push({ path, problem: 'not an origin' });
+    try { url = new URL(origin); } catch { return problems.push({ path, problem: 'not a URL' }); }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || origin !== url.origin) problems.push({ path, problem: 'not an origin' });
     return undefined;
   }
 
@@ -561,7 +564,7 @@
       }
     };
     (payload?.recording?.steps || []).forEach((step, i) => keys(step.args, `recording.steps[${i}].args`));
-    const sites = (payload?.recording?.webmcpTools || []).map((w) => w.site);
+    const sites = (payload?.recording?.webmcpTools || []).map((w) => renderRuns(w.site));
     sites.forEach((site, i) => { if (sites.indexOf(site) !== i) bad(`recording.webmcpTools[${i}].site`, 'site twice'); });
     return problems;
   }
