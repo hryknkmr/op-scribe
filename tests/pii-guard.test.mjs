@@ -217,6 +217,26 @@ test('a file name with a newline is scanned', () => {
   assert.equal(guard('scan-tree').status, 1);
 });
 
+test('a value split by a newline in a file name is still found', () => {
+  const value = address();
+  const name = `${value.slice(0, 4)}\n${value.slice(4)}.txt`;
+  const { git, guard, write } = repo();
+  write(name, '');
+  git('add', '-A');
+  assert.equal(guard('scan-staged').status, 1);
+  assert.equal(guard('scan-tree').status, 1);
+  git('commit', '-q', '-m', 'add');
+  assert.equal(guard('scan-commits', 'HEAD~1..HEAD').status, 1);
+});
+
+test('a file name with bytes that are not UTF-8 does not stop the scan', () => {
+  const { dir, guard } = repo();
+  // In the index only: some file systems refuse such a name.
+  execFileSync('bash', ['-c', `git update-index --add --cacheinfo 100644,$(git rev-parse HEAD:r.txt),$'x\\xff.txt'`], { cwd: dir });
+  assert.equal(guard('scan-staged').status, 0);
+  assert.equal(guard('scan-tree').status, 0);
+});
+
 const hook = (dir, name, args = [], input = '') =>
   spawnSync('bash', [join(ROOT, '.githooks', name), ...args], { cwd: dir, input, encoding: 'utf8' });
 
@@ -276,19 +296,22 @@ test('only users.noreply is allowed on the GitHub noreply domain', () => {
   assert.equal(guard('scan-staged').status, 1);
 });
 
-test('grep failing during a scan is an error, not a clean result', () => {
-  const { dir, git, guard, write } = repo();
-  write('a.txt', 'ok\n');
-  git('add', '-A');
-  git('commit', '-q', '-m', 'add');
-  const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
-  const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
-  writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "-anoE" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
-  const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
-  for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
-    if (args[0] === 'scan-staged') { write('a.txt', 'changed\n'); git('add', '-A'); }
-    const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
-    assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
-  }
-  assert.equal(guard('scan-staged').status, 0);
-});
+for (const flags of ['-anoE', '-ainEi', '-viE']) {
+  test(`grep ${flags} failing during a scan is an error, not a clean result`, () => {
+    const { git, write, dir, guard } = repo();
+    write('a.txt', `${address()}\n`);
+    git('add', '-A');
+    git('commit', '-q', '-m', 'add');
+    const bin = mkdtempSync(join(tmpdir(), 'opscribe-shim-'));
+    const real = execFileSync('bash', ['-c', 'command -v grep'], { encoding: 'utf8' }).trim();
+    writeFileSync(join(bin, 'grep'), `#!/bin/bash\n[[ "$1" == "${flags}" ]] && exit 2\nexec ${real} "$@"\n`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    write('a.txt', `${address()} changed\n`);
+    git('add', '-A');
+    for (const args of [['scan-range', 'HEAD~1', 'HEAD'], ['scan-commits', 'HEAD~1..HEAD'], ['scan-staged']]) {
+      const r = spawnSync('bash', ['scripts/pii-guard.sh', ...args], { cwd: dir, encoding: 'utf8', env });
+      assert.equal(r.status, 2, `${args[0]}: ${r.stdout}${r.stderr}`);
+    }
+    assert.equal(guard('scan-staged').status, 1);
+  });
+}
