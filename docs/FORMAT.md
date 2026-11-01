@@ -81,6 +81,7 @@ Feature: 記録された操作の再現
 | `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/[[id]]` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
 | `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
+| `ordinal` / `matches` | 同じ `role` + `name` の候補のうち何番目か / 全候補数。周辺本文を保存せず、同名要素を区別する | `2` / `3` |
 | `tag` | HTML タグ名 | `button` |
 | `selector` | 再特定用の CSS セレクタ。`data-testid` 等 → 安定した `id` → 4 階層までのパスの順で選ぶ。伏せる必要があった場合は出さない | `[data-testid="save"]` |
 | `href` | リンク先（伏せ済み） | |
@@ -92,7 +93,7 @@ Feature: 記録された操作の再現
 
 再現する側（人・AI）へのルール:
 
-- 要素は `role` + `name` で探し、見つからなければ `selector` を使う（Playwright の `getByRole` に対応）。
+- 要素は `role` + `name` で探し、現在の候補数が `matches` と同じなら `ordinal`（1 始まり）で絞る。候補数が変わった、または見つからない場合は `selector` を使い、なお曖昧なら推測して操作しない（Playwright の `getByRole(...).nth(ordinal - 1)` に対応）。
 - `[[…]]` / `‹…›` は伏せた値。元の値を推測せず、テスト用の値を用意して入れる。`[[text:N]]` は N 文字程度の任意文字列。
 - `site-N.invalid` は伏せたホストの別名。実ホストは記録した人に確認する。
 
