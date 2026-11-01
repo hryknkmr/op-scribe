@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, mkdirSync, copyFileSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -328,13 +328,19 @@ test('a git hook\'s GIT_DIR never reaches the scratch repositories (review of #2
   execFileSync('git', ['init', '-q', '-b', 'main', victim]);
   const gitDir = join(victim, '.git');
   const before = readFileSync(join(gitDir, 'config'), 'utf8');
-  const env = { ...process.env, GIT_DIR: gitDir, GIT_INDEX_FILE: join(gitDir, 'index') };
+  // The child's scratch repositories go here, so the test can see that they were made.
+  const scratch = mkdtempSync(join(tmpdir(), 'opscribe-scratch-'));
+  const env = { ...process.env, GIT_DIR: gitDir, GIT_INDEX_FILE: join(gitDir, 'index'), TMPDIR: scratch };
   // A test run of its own, not a subtest of this one.
   delete env.NODE_TEST_CONTEXT;
   const r = spawnSync(process.execPath, ['--test', '--test-name-pattern=^a rename that adds personal data', fileURLToPath(import.meta.url)],
     { env, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /^ℹ pass 1$/m, 'the scratch test ran');
+  // The scratch test ran, in a repository of its own: it made one and committed there.
+  const made = readdirSync(scratch).filter((name) => name.startsWith('opscribe-guard-'));
+  assert.equal(made.length, 1, readdirSync(scratch).join(', '));
+  assert.equal(spawnSync('git', ['-C', join(scratch, made[0]), 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 0);
+  // ... and the repository the hook pointed at is as it was.
   assert.equal(readFileSync(join(gitDir, 'config'), 'utf8'), before);
   assert.equal(spawnSync('git', ['-C', victim, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 1, 'no commit was made there');
 });
