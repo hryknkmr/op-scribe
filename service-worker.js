@@ -242,9 +242,12 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
-    appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, fromOf(sender)));
+    // The note belongs to the page it came from, so only that site gets it back (W8, #17).
+    const step = cleanStep({ type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, rec, settings, fromOf(sender));
+    // Past the limit of what the page may report, nothing is added (W7).
+    if (!appendStep(rec, step)) return { reply: { ok: false, error: 'NOT_RECORDED' } };
     // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
-    const added = humanize(renderRuns(rec.steps[rec.steps.length - 1].note));
+    const added = humanize(renderRuns(step.note));
     return { save: rec, reply: guardReply({ ok: true, added }, rec, settings) };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };

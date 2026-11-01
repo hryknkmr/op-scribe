@@ -176,7 +176,7 @@ WebMCP が有効な Chrome では、記録中のページに次のツールが�
 | ツール | 内容 |
 | --- | --- |
 | `opscribe_recording_status` | 記録中かどうか、このサイトで何ステップ記録したか |
-| `opscribe_get_reproduction` | このサイトでの手順（Markdown と Gherkin）。他サイトのステップは返さない（サイドパネルで書いたメモは返る。[docs/PRIVACY.md](docs/PRIVACY.md) の既知の限界） |
+| `opscribe_get_reproduction` | このサイトでの手順（Markdown と Gherkin）と、このサイトで足したメモ。他サイトのステップとサイドパネルで書いたメモは返さない |
 | `opscribe_add_expectation` | 直前のステップに期待結果を追記する |
 
 また、エージェントがページ側の WebMCP ツールを呼び出すと、その呼び出しも `agent` の印付きで記録されます。

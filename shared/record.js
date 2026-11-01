@@ -278,15 +278,16 @@
   }
 
   /**
-   * What WebMCP tells a page on site about the recording (row W8): its own
-   * steps and the notes without a URL. A panel note's environment comes from
-   * the whole recording, not this site's part of it. Null for another op.
+   * What WebMCP tells a page on site about the recording (row W8): the steps on
+   * that site, its own notes included (an agent's note carries the URL of the
+   * page it came from), and nothing about the rest - no panel note, no count of
+   * the whole recording (#17). Null for another op.
    */
   function webmcpReply(rec, settings, site, op) {
     const D = root.OpScribeDescribe || require('./describe.js');
-    const own = rec.steps.filter((s) => (s.url && renderRuns(s.url).startsWith(`${site}/`)) || (!s.url && s.type === 'note'));
+    const own = rec.steps.filter((s) => s.url && renderRuns(s.url).startsWith(`${site}/`));
     if (op === 'status') {
-      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length }, rec, settings);
+      return guardReply({ ok: true, recording: true, site, stepsOnThisSite: own.length }, rec, settings);
     }
     if (op === 'reproduction') {
       const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
@@ -305,11 +306,14 @@
    * kept and the recording can always be saved (review R40).
    */
   function appendStep(rec, step) {
-    if (!step) return;
+    if (!step) return false;
+    // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
+    if (step.source === 'agent' && rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
     fitRecord(rec);
+    return rec.steps[rec.steps.length - 1] === step;
   }
 
   /**

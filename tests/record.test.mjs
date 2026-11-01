@@ -329,7 +329,8 @@ test('a CSS-escaped selector is checked as written and unescaped, and dropped on
 test('every WebMCP answer goes through the final scan, the site and the counts too (rows W8, E6; review R37)', () => {
   const rec = newRec();
   rec.aliases['https://intranet.corp.invalid'] = 'site-1.invalid';
-  rec.steps.push(R.cleanStep({ type: 'note', note: 'Acme の件' }, rec, { ...settings, keywords: [] }));
+  rec.steps.push(R.cleanStep({ type: 'note', note: 'Acme の件', source: 'agent', pageUrl: 'https://intranet.corp.invalid/a' }, rec, { ...settings, keywords: [] },
+    { tabUrl: 'https://intranet.corp.invalid/a' }));
   const later = { ...settings, keywords: ['Acme'] };
   // A keyword added after the note was recorded stops the reproduction.
   assert.deepEqual(R.webmcpReply(rec, later, 'https://site-1.invalid', 'reproduction'), { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' });
@@ -353,9 +354,11 @@ test('the largest recording the limits allow still fits the session storage: the
   const url = `https://site-1.invalid/${'a'.repeat(LIMITS.url - 30)}`;
   const args = Object.fromEntries(Array.from({ length: LIMITS.argLeaves }, (_, i) => [`k${i}`, kept('arg', `${'\u0001'.repeat(LIMITS.kept.arg)}…`)]));
   const step = (i) => ({ type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: `${'t'.repeat(LIMITS.tool)}…`, ok: true, args, n: i });
-  // Filled to the step limit at once, then the last steps through appendStep.
+  // Filled to the step limit at once - more of the largest kind than appendStep lets the page add (W7),
+  // to go past the storage share - then the person's last steps through appendStep.
   rec.steps = Array.from({ length: LIMITS.steps - 3 }, (_, i) => step(i));
-  for (let i = LIMITS.steps - 3; i < LIMITS.steps; i += 1) R.appendStep(rec, step(i));
+  const note = (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', url, note: [`${'\u0001'.repeat(LIMITS.note)}…`], n: i });
+  for (let i = LIMITS.steps - 3; i < LIMITS.steps; i += 1) assert.ok(R.appendStep(rec, note(i)));
   const bytes = new TextEncoder().encode(JSON.stringify(rec)).length;
   assert.ok(bytes <= LIMITS.storeBytes, String(bytes));
   assert.ok(bytes < 10 * 1024 * 1024);
@@ -418,4 +421,33 @@ test('a save that drops steps to fit makes the recording a new revision (E4; rev
   const small = { ...newRec(), revision: 3 };
   R.fitRecord(small);
   assert.equal(small.revision, 3, 'nothing dropped, nothing stale');
+});
+
+test('a page reports at most agentSteps steps, and they never push the person\'s steps out (row W7, #17)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  const person = R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA });
+  assert.ok(R.appendStep(rec, person));
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, tool()));
+  assert.equal(R.appendStep(rec, tool()), false, 'one more is not recorded');
+  assert.equal(rec.steps.filter((s) => s.source === 'agent').length, LIMITS.agentSteps);
+  assert.equal(rec.steps[0], person);
+  // The person's steps are still recorded past it.
+  assert.ok(R.appendStep(rec, R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA })));
+});
+
+test('WebMCP returns a site only its own steps and notes: no panel note, no count of the rest (row W8, #17)', () => {
+  const rec = newRec();
+  const s = { ...settings, keywords: [] };
+  const own = R.cleanStep({ type: 'note', note: 'このサイトのメモ', source: 'agent', pageUrl: 'https://beta.example.com/a' }, rec, s, { tabUrl: 'https://beta.example.com/a' });
+  const other = R.cleanStep({ type: 'note', note: '別サイトのメモ', source: 'agent', pageUrl: 'https://other.example.com/b' }, rec, s, { tabUrl: 'https://other.example.com/b' });
+  const panel = R.cleanStep({ type: 'note', note: 'パネルのメモ' }, rec, s);
+  rec.steps.push(own, other, panel);
+  const site = new URL(S.renderRuns(own.url)).origin;
+  const repro = R.webmcpReply(rec, s, site, 'reproduction');
+  assert.equal(repro.steps, 1);
+  assert.ok(repro.markdown.includes('このサイトのメモ'));
+  assert.ok(!/別サイトのメモ|パネルのメモ/.test(repro.markdown + repro.gherkin));
+  assert.deepEqual(R.webmcpReply(rec, s, site, 'status'), { ok: true, recording: true, site, stepsOnThisSite: 1 });
 });

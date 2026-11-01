@@ -33,6 +33,9 @@
     scheme: 16,
     environment: 60,
     steps: 500,
+    // Steps the page reported (source 'agent': WebMCP tool calls and expectations), which a page
+    // script can make up: at most this many, so they never push the person's steps out (W7, #17).
+    agentSteps: 100,
     // chrome.storage.session holds 10 MiB for everything the extension keeps there, shared out
     // once here (review R43): the recording (oldest steps go first past it) and the Markdown
     // draft (not kept past it), with 1 MiB to spare.
