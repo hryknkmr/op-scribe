@@ -341,3 +341,19 @@ test('the worker classifies by the label text too (rows I3, I4; review R38)', ()
     newRec(), settings, { tabUrl: BETA });
   assert.equal(step, null);
 });
+
+test('the largest recording the limits allow still fits the session storage: the oldest steps go first (review R40)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  const url = `https://site-1.invalid/${'a'.repeat(LIMITS.url - 30)}`;
+  const args = Object.fromEntries(Array.from({ length: LIMITS.argLeaves }, (_, i) => [`k${i}`, typed.kept('arg', `${'\u0001'.repeat(LIMITS.kept.arg)}…`)]));
+  const step = (i) => ({ type: 'tool', t: i, env: 'standard', source: 'agent', url, tool: `${'t'.repeat(LIMITS.tool)}…`, ok: true, args, n: i });
+  // Filled to the step limit at once, then the last steps through appendStep.
+  rec.steps = Array.from({ length: LIMITS.steps - 3 }, (_, i) => step(i));
+  for (let i = LIMITS.steps - 3; i < LIMITS.steps; i += 1) R.appendStep(rec, step(i));
+  const bytes = new TextEncoder().encode(JSON.stringify(rec)).length;
+  assert.ok(bytes <= LIMITS.storeBytes, String(bytes));
+  assert.ok(bytes < 10 * 1024 * 1024);
+  assert.equal(rec.steps.at(-1).n, LIMITS.steps - 1, 'the newest step is kept');
+  assert.ok(rec.steps.length < LIMITS.steps, 'older steps made room');
+});

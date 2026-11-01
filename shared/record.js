@@ -274,7 +274,27 @@
     return null;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep, guardReply, webmcpReply };
+  const bytesOf = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
+
+  /**
+   * Adds a cleaned step. Past the step limit, or past the size the session
+   * storage holds, the oldest steps go first, so the newest step is always
+   * kept and the recording can always be saved (review R40).
+   */
+  function appendStep(rec, step) {
+    if (!step) return;
+    rec.revision = (rec.revision || 0) + 1;
+    rec.steps.push(step);
+    if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
+    // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
+    // then each removed step's own size and its comma.
+    const json = JSON.stringify(rec);
+    if (json.length * 3 <= LIMITS.storeBytes) return;
+    let bytes = new TextEncoder().encode(json).length;
+    while (rec.steps.length > 1 && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+  }
+
+  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

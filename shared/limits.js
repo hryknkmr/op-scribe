@@ -33,6 +33,8 @@
     scheme: 16,
     environment: 60,
     steps: 500,
+    // The recording as stored (chrome.storage.session holds 10 MB): oldest steps go first past this (review R40).
+    storeBytes: 8 * 1024 * 1024,
     redactionCount: 1e9
   });
 

@@ -15,13 +15,12 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
-const { policyOf, envOf, cleanStep, guardReply, webmcpReply } = self.OpScribeRecord;
+const { policyOf, envOf, cleanStep, appendStep, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
-const MAX_STEPS = LIMITS.steps;
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   try {
@@ -63,6 +62,7 @@ function mutate(fn) {
   const run = queue.then(async () => {
     const rec = await getRecording();
     const result = await fn(rec);
+    // A save that fails is an error to the caller, never a step that silently went missing (review R40).
     if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
@@ -134,12 +134,6 @@ function newId() {
  * Every change to the steps bumps the revision, so the panel can tell that a
  * reproduction it generated earlier no longer matches the recording (#16).
  */
-function appendStep(rec, step) {
-  if (!step) return;
-  rec.revision = (rec.revision || 0) + 1;
-  rec.steps.push(step);
-  if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
-}
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
 
