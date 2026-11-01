@@ -401,3 +401,16 @@ test('the session storage is shared out once, and any save is fitted, not only a
   assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
   assert.ok(rec.steps.length > 0);
 });
+
+test('a save that drops steps to fit makes the recording a new revision (E4; review R44)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const rec = newRec();
+  rec.revision = 7;
+  rec.steps = Array.from({ length: 400 }, (_, i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: '\u0001'.repeat(4000) }));
+  R.fitRecord(rec);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+  assert.equal(rec.revision, 8);
+  const small = { ...newRec(), revision: 3 };
+  R.fitRecord(small);
+  assert.equal(small.revision, 3, 'nothing dropped, nothing stale');
+});

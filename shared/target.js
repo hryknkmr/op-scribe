@@ -107,7 +107,8 @@
     if (el.tagName === 'INPUT' && el.type === 'image') return oneLine(el.alt) || declared;
     if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return oneLine(el.value || el.type);
     if (el.matches('input, textarea, select') || isTextField(el) || implicitRole(el) === 'combobox') {
-      return oneLine(el.getAttribute('placeholder') || declared || el.getAttribute('name'));
+      // Never the name attribute: an identifier of the page, not something shown to a person (T2; review R44).
+      return oneLine(el.getAttribute('placeholder') || declared);
     }
     return textOf(el) || oneLine(el.querySelector('img[alt]')?.alt) || declared;
   }

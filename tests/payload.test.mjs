@@ -556,3 +556,9 @@ test('checkCanonical finds a search box or a choice that is not kept (E8, I5, I6
   r.steps[2].value = typed.redacted('search', 'v');
   assert.ok(P.checkCanonical(build(r)).some((p) => p.problem === 'search or choice not kept'));
 });
+
+test('the count of aliased hosts is within the alias limit (M1, E2; review R44)', () => {
+  const p = build();
+  p.privacy.hostsAliased = 1e100;
+  assert.ok(P.checkPayload(regen(p)).some((x) => x.path === 'privacy.hostsAliased'));
+});

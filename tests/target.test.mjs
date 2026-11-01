@@ -81,7 +81,7 @@ test('operated elements are named by the text they show', () => {
 test('fields are never named by what was typed into them', () => {
   assert.equal(T.accessibleName(el('textarea', { placeholder: '本文' }, SECRET_TEXT)), '本文');
   assert.equal(T.accessibleName(el('div', { contenteditable: 'true' }, SECRET_TEXT)), '');
-  assert.equal(T.accessibleName(el('input', { type: 'text', name: 'q' })), 'q');
+  assert.equal(T.accessibleName(el('input', { type: 'text', name: 'customer-reference' })), '', 'the name attribute is not shown (review R44)');
 });
 
 test('names are one line, whatever the page put in aria-label (#18)', () => {

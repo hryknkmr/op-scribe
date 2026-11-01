@@ -318,7 +318,10 @@
     let bytes = new TextEncoder().encode(json).length;
     // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
     // a single step too large for the room is dropped too rather than break the save (review R41).
+    const before = rec.steps.length;
     while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
+    // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
+    if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }
 
   const api = { policyOf, envOf, oneLine, cleanStep, appendStep, fitRecord, guardReply, webmcpReply };

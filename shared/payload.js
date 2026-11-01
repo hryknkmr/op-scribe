@@ -102,7 +102,7 @@
         fields: {
           policy: { type: 'const', row: 'M1', value: POLICY },
           coverage: { type: 'enum', row: 'M1', values: ['commercial', 'standard', 'mixed', 'none'] },
-          hostsAliased: { type: 'int', row: 'M1', min: 0 },
+          hostsAliased: { type: 'int', row: 'M1', min: 0, max: LIMITS.aliases },
           redactions: { type: 'map', row: 'M1', keys: REDACTION_KINDS, of: { type: 'int', row: 'M1', min: 0, max: LIMITS.redactionCount } }
         }
       },
