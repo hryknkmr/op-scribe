@@ -452,24 +452,30 @@ test('WebMCP returns a site only its own steps and notes: no panel note, no coun
   assert.deepEqual(R.webmcpReply(rec, s, site, 'status'), { ok: true, recording: true, site, stepsOnThisSite: 1 });
 });
 
-test('at the step limit a reported step takes the place of a reported one, never the person\'s (row W7; review of #37 R1)', () => {
+test('past the step limit the reported steps go first, whoever adds the new step (row W7; reviews of #37 R1, R2)', () => {
   const { LIMITS } = require('../shared/limits.js');
   const rec = newRec();
   const click = () => R.cleanStep({ type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' } }, rec, settings, { tabUrl: BETA });
   const tool = () => R.cleanStep({ type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, rec, settings, { tabUrl: BETA });
+  const people = () => rec.steps.filter((s) => s.source === 'user').length;
   for (let i = 0; i < LIMITS.steps; i += 1) R.appendStep(rec, click());
   assert.equal(R.appendStep(rec, tool()), false, 'no reported step to give way: not recorded');
-  assert.equal(rec.steps.filter((s) => s.source === 'user').length, LIMITS.steps);
-  rec.steps.splice(0, 2);
-  assert.ok(R.appendStep(rec, tool()) && R.appendStep(rec, tool()));
-  assert.ok(R.appendStep(rec, tool()), 'full again: the oldest reported step gives way');
-  assert.equal(rec.steps.filter((s) => s.source === 'user').length, LIMITS.steps - 2);
+  assert.equal(people(), LIMITS.steps);
+  // Mixed and full: the person's new step pushes out a reported one, not the oldest of the person's.
+  rec.steps.splice(0, LIMITS.agentSteps);
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.appendStep(rec, tool()));
+  const first = rec.steps[0];
+  assert.ok(R.appendStep(rec, click()));
+  assert.equal(rec.steps[0], first);
+  assert.equal(people(), LIMITS.steps - LIMITS.agentSteps + 1);
+  assert.equal(rec.steps.length, LIMITS.steps);
 });
 
-test('a host of the alias form is aliased even when allowed by name, so two sites never share one name (row W8; review of #37 R1)', () => {
+test('an alias never takes the name of a host kept by name (rows U4, W8; reviews of #37 R1, R2)', () => {
   const aliases = {};
   const ctx = { aliases, hostAllowlist: ['site-1.invalid'] };
   const a = S.renderRuns(S.scrubUrl('https://other.example.com/x', ctx).url);
   const b = S.renderRuns(S.scrubUrl('https://site-1.invalid/y', ctx).url);
-  assert.notEqual(new URL(a).origin, new URL(b).origin);
+  assert.equal(new URL(b).host, 'site-1.invalid', 'kept by name (U4)');
+  assert.equal(new URL(a).host, 'site-2.invalid');
 });

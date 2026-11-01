@@ -307,19 +307,16 @@
    */
   function appendStep(rec, step) {
     if (!step) return false;
-    // What the page reports is kept up to agentSteps; past it the new one is not recorded. At the step
-    // limit it takes the place of the oldest step the page reported, never one of the person's (W7, #17).
-    if (step.source === 'agent') {
-      if (rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
-      if (rec.steps.length >= LIMITS.steps) {
-        const oldest = rec.steps.findIndex((s) => s.source === 'agent');
-        if (oldest < 0) return false;
-        rec.steps.splice(oldest, 1);
-      }
-    }
+    // What the page reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
+    if (step.source === 'agent' && rec.steps.filter((s) => s.source === 'agent').length >= LIMITS.agentSteps) return false;
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
-    if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
+    // Past the step limit the steps the page reported go first, oldest first, whoever added the
+    // new one; a reported step with none to give way goes itself. The person's go only after them.
+    while (rec.steps.length > LIMITS.steps) {
+      const agent = rec.steps.findIndex((s) => s.source === 'agent');
+      rec.steps.splice(Math.max(agent, 0), 1);
+    }
     fitRecord(rec);
     return rec.steps[rec.steps.length - 1] === step;
   }
