@@ -15,7 +15,7 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
-const { policyOf, envOf, cleanStep, appendStep, guardReply, webmcpReply } = self.OpScribeRecord;
+const { policyOf, envOf, cleanStep, appendStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -62,8 +62,12 @@ function mutate(fn) {
   const run = queue.then(async () => {
     const rec = await getRecording();
     const result = await fn(rec);
-    // A save that fails is an error to the caller, never a step that silently went missing (review R40).
-    if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
+    // Every save fits the recording's share first (fitRecord); one that still fails is an error
+    // to the caller, never a step that silently went missing (reviews R40, R43).
+    if (result?.save) {
+      fitRecord(result.save);
+      await chrome.storage.session.set({ [REC_KEY]: result.save });
+    }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
     return result?.reply;
@@ -195,7 +199,11 @@ const addPattern = (url) => mutate(async (rec) => {
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
   }
-  if (!rec.grantedPatterns.includes(pattern)) rec.grantedPatterns.push(pattern);
+  if (!rec.grantedPatterns.includes(pattern)) {
+    // As many sites as the alias table holds, no more (E2; review R43).
+    if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
+    rec.grantedPatterns.push(pattern);
+  }
   await syncContentScripts(rec.grantedPatterns);
   await injectNow(rec.tabId);
   return { save: rec, reply: { ok: true } };

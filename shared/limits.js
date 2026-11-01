@@ -33,8 +33,11 @@
     scheme: 16,
     environment: 60,
     steps: 500,
-    // The recording as stored (chrome.storage.session holds 10 MB): oldest steps go first past this (review R40).
-    storeBytes: 8 * 1024 * 1024,
+    // chrome.storage.session holds 10 MiB for everything the extension keeps there, shared out
+    // once here (review R43): the recording (oldest steps go first past it) and the Markdown
+    // draft (not kept past it), with 1 MiB to spare.
+    storeBytes: 6 * 1024 * 1024,
+    draftBytes: 3 * 1024 * 1024,
     // What a recording holds besides its steps, bounded so the steps always have room (review R41).
     hosts: 100,
     host: 253,

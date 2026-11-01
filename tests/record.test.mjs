@@ -390,3 +390,14 @@ test('the worker classifies by aria-labelledby text passed as label text (row I3
     newRec(), settings, { tabUrl: BETA });
   assert.equal(step, null);
 });
+
+test('the session storage is shared out once, and any save is fitted, not only a new step (E2; review R43)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  assert.ok(LIMITS.storeBytes + LIMITS.draftBytes < 10 * 1024 * 1024);
+  const rec = newRec();
+  rec.grantedPatterns = Array.from({ length: LIMITS.aliases }, (_, i) => `https://h${i}.${'x'.repeat(240)}.example.com/*`);
+  rec.steps = Array.from({ length: 400 }, (_, i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: '\u0001'.repeat(2000) }));
+  R.fitRecord(rec);
+  assert.ok(new TextEncoder().encode(JSON.stringify(rec)).length <= LIMITS.storeBytes);
+  assert.ok(rec.steps.length > 0);
+});

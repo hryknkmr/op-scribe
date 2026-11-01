@@ -449,3 +449,7 @@ test('past the alias limit a new host is redacted whole and marked untracked; th
   assert.equal(Object.keys(aliases).length, LIMITS.aliases);
   assert.equal(new URL(S.scrubUrl('https://h3.example.com/x', { aliases }).url).host, 'site-4.invalid', 'known hosts keep theirs');
 });
+
+test('a card number with dots is found (K3; review R43)', () => {
+  assert.equal(S.scrubText(['4111', '1111', '1111', '1111'].join('.')).text, '[[card]]');
+});

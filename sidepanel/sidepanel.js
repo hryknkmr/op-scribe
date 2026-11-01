@@ -291,9 +291,16 @@ ui.noteForm.addEventListener('submit', async (event) => {
 
 // ------------------------------------------------------------ reproduction
 
-const saveDraft = () => chrome.storage.session.set({
-  [DRAFT_KEY]: { markdown: ui.repro.value, generator, basis }
-});
+/** The draft is kept only within its share of the session storage (draftBytes; review R43). */
+async function saveDraft() {
+  const draft = { markdown: ui.repro.value, generator, basis };
+  if (new TextEncoder().encode(JSON.stringify(draft)).length > LIMITS.draftBytes) {
+    await chrome.storage.session.remove(DRAFT_KEY);
+    ui.genStatus.textContent = '再現手順が大きすぎるため、パネルを閉じると残りません';
+    return;
+  }
+  await chrome.storage.session.set({ [DRAFT_KEY]: draft });
+}
 
 /** Markdown may come from the model; Gherkin is always rebuilt from the recording (render). */
 async function setRepro(rec, markdown, by) {

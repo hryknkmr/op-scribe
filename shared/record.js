@@ -301,6 +301,16 @@
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     if (rec.steps.length > LIMITS.steps) rec.steps.splice(0, rec.steps.length - LIMITS.steps);
+    fitRecord(rec);
+  }
+
+  /**
+   * The one way a recording is made to fit its share of the session storage
+   * (storeBytes): appendStep runs it, and the worker runs it on every save,
+   * whatever changed (review R43).
+   */
+  function fitRecord(rec) {
+    if (!rec?.steps) return;
     // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
     // then each removed step's own size and its comma.
     const json = JSON.stringify(rec);
@@ -311,7 +321,7 @@
     while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.shift()) + 1;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, guardReply, webmcpReply };
+  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, fitRecord, guardReply, webmcpReply };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
