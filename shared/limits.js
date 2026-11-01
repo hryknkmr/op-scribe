@@ -23,6 +23,8 @@
     // Interactive elements inspected to position one semantic role/name target.
     // Above this, omit the position rather than make a person's operation wait (#42).
     targetMatches: 2000,
+    // Milliseconds the same search may take inside the event, after which the position is omitted (#42).
+    targetMs: 8,
     argKey: 40,
     argItems: 10,
     argKeys: 20,

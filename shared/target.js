@@ -123,23 +123,25 @@
 
   /**
    * The 1-based position of this element among targets with the same semantic
-   * role and accessible name. It stores no surrounding text and stops the
-   * bounded comparison on pages with too many interactive candidates (#42).
-   * Names are compared as the step records them (no aria-labelledby lookup),
-   * so the position counts the same role + name a replay searches for.
+   * role and accessible name - the name the step records, aria-labelledby
+   * included. It stores no surrounding text, and it gives up (no position)
+   * past LIMITS.targetMatches operated candidates or LIMITS.targetMs of work,
+   * rather than make a person's operation wait (#42).
    */
-  function semanticPosition(el, doc) {
+  function semanticPosition(el, doc, now = () => performance.now()) {
     if (!el || !doc?.querySelectorAll) return undefined;
+    const start = now();
     let candidates;
     try { candidates = doc.querySelectorAll(`${NATIVE}, [role]`); } catch { return undefined; }
-    if (candidates.length > LIMITS.targetMatches) return undefined;
     const role = implicitRole(el);
-    const name = accessibleName(el);
+    const name = accessibleName(el, doc);
+    let operatedCount = 0;
     let ordinal = 0;
     let matches = 0;
     for (const candidate of candidates) {
-      if (!isOperated(candidate) || implicitRole(candidate) !== role || !exposed(candidate)
-        || accessibleName(candidate) !== name) continue;
+      if (!isOperated(candidate)) continue;
+      if (++operatedCount > LIMITS.targetMatches || now() - start > LIMITS.targetMs) return undefined;
+      if (implicitRole(candidate) !== role || !exposed(candidate) || accessibleName(candidate, doc) !== name) continue;
       matches += 1;
       if (candidate === el) ordinal = matches;
     }

@@ -165,13 +165,28 @@ test('semanticPosition counts only targets a role-based replay can reach (#42)',
   assert.deepEqual(T.semanticPosition(shown, doc), { ordinal: 1, matches: 1 });
 });
 
-test('semanticPosition compares the name the step records, not an aria-labelledby lookup (#42)', () => {
+test('semanticPosition compares the recorded name, aria-labelledby included (#42)', () => {
   const heading = el('h2', {}, '請求先');
-  const labelled = el('button', { 'aria-labelledby': 'h' }, '編集');
-  const plain = el('button', {}, '編集');
-  const doc = { getElementById: (id) => (id === 'h' ? heading : null), querySelectorAll: () => [labelled, plain] };
-  assert.equal(T.accessibleName(labelled), '編集');
-  assert.deepEqual(T.semanticPosition(plain, doc), { ordinal: 2, matches: 2 });
+  const first = el('button', { 'aria-labelledby': 'h' }, '編集');
+  const second = el('button', { 'aria-labelledby': 'h' }, '変更');
+  const plain = el('button', {}, '請求先');
+  const doc = { getElementById: (id) => (id === 'h' ? heading : null), querySelectorAll: () => [first, second, plain] };
+  assert.equal(T.accessibleName(second, doc), '請求先');
+  assert.deepEqual(T.semanticPosition(second, doc), { ordinal: 2, matches: 3 });
+});
+
+test('semanticPosition counts the limit in operated candidates, not every [role] element (#42)', () => {
+  const target = el('button', {}, '保存');
+  const headings = Array.from({ length: 3000 }, () => el('div', { role: 'heading' }, '見出し'));
+  const doc = { getElementById: () => null, querySelectorAll: () => [...headings, target] };
+  assert.deepEqual(T.semanticPosition(target, doc), { ordinal: 1, matches: 1 });
+});
+
+test('semanticPosition gives up when the search outlasts its time budget (#42)', () => {
+  const target = el('button', {}, '保存');
+  const doc = { getElementById: () => null, querySelectorAll: () => [el('button', {}, '保存'), target] };
+  let t = 0;
+  assert.equal(T.semanticPosition(target, doc, () => (t += 5)), undefined);
 });
 
 test('semanticPosition gives up on an unbounded page instead of delaying the operation (#42)', () => {
