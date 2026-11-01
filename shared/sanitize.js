@@ -9,30 +9,23 @@
  * when a value cannot be shown to be harmless it is replaced, never kept.
  *
  * Form values and WebMCP arguments come out as typed values
- * ({ treatment, field, kind, ... }, see docs/adr/0003) and only become
- * [[kind]] placeholders when rendered (shared/describe.js). Text that is kept
- * may still contain placeholders from scrubText, and those are always ours:
- * a "[[" written by the page is broken up before masking.
+ * ({ treatment, field, kind, ... }, see docs/adr/0003), and every text that is
+ * kept comes out as runs: strings and { redacted: kind } parts (#28). Nothing
+ * here writes a placeholder into a text; only renderRuns (shared/limits.js)
+ * and shared/describe.js do, when rendering. A "[[" written by the page is
+ * broken up before masking, so a rendering's [[…]] are always ours.
  */
 (function (root) {
   'use strict';
 
-  const { LIMITS, cut, primaryRole, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
-  const mark = (kind) => `[[${kind}]]`;
-  const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
-  // Only the placeholders this extension makes. finalScan skips these and nothing
-  // else, so a hand-written "[[Acme]]" is still scanned (ADR 0003, E4, E6).
-  // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
-  // so "[[text:09012345678]]" written by hand is scanned like any other text.
+  const { LIMITS, cut, primaryRole, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, renderRuns, isVocab } = root.OpScribeLimits || require('./limits.js');
   // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
   const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
-  const OWN_PLACEHOLDER = /\[\[(?:url:([a-z][a-z0-9+.-]{0,15})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
+  const redaction = (kind) => ({ redacted: kind });
 
-  /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
-  const placeholderKinds = (text) => [...String(text).matchAll(OWN_PLACEHOLDER)].map(([m]) => {
-    const word = m.slice(2, -2).split(':')[0];
-    return word === 'masked' ? 'keyword' : word;
-  });
+  /** The redaction kind of each masked part of runs, as privacy.redactions counts it (row M1). */
+  const runKinds = (runs) => (Array.isArray(runs) ? runs : []).filter((p) => p && typeof p === 'object')
+    .map((p) => (p.redacted === 'masked' ? 'keyword' : p.redacted));
 
   const DEFAULT_SETTINGS = Object.freeze({
     // Real production hosts. Steps there keep only the length of free text (ADR 0001).
@@ -71,7 +64,7 @@
     {
       kind: 'secret',
       re: /\b(token|api[_-]?key|secret|password|passwd|pwd)(\s*[:=]\s*)[^\s"'&]{4,}/gi,
-      replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
+      keep: (match, word, sep) => `${word}${sep}`
     },
     // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
     // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
@@ -93,22 +86,15 @@
 
   const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // The names inside this extension's placeholders ([[email]], [[text:3]] ...).
-  const PLACEHOLDER_WORDS = ['secret', 'card', 'email', 'phone', 'personal', 'postal', 'id', 'ip', 'number',
-    'masked', 'nested', 'value', 'text', 'file', 'url', 'invalid', 'none', 'long'];
-
-  /**
-   * Whether a keyword is used (row K2): two characters or more, and not part of
-   * a placeholder name. A keyword such as "mail" cannot tell a real [[email]]
-   * from one written by hand, so it is not used rather than used half way.
-   */
   /** A keyword as the text it is matched against: NFKC and without hidden characters (K2; review R35). */
   const keywordForm = (raw) => String(raw).normalize('NFKC').replace(INVISIBLE, '').trim();
 
-  function usableKeyword(raw) {
-    const k = keywordForm(raw);
-    return [...k].length >= 2 && !PLACEHOLDER_WORDS.some((w) => w.includes(k.toLowerCase()));
-  }
+  /**
+   * Whether a keyword is used (row K2): two characters or more. No placeholder
+   * is ever in a text the scan reads as written (#28), so a keyword such as
+   * "mail" is used like any other.
+   */
+  const usableKeyword = (raw) => [...keywordForm(raw)].length >= 2;
 
   function keywordPattern(keywords) {
     const list = (keywords || [])
@@ -119,64 +105,113 @@
     return list.length ? new RegExp(list.map(escapeRe).join('|'), 'giu') : null;
   }
 
+  /** Runs with adjacent strings joined and empty strings dropped: the one form runs are kept in. */
+  function joinRuns(parts) {
+    const out = [];
+    for (const p of parts) {
+      if (typeof p === 'string') {
+        if (!p) continue;
+        if (typeof out[out.length - 1] === 'string') out[out.length - 1] += p;
+        else out.push(p);
+      } else {
+        out.push(p);
+      }
+    }
+    return out;
+  }
+
+  /** Each string of runs through fn(string) → parts; masked parts are left as they are. */
+  const splitRuns = (runs, fn) => joinRuns(runs.flatMap((p) => (typeof p === 'string' ? fn(p) : [p])));
+
   /**
-   * Masks personal and confidential fragments in free text.
+   * Runs cut to max rendered characters (code points), with "…" appended:
+   * never inside a surrogate pair, and a masked part that does not fit whole is
+   * left out rather than rendered half.
+   */
+  function cutRuns(runs, max) {
+    if (!max || [...renderRuns(runs)].length <= max) return runs;
+    const out = [];
+    let room = max;
+    for (const p of runs) {
+      if (typeof p === 'string') {
+        const chars = [...p];
+        out.push(chars.slice(0, room).join(''));
+        room -= Math.min(room, chars.length);
+      } else {
+        const n = [...renderRuns([p])].length;
+        if (n > room) room = 0;
+        else { out.push(p); room -= n; }
+      }
+      if (!room) break;
+    }
+    return joinRuns([...out, '…']);
+  }
+
+  /**
+   * Masks personal and confidential fragments in free text, as runs.
    * Masking runs before truncation so a cut can never expose half an address.
-   * opts.escape (default true) breaks up "[[" from the source; pass false only
-   * for text that already went through here (it holds our own placeholders).
+   * A "[[" from the source is broken up, so a rendering never shows one the page wrote (K1).
    */
   function scrubText(input, opts = {}) {
     const kinds = [];
-    if (input == null) return { text: '', kinds };
+    if (input == null) return { runs: [], kinds };
     let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
     text = text.replace(INVISIBLE, '');
     // After the invisible characters are gone, so a zero-width space between two "[" cannot slip through.
-    if (opts.escape !== false) text = text.replace(/\[(?=\[)/g, '[ ');
-    // Text that went through here before keeps its own placeholders: set them
-    // aside so the keywords and rules below never rewrite inside one.
-    const kept = [];
-    if (opts.escape === false) {
-      text = text.replace(/[\uE000\uE001]/g, '').replace(OWN_PLACEHOLDER, (m) => `\uE000${String.fromCharCode(0xE100 + kept.push(m) - 1)}\uE001`);
-    }
+    text = text.replace(/\[(?=\[)/g, '[ ');
 
     // The patterns first, on the text as written: a keyword masked first would break the
     // context they need ("token=abcd", "user@example.com" with "example" listed; review R30).
-    // A keyword is never part of a placeholder name (usableKeyword), so it cannot break one.
+    let runs = [text];
     for (const rule of RULES) {
-      text = text.replace(rule.re, (...args) => {
-        const match = args[0];
-        if (rule.accept && !rule.accept(match)) return match;
-        kinds.push(rule.kind);
-        return rule.replace ? rule.replace(...args) : mark(rule.kind);
+      runs = splitRuns(runs, (part) => {
+        const out = [];
+        let last = 0;
+        for (const m of part.matchAll(rule.re)) {
+          if (rule.accept && !rule.accept(m[0])) continue;
+          kinds.push(rule.kind);
+          // A rule may keep the words before the value ("token=" in "token=abcd").
+          out.push(part.slice(last, m.index), rule.keep ? rule.keep(...m) : '', redaction(rule.kind));
+          last = m.index + m[0].length;
+        }
+        out.push(part.slice(last));
+        return out;
       });
     }
 
-    // Keywords only between the placeholders: a keyword such as "[[" must not break one
-    // the patterns just made into "[[masked]]email]]" (review R31).
+    // Keywords in what the patterns left (the strings), never across a masked part.
     const keywords = keywordPattern(opts.keywords);
     if (keywords) {
-      const mask = (part) => part.replace(keywords, () => {
+      runs = splitRuns(runs, (part) => part.split(keywords).flatMap((piece, i) => {
+        if (i === 0) return [piece];
         kinds.push('keyword');
-        return mark('masked');
-      });
-      let out = '';
-      let last = 0;
-      for (const m of text.matchAll(OWN_PLACEHOLDER)) {
-        out += mask(text.slice(last, m.index)) + m[0];
-        last = m.index + m[0].length;
-      }
-      text = out + mask(text.slice(last));
+        return [redaction('masked'), piece];
+      }));
     }
+    return { runs: cutRuns(runs, opts.maxLength), kinds };
+  }
 
-    if (kept.length) text = text.replace(/\uE000([\uE100-\uF8FF])\uE001/g, (m, c) => kept[c.charCodeAt(0) - 0xE100] ?? '');
-    // Cut by characters (code points), never inside a surrogate pair, and drop
-    // a placeholder the cut left unfinished ("[", "[[email" or "[[email]").
-    const chars = [...text];
-    if (opts.maxLength && chars.length > opts.maxLength) {
-      text = `${chars.slice(0, opts.maxLength).join('').replace(/\[(?:\[[^\]]*\]?)?$/, '')}…`;
+  /**
+   * Runs from elsewhere (the content script) checked and masked again: each
+   * string is scrubbed, each masked part kept if it is one of kinds. Null when
+   * runs is not runs at all. found collects the kinds masked here.
+   */
+  function scrubRuns(runs, opts = {}, found = []) {
+    if (!Array.isArray(runs)) return null;
+    const allowed = opts.kinds || RUN_KINDS.text;
+    const parts = [];
+    for (const p of runs) {
+      if (typeof p === 'string') parts.push(p);
+      else if (p && typeof p === 'object' && Object.keys(p).length === 1 && allowed.includes(p.redacted)) parts.push(redaction(p.redacted));
+      else return null;
     }
-    return { text, kinds };
+    const out = splitRuns(joinRuns(parts), (part) => {
+      const r = scrubText(part, { keywords: opts.keywords });
+      found.push(...r.kinds);
+      return r.runs;
+    });
+    return cutRuns(out, opts.maxLength);
   }
 
   /** One line: a line break from the page could otherwise forge a Gherkin step or a Markdown heading (#18). */
@@ -250,9 +285,9 @@
   const fieldTreatment = (cls, env) => FIELD_TREATMENT[cls.kind]?.[env === 'commercial' ? 'commercial' : 'standard'];
   const lengthOf = (text) => [...text].length;
 
-  /** Typed values (ADR 0003). Rendered as placeholders only by shared/describe.js. */
+  /** Typed values (ADR 0003). A kept text is runs; rendered as placeholders only by shared/describe.js. */
   const typed = {
-    kept: (field, text) => ({ treatment: 'kept', field, text }),
+    kept: (field, runs) => ({ treatment: 'kept', field, text: runs }),
     keptNumber: (number) => ({ treatment: 'kept', field: 'arg', number }),
     length: (field, kind, text) => ({ treatment: 'length', field, kind, length: Math.min(lengthOf(text), LIMITS.typedLength) }),
     redacted: (field, kind) => ({ treatment: 'redacted', field, kind }),
@@ -278,9 +313,9 @@
     const treatment = fieldTreatment(cls, opts.env);
     if (treatment === 'redacted') return { value: typed.redacted(field, kind), kinds };
     if (treatment === 'length') return { value: typed.length(field, kind, text), kinds };
-    if (!text) return { value: typed.kept(field, ''), kinds: [] };
+    if (!text) return { value: typed.kept(field, []), kinds: [] };
     const r = scrubText(text, { keywords: opts.keywords, maxLength: KEPT_LIMIT[field] });
-    return { value: typed.kept(field, r.text), kinds: r.kinds };
+    return { value: typed.kept(field, r.runs), kinds: r.kinds };
   }
 
   /**
@@ -319,10 +354,12 @@
       // A key is rendered like a name: one line, masked, then cut (cleanLine; E7, review R27).
       const name = cleanLine(k, { keywords, maxLength: LIMITS.argKey });
       const cls = classifyField({ name: k });
+      // A key of the masked form from the page is masked too, so every masked-N is ours (#28).
+      const masks = name.kinds.length || /^masked-\d/i.test(renderRuns(name.runs));
       const value = cls.kind === 'secret' || cls.kind === 'pii' ? (spend() ? typed.redacted('arg', cls.label) : DROP) : walk(v);
       if (value === DROP) continue;
       // defineProperty, not assignment: a key named "__proto__" stays an ordinary key.
-      Object.defineProperty(out, unique(name.kinds.length ? `masked-${masked += 1}` : name.text), {
+      Object.defineProperty(out, unique(masks ? `masked-${masked += 1}` : renderRuns(name.runs)), {
         value,
         enumerable: true,
         writable: true,
@@ -353,7 +390,7 @@
         }
         if (typeof node !== 'string') return typed.redacted('arg', 'value');
         if (commercial) return typed.length('arg', 'text', node);
-        return typed.kept('arg', scrubText(node, { keywords: opts.keywords, maxLength: KEPT_LIMIT.arg }).text);
+        return typed.kept('arg', scrubText(node, { keywords: opts.keywords, maxLength: KEPT_LIMIT.arg }).runs);
       }
     });
   }
@@ -406,17 +443,18 @@
   function scrubUrl(raw, ctx = {}) {
     const kinds = [];
     const aliases = ctx.aliases || {};
+    const whole = (as) => [{ redacted: 'url', as }];
     let url;
     try {
       url = new URL(String(raw));
     } catch {
-      return { url: mark('url:invalid'), kinds: ['url'] };
+      return { url: whole('invalid'), kinds: ['url'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       // none, long and invalid name our own markers (no URL, too long, unparsable): a
       // scheme of that name would read as one of them, so it is just invalid (U2; review R30).
       const scheme = url.protocol.replace(':', '').slice(0, LIMITS.scheme);
-      return { url: mark(`url:${['none', 'long', 'invalid'].includes(scheme) ? 'invalid' : scheme}`), kinds: ['url'] };
+      return { url: whole(URL_MARKERS.includes(scheme) ? 'invalid' : scheme), kinds: ['url'] };
     }
 
     const host = parsedHost(url.hostname);
@@ -428,27 +466,31 @@
       origin = `${url.protocol}//${host}${port}`;
     } else {
       const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
-      if (!alias) return { url: mark('url:invalid'), kinds: ['url', 'host'], untracked: true };
+      if (!alias) return { url: whole('invalid'), kinds: ['url', 'host'], untracked: true };
       origin = `${url.protocol}//${alias}`;
       kinds.push('host');
     }
 
-    const path = url.pathname.split('/').map((seg) => {
-      if (!seg) return seg;
+    // A masked path segment, query key or query value is a part of its own (#28), never a word in the URL.
+    const parts = [origin];
+    url.pathname.split('/').forEach((seg, i) => {
+      if (i > 0) parts.push('/');
+      if (!seg) return;
       let decoded = seg;
       try { decoded = decodeURIComponent(seg); } catch { /* keep raw */ }
-      if (decoded.startsWith('@')) { kinds.push('user'); return ':user'; }
-      if (ID_SEGMENT.test(decoded)) { kinds.push('id'); return ':id'; }
+      if (decoded.startsWith('@')) { kinds.push('user'); parts.push(redaction('user')); return; }
+      if (ID_SEGMENT.test(decoded)) { kinds.push('id'); parts.push(redaction('id')); return; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
-      if (r.kinds.length) { kinds.push(...r.kinds); return ':masked'; }
+      if (r.kinds.length) { kinds.push(...r.kinds); parts.push(redaction('masked')); return; }
       // The parser leaves [ and ] as they are; encoded, a page's "[[secret]]" never reads as ours (K1).
-      return seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
-    }).join('/');
+      parts.push(seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D'));
+    });
 
-    const params = [];
+    let first = true;
     for (const [k, v] of url.searchParams) {
-      const key = scrubText(k, { keywords: ctx.keywords }).kinds.length ? 'masked' : k;
-      let value = '';
+      parts.push(first ? '?' : '&');
+      first = false;
+      parts.push(scrubText(k, { keywords: ctx.keywords }).kinds.length ? redaction('masked') : encodeURIComponent(k), '=');
       if (v) {
         const harmless = !commercial
           && !SENSITIVE_PARAM.test(k)
@@ -456,24 +498,22 @@
           && !['secret', 'pii'].includes(classifyField({ name: k }).kind)
           && /^[\w.-]{1,24}$/.test(v)
           && !scrubText(v, { keywords: ctx.keywords }).kinds.length;
-        value = harmless ? encodeURIComponent(v) : mark('v');
+        parts.push(harmless ? encodeURIComponent(v) : redaction('v'));
         if (!harmless) kinds.push('query');
       }
-      params.push(`${encodeURIComponent(key)}=${value}`);
     }
 
     // SPA routes such as #/settings are kept outside production; anything else is dropped.
-    let hash = '';
     if (url.hash && !commercial && /^#\/[\w/-]{0,60}$/.test(url.hash)) {
-      hash = url.hash;
+      parts.push(url.hash);
     } else if (url.hash) {
       kinds.push('hash');
     }
 
-    const out = `${origin}${path}${params.length ? `?${params.join('&')}` : ''}${hash}`;
+    const runs = joinRuns(parts);
     // A URL too long to send is redacted as a whole rather than cut (row U1).
-    if ([...out].length > LIMITS.url) return { url: mark('url:long'), kinds: [...kinds, 'url'] };
-    return { url: out, kinds };
+    if ([...renderRuns(runs)].length > LIMITS.url) return { url: whole('long'), kinds: [...kinds, 'url'] };
+    return { url: runs, kinds };
   }
 
   // -------------------------------------------------------------- final gate
@@ -508,14 +548,25 @@
   // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
   const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
 
+  // The Gherkin is not scanned as a text (E3, E6; #28): it is rebuilt from the recording at every
+  // exit and by the receiver, checkPayload refuses one that is not, and the recording it is built
+  // from is scanned instead. As a text it holds the format's words (url, value, textbox ...) and
+  // the placeholders, which a keyword such as "url" or "mail" would hit every time. A WebMCP reply
+  // scans the steps its Gherkin was built from (guardReply). The Markdown a person edits is scanned
+  // as written (E4).
+  const RENDERED = new Set(['reproduction.gherkin', 'reply.gherkin', 'gherkin']);
+  // An alias this extension made ("site-3.invalid", "site-N.invalid" in the notes): ours, so a
+  // keyword such as "site" or "invalid" is not looked for in it.
+  const ALIAS = /^site-\d+\.invalid$/;
+  const ALIAS_TEXT = /(?<![\p{L}\p{N}.-])site-(?:\d+|N)\.invalid(?![\p{L}\p{N}-])/giu;
+
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
+    const keywords = keywordPattern(opts.keywords);
     const check = (text, path) => {
-      // Skip the placeholder, not what it carries: "[[url:acme]]" in a hand-edited
-      // Markdown is still scanned for "acme" (E4, E6). The count in [[text:N]] and
-      // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
-      const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
+      if (RENDERED.has(path)) return;
+      const plain = String(text);
       // As written and with CSS escapes undone: a selector carries them (review R23).
       const kinds = [plain, cssUnescape(plain)].flatMap((t) => {
         // The host of a URL is left out of the patterns (K3) only: it is an alias or a host the
@@ -524,21 +575,36 @@
         const body = t.replace(URL_HOST, (m, scheme, host) => {
           urlHosts.push(host.normalize('NFKC'));
           return `${scheme} `;
-        });
-        const keywords = keywordPattern(opts.keywords);
+        }).replace(ALIAS_TEXT, ' ');
         return [...scrubText(body, { keywords: opts.keywords }).kinds,
-          ...(keywords && urlHosts.some((h) => h.match(keywords)) ? ['keyword'] : []),
+          ...(keywords && urlHosts.some((h) => !ALIAS.test(h.toLowerCase()) && h.match(keywords)) ? ['keyword'] : []),
           ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
       });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
-    const walk = (v, path) => {
+    const walk = (v, path, inArgs = false) => {
       if (typeof v === 'string') return check(v, path);
-      if (Array.isArray(v)) return v.forEach((item, i) => walk(item, `${path}[${i}]`));
+      if (Array.isArray(v)) {
+        // Runs: the strings next to each other are one text, so a keyword split over two
+        // strings is still found; a masked part is a gap, its scheme scanned as a text of its own.
+        let text = '';
+        v.forEach((item, i) => {
+          if (typeof item === 'string') { text += item; return; }
+          if (text) check(text, `${path}[${i}]`);
+          text = '';
+          walk(item, `${path}[${i}]`, inArgs);
+        });
+        if (text) check(text, `${path}[${v.length - 1}]`);
+        return undefined;
+      }
       if (v && typeof v === 'object') {
+        const typedLeaf = typeof v.treatment === 'string' || typeof v.redacted === 'string';
         for (const [k, item] of Object.entries(v)) {
-          check(k, `${path}{key}`);
-          walk(item, path ? `${path}.${k}` : k);
+          // Keys are the format's own names, but under args, where the page named them (W1).
+          if (inArgs && !typedLeaf && !/^masked-\d+(?:-\d+)?$/.test(k)) check(k, `${path}{key}`);
+          // The format's own words are not page text (K2, #28); a URL marker neither.
+          if (isVocab(k, item) || (k === 'as' && URL_MARKERS.includes(item))) continue;
+          walk(item, path ? `${path}.${k}` : k, (inArgs || k === 'args') && !typedLeaf);
         }
       }
       return undefined;
@@ -550,12 +616,14 @@
   const api = {
     DEFAULT_SETTINGS,
     defaults,
-    mark,
-    PLACEHOLDER,
     scrubText,
+    scrubRuns,
+    cutRuns,
+    joinRuns,
+    renderRuns,
+    runKinds,
     oneLine,
     cleanLine,
-    placeholderKinds,
     usableKeyword,
     typed,
     classifyField,

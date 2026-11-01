@@ -13,7 +13,10 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, typedAllowed, HIDDEN_CHARS, renderRuns } = root.OpScribeLimits || require('./limits.js');
+  // A field of a step (runs, or a plain string such as a selector) as text with [[…]] placeholders (#28).
+  const txt = (value) => (value === undefined || value === null ? '' : renderRuns(value));
+  const NO_URL = '[[url:none]]';
 
   const LABELS = {
     secret: '秘匿値',
@@ -29,7 +32,7 @@
     ip: 'IPアドレス',
     nested: '値',
     value: '値',
-    masked: '伏せ字',
+    user: 'ユーザー',
     keyword: '伏せ字'
   };
 
@@ -43,7 +46,7 @@
     // A typed value that may not exist (TYPED_SCHEMA) is never rendered as what it claims.
     if (!typedAllowed(value.treatment, value.field, value.kind)) return '[[v]]';
     switch (value.treatment) {
-      case 'kept': return typeof value.number === 'number' ? String(value.number) : String(value.text ?? '');
+      case 'kept': return typeof value.number === 'number' ? String(value.number) : txt(value.text);
       case 'length': return value.kind === 'text' ? `[[text:${value.length}]]` : `[[${value.kind}]]`;
       case 'redacted': return value.kind === 'file' ? `[[file:${value.count ?? 0}]]` : `[[${value.kind}]]`;
       default: return '[[v]]';
@@ -81,7 +84,7 @@
    * The Markdown, the Gherkin, the payload and the model input all use this.
    */
   function startUrlOf(rec) {
-    return (rec?.steps || []).find((s) => s.url)?.url || '[[url:none]]';
+    return (rec?.steps || []).find((s) => s.url)?.url || [{ redacted: 'url', as: 'none' }];
   }
 
   /**
@@ -142,7 +145,7 @@
   function targetText(target) {
     if (!target) return '画面';
     const noun = ROLE_NOUN[target.role] || '';
-    if (target.name) return `「${target.name}」${noun}`;
+    if (txt(target.name)) return `「${txt(target.name)}」${noun}`;
     if (target.selector) return `${noun || '要素'}（${target.selector}）`;
     return noun || '要素';
   }
@@ -166,7 +169,7 @@
   function sentenceOf(step) {
     switch (step.type) {
       case 'navigate':
-        return `${step.url} を開く`;
+        return `${txt(step.url)} を開く`;
       case 'click':
         return `${targetText(step.target)}をクリックする`;
       case 'input':
@@ -189,10 +192,10 @@
         const json = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
         // The sentence shows the arguments up to argsInSentence; the Gherkin table keeps them all.
         const args = [...json].length > LIMITS.argsInSentence ? `${[...json].slice(0, LIMITS.argsInSentence).join('')}…` : json;
-        return `WebMCP ツール「${step.tool}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
+        return `WebMCP ツール「${txt(step.tool)}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':
-        return `（確認）${step.note}`;
+        return `（確認）${txt(step.note)}`;
       default:
         return `${step.type} 操作`;
     }
@@ -213,30 +216,32 @@
 
     for (const step of steps) {
       if (step.type === 'note') {
+        // Everything in the Markdown is rendered with ‹…› labels, never [[…]] (E4, #28).
+        const note = humanize(txt(step.note));
         const last = out[out.length - 1];
-        if (last && !last.expected) last.expected = step.note;
-        else if (last) last.expected += ` / ${step.note}`;
-        else notes.push(step.note);
+        if (last && !last.expected) last.expected = note;
+        else if (last) last.expected += ` / ${note}`;
+        else notes.push(note);
         previous = step;
         continue;
       }
       if (step.type === 'navigate' && previous && NAVIGATION_CAUSES.has(previous.type)
           && step.t - previous.t <= FOLLOW_MS && out.length) {
         const last = out[out.length - 1];
-        const moved = `${step.url} に遷移する`;
+        const moved = humanize(`${txt(step.url)} に遷移する`);
         last.expected = last.expected ? `${last.expected} / ${moved}` : moved;
         previous = step;
         continue;
       }
-      if (step.type === 'navigate' && previous?.type === 'navigate' && previous.url === step.url) continue;
+      if (step.type === 'navigate' && previous?.type === 'navigate' && txt(previous.url) === txt(step.url)) continue;
       out.push({ action: humanize(describeStep(step)) });
       previous = step;
     }
 
-    const startUrl = startUrlOf(rec);
-    const first = steps.find((s) => s.url)?.url;
-    if (startUrl !== '[[url:none]]' && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
-      out.unshift({ action: `${startUrl} を開く` });
+    const startUrl = txt(startUrlOf(rec));
+    const first = txt(steps.find((s) => s.url)?.url);
+    if (startUrl !== NO_URL && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
+      out.unshift({ action: humanize(`${startUrl} を開く`) });
     }
 
     const preconditions = [];
@@ -251,7 +256,7 @@
     if (values.some((v) => v.treatment === 'length' && v.kind === 'text')) {
       notes.push('‹任意の文字列 N文字› は記録時の入力を伏せたもの。再現時は同じ程度の長さの値を使う');
     }
-    if (steps.some((s) => s.url && /\.invalid\b/.test(s.url))) {
+    if (steps.some((s) => s.url && /\.invalid\b/.test(txt(s.url)))) {
       notes.push('site-N.invalid は実際のホスト名を伏せた別名');
     }
 
@@ -274,8 +279,9 @@
       if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
     });
     if (repro.notes?.length) lines.push('', '## 補足', ...repro.notes.map((n) => `- ${line(n)}`));
-    // Every line one line, whatever field it came from (E7; review R27).
-    return `${lines.map(line).join('\n')}\n`;
+    // Every line one line, whatever field it came from (E7; review R27), and every placeholder
+    // a ‹…› label, the AI's output too: the Markdown is scanned as written (E4, #28).
+    return `${lines.map((l) => humanize(line(l))).join('\n')}\n`;
   }
 
   // ------------------------------------------------------------ Gherkin + α
@@ -294,18 +300,18 @@
       if (value !== undefined && value !== null && value !== '') rows.push([key, typeof value === 'string' ? value : JSON.stringify(value)]);
     };
     add('action', step.type);
-    add('url', step.url);
+    add('url', txt(step.url));
     if (step.target) {
       add('role', step.target.role);
-      add('name', step.target.name);
+      add('name', txt(step.target.name));
       add('tag', step.target.tag);
       add('selector', step.target.selector);
-      add('href', step.target.href);
+      add('href', txt(step.target.href));
     }
     if (step.value !== undefined) add('value', display(step.value));
     add('checked', step.checked);
     add('key', step.key);
-    add('tool', step.tool);
+    add('tool', txt(step.tool));
     if (step.args !== undefined) add('args', displayArgs(step.args));
     add('source', step.source === 'agent' ? 'agent' : undefined);
     return rows;
@@ -336,9 +342,9 @@
       ''
     ];
     const start = steps[0]?.type === 'navigate' ? steps[0] : null;
-    const startUrl = start?.url || startUrlOf(rec);
+    const startUrl = txt(start?.url || startUrlOf(rec));
     // [[url:none]]: the payload of a recording whose steps were all deleted.
-    if (startUrl && startUrl !== '[[url:none]]') {
+    if (startUrl && startUrl !== NO_URL) {
       out.push('  Background:', `    Given "${startUrl}" を開いている`, ...table([['url', startUrl]], '      '), '');
     }
     out.push('  Scenario: 記録された操作');
@@ -355,11 +361,11 @@
     for (const step of steps) {
       if (step === start) { previous = step; continue; }
       if (step.type === 'note') {
-        push('Then', line(humanize(step.note)), step.source === 'agent' ? [['source', 'agent']] : null);
+        push('Then', line(humanize(txt(step.note))), step.source === 'agent' ? [['source', 'agent']] : null);
       } else if (step.type === 'navigate') {
         const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
-        if (caused) push('Then', `"${step.url}" に遷移する`, [['url', step.url]]);
-        else push('When', `"${step.url}" を開く`, [['action', 'navigate'], ['url', step.url]]);
+        if (caused) push('Then', `"${txt(step.url)}" に遷移する`, [['url', txt(step.url)]]);
+        else push('When', `"${txt(step.url)}" を開く`, [['action', 'navigate'], ['url', txt(step.url)]]);
       } else {
         push('When', humanize(describeStep(step)), attributesOf(step));
       }
@@ -370,7 +376,7 @@
     return `${out.map(line).join('\n')}\n`;
   }
 
-  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { rendered: txt, display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

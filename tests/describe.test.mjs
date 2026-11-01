@@ -110,10 +110,10 @@ test('a deleted first navigation does not come back as the start (#16; review R1
   const deleted = { startUrl: 'https://site-1.invalid/secret-page', steps: [
     { type: 'click', t: 1, env: 'standard', url: 'https://site-1.invalid/', target: { role: 'button', name: 'OK' } }
   ] };
-  assert.equal(D.startUrlOf(deleted), 'https://site-1.invalid/');
+  assert.equal(D.rendered(D.startUrlOf(deleted)), 'https://site-1.invalid/');
   assert.ok(!D.toMarkdown(D.buildReproduction(deleted)).includes('secret-page'));
   assert.ok(!D.toGherkin(deleted).includes('secret-page'));
-  assert.equal(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), '[[url:none]]');
+  assert.deepEqual(D.startUrlOf({ startUrl: 'https://x.invalid/', steps: [] }), [{ redacted: 'url', as: 'none' }]);
 });
 
 test('argument strings are one line before they become JSON (row E7; review R13)', () => {

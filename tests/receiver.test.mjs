@@ -39,8 +39,8 @@ const good = () => P.buildPayload({
   id: 'rec-recv-1', startedAt: Date.UTC(2026, 9, 31), endedAt: null, startUrl: 'https://site-1.invalid/',
   aliases: {}, redactions: {}, webmcpTools: {},
   steps: [
-    { type: 'navigate', t: 0, env: 'commercial', source: 'user', url: 'https://site-1.invalid/' },
-    { type: 'input', t: 5, env: 'commercial', source: 'user', target: { role: 'textbox', name: '本文' },
+    { type: 'navigate', t: 0, env: 'commercial', source: 'user', url: ['https://site-1.invalid/'] },
+    { type: 'input', t: 5, env: 'commercial', source: 'user', target: { role: 'textbox', name: ['本文'] },
       value: { treatment: 'length', field: 'text', kind: 'text', length: 3 } }
   ]
 }, { generator: 'none', markdown: '' }, {});
@@ -63,7 +63,7 @@ test('payloads with a broken shape are refused with 422 and nothing is written',
 
 test('a commercial value that was kept is refused (row E2)', async () => {
   const payload = good();
-  payload.recording.steps[1].value = S.typed.kept('text', 'raw');
+  payload.recording.steps[1].value = S.typed.kept('text', ['raw']);
   const res = await post(payload);
   assert.equal(res.status, 422);
   assert.ok(res.body.problems.some((p) => p.problem === 'commercial free text kept'));

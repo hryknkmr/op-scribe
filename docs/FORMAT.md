@@ -105,14 +105,14 @@ Feature: 記録された操作の再現
 ...
 ```
 
-## 送信ペイロード（`op-scribe.recording/v2`）
+## 送信ペイロード（`op-scribe.recording/v3`）
 
 形の唯一の定義は `shared/payload.js` の `SHAPE` です。各欄が [ADR 0003](adr/0003-privacy-guarantee-matrix.md)
 の表のどの行で扱いが決まるかも、そこに書いてあります（テストで突き合わせます）。
 
 ```jsonc
 {
-  "schema": "op-scribe.recording/v2",
+  "schema": "op-scribe.recording/v3",
   "privacy": {
     "policy": "commercial-strict/1",
     "coverage": "commercial | standard | mixed | none",
@@ -123,17 +123,21 @@ Feature: 記録された操作の再現
     "id": "rec-…",
     "startedAt": "2026-10-29T01:00:00.000Z",
     "endedAt": "…",
-    "startUrl": "https://site-1.invalid/",
-    "environment": { "browser": "Google Chrome 141", "platform": "macOS", "language": "ja" },
+    "startUrl": ["https://site-1.invalid/"],
+    "environment": { "browser": ["Google Chrome 141"], "platform": ["macOS"], "language": ["ja"] },
     "steps": [
-      { "n": 1, "type": "navigate", "t": 0, "env": "commercial", "source": "user", "url": "https://site-1.invalid/" },
-      { "n": 2, "type": "input", "t": 900, "env": "commercial", "source": "user", "url": "…",
-        "target": { "role": "textbox", "name": "本文", "tag": "textarea", "selector": "#body" },
+      { "n": 1, "type": "navigate", "t": 0, "env": "commercial", "source": "user", "url": ["https://site-1.invalid/"] },
+      { "n": 2, "type": "input", "t": 900, "env": "commercial", "source": "user", "url": ["…"],
+        "target": { "role": "textbox", "name": ["本文"], "tag": "textarea", "selector": "#body" },
         "value": { "treatment": "length", "field": "text", "kind": "text", "length": 12 } },
-      { "n": 3, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": "search_catalog", "ok": true,
+      { "n": 3, "type": "navigate", "t": 1200, "env": "standard", "source": "user",
+        "url": ["https://site-2.invalid/users/", { "redacted": "id" }, "?q=", { "redacted": "v" }] },
+      { "n": 4, "type": "input", "t": 1300, "env": "standard", "source": "user", "url": ["…"],
+        "value": { "treatment": "kept", "field": "text", "text": ["問い合わせ ", { "redacted": "email" }] } },
+      { "n": 5, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": ["search_catalog"], "ok": true,
         "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } }
     ],
-    "webmcpTools": [{ "site": "https://site-1.invalid", "tools": ["search_catalog"] }]
+    "webmcpTools": [{ "site": "https://site-1.invalid", "tools": [["search_catalog"]] }]
   },
   "reproduction": {
     "generator": "template | on-device-ai | manual | none",
@@ -156,7 +160,18 @@ Feature: 記録された操作の再現
   | `redacted` | 全部伏せた | `kind`（ファイルは `count` も） |
 
   `field` は欄の種類（`secret` `pii` `choice` `search` `text` `file` `arg`）です。
-  `[[…]]` の文字列は、Markdown・Gherkin に描画するときだけ作ります。
+- 残した文（`kept` の `text`、名前・メモ・ツール名・環境の各欄）と URL は、**並び（runs）** です。
+  ページの文字列と、伏せた箇所 `{ "redacted": 種類 }` を順に並べます。文字列の中に伏せ字を書き込むことはありません。
+
+  | 伏せた箇所 | 現れる場所 | 描画 |
+  | --- | --- | --- |
+  | `secret` `card` `email` `phone` `postal` `id` `ip` `number` | 残した文 | `[[email]]` など |
+  | `masked` | 残した文（登録語）、URL のパスの区切り 1 つ・クエリのキー | `[[masked]]` |
+  | `id` `user` | URL のパスの区切り 1 つ | `[[id]]` `[[user]]` |
+  | `v` | URL のクエリの値 | `[[v]]` |
+  | `{ "redacted": "url", "as": … }` | URL 全体（並びの唯一の要素） | `[[url:invalid]]` `[[url:long]]` `[[url:none]]` `[[url:mailto]]` |
+
+  `[[…]]` の文字列は、Gherkin に描画するときだけ作ります。Markdown では `‹メールアドレス›` のような和文の表示にします。
 - `reproduction.gherkin` は、`recording` から作り直したものと一致しなければなりません。
 
 ペイロードはフィールドを許可リスト方式で組み立てるため、タブ ID や実ホスト名との対応表、

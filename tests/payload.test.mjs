@@ -11,6 +11,38 @@ const P = require('../shared/payload.js');
 
 const { typed } = S;
 
+/**
+ * The payload holds kept text and URLs as runs (#28). These tests write them
+ * rendered, as strings; runsOf reads [[kind]] and [[url:x]] back into masked parts.
+ */
+const runsOf = (text) => String(text).split(/(\[\[[a-z]+(?::[a-z][a-z0-9+.-]*)?\]\])/).filter(Boolean).map((p) => {
+  const m = /^\[\[([a-z]+)(?::(.+))?\]\]$/.exec(p);
+  if (!m) return p;
+  return m[1] === 'url' ? { redacted: 'url', as: m[2] } : { redacted: m[1] };
+});
+const fixTyped = (v) => {
+  if (Array.isArray(v)) v.forEach(fixTyped);
+  else if (v && typeof v === 'object') {
+    if (v.treatment === 'kept' && typeof v.text === 'string') v.text = runsOf(v.text);
+    else if (typeof v.treatment !== 'string') Object.values(v).forEach(fixTyped);
+  }
+};
+/** A recording (or a payload's recording) with every string field that is runs made runs, in place. */
+function withRuns(r) {
+  if (typeof r.startUrl === 'string') r.startUrl = runsOf(r.startUrl);
+  for (const step of r.steps || []) {
+    for (const f of ['url', 'tool', 'note']) if (typeof step[f] === 'string') step[f] = runsOf(step[f]);
+    if (step.target) for (const f of ['name', 'href']) if (typeof step.target[f] === 'string') step.target[f] = runsOf(step.target[f]);
+    fixTyped(step.value);
+    fixTyped(step.args);
+  }
+  if (Array.isArray(r.webmcpTools)) r.webmcpTools.forEach((w) => { w.tools = w.tools.map((t) => (typeof t === 'string' ? runsOf(t) : t)); });
+  else if (r.webmcpTools) for (const site of Object.keys(r.webmcpTools)) r.webmcpTools[site] = r.webmcpTools[site].map((t) => (typeof t === 'string' ? runsOf(t) : t));
+  if (r.environment) for (const k of Object.keys(r.environment)) if (typeof r.environment[k] === 'string') r.environment[k] = runsOf(r.environment[k]);
+  return r;
+}
+const show = (runs) => S.renderRuns(runs);
+
 const rec = {
   id: 'rec-test-1',
   state: 'stopped',
@@ -37,17 +69,17 @@ const rec = {
   ]
 };
 
-const env = { browser: 'Chrome 141', platform: 'macOS', language: 'ja', userAgent: 'should not be copied' };
-const build = (r = rec, markdown = '') => P.buildPayload(r, { generator: 'template', markdown }, env);
+const env = { browser: ['Chrome 141'], platform: ['macOS'], language: ['ja'], userAgent: 'should not be copied' };
 const clone = (v) => JSON.parse(JSON.stringify(v));
+const build = (r = rec, markdown = '') => P.buildPayload(withRuns(clone(r)), { generator: 'template', markdown }, env);
 
 test('buildPayload carries no local-only state and passes both exit checks', () => {
-  const payload = build(rec, D.toMarkdown(D.buildReproduction(rec)));
+  const payload = build(rec, D.toMarkdown(D.buildReproduction(withRuns(clone(rec)))));
   const json = JSON.stringify(payload);
   for (const leak of ['tabId', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
     assert.ok(!json.includes(leak), `payload contains ${leak}`);
   }
-  assert.equal(payload.schema, 'op-scribe.recording/v2');
+  assert.equal(payload.schema, 'op-scribe.recording/v3');
   assert.deepEqual(payload.privacy, { policy: 'commercial-strict/1', coverage: 'commercial', hostsAliased: 1, redactions: { text: 1, secret: 1 } });
   assert.deepEqual(P.checkPayload(payload), []);
   assert.deepEqual(S.finalScan(payload, { keywords: ['intranet.corp.invalid'] }), []);
@@ -95,7 +127,7 @@ test('checkPayload rejects fields and types that are not in the definition (row 
 });
 
 test('checkPayload checks the treatment of each typed value (row E2)', () => {
-  const kept = (field, text) => ({ treatment: 'kept', field, text });
+  const kept = (field, text) => ({ treatment: 'kept', field, text: runsOf(text) });
   const cases = [
     [2, kept('text', 'raw text')], // commercial free text kept
     [1, kept('secret', 'hunter2')], // secret kept
@@ -152,7 +184,7 @@ test('checkPayload is independent of the masking: it never calls shared/sanitize
   assert.ok(!/OpScribeSanitize|sanitize\.js'\)/.test(source));
 });
 
-const regen = (p) => { p.reproduction.gherkin = D.toGherkin(p.recording); return p; };
+const regen = (p) => { withRuns(p.recording); p.reproduction.gherkin = D.toGherkin(p.recording); return p; };
 
 test('checkPayload checks the form of every URL value (rows U1-U4, U7, U8; review R1)', () => {
   const cases = [
@@ -251,10 +283,10 @@ test('checkPayload: kept numbers stay in range, and the start URL is a step URL 
   const deleted = clone(rec);
   deleted.startUrl = 'https://site-1.invalid/?q=leak';
   const payload = build(deleted);
-  assert.equal(payload.recording.startUrl, 'https://site-1.invalid/');
+  assert.equal(show(payload.recording.startUrl), 'https://site-1.invalid/');
   assert.deepEqual(P.checkPayload(payload), []);
   const empty = build({ ...clone(rec), steps: [] });
-  assert.equal(empty.recording.startUrl, '[[url:none]]');
+  assert.deepEqual(empty.recording.startUrl, [{ redacted: 'url', as: 'none' }]);
   assert.deepEqual(P.checkPayload(empty), []);
 });
 
@@ -306,7 +338,7 @@ test('the largest recording the limits allow, with the worst characters, passes 
     (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…` })
   ];
   const steps = Array.from({ length: LIMITS.steps }, (_, i) => kinds[i % kinds.length](i));
-  const big = { ...clone(rec), startUrl: url, steps, webmcpTools: {} };
+  const big = withRuns({ ...clone(rec), startUrl: url, steps, webmcpTools: {} });
   const markdown = D.toMarkdown(D.buildReproduction(big));
   assert.ok([...markdown].length <= TOTALS.markdown, `markdown ${markdown.length} > ${TOTALS.markdown}`);
   const payload = P.buildPayload(big, { generator: 'template', markdown }, {});
@@ -387,11 +419,11 @@ test('only the typed values that may exist pass the check, and describe renders 
 
 test('the environment is masked before it is cut, and a raw one too long is refused (M3; review R20)', () => {
   const browser = `${'x'.repeat(59)}Acme`;
-  const masked = S.cleanLine(browser, { keywords: ['Acme'], maxLength: 60 }).text;
-  assert.ok(!masked.includes('A'), masked);
-  assert.deepEqual(P.checkPayload(P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser: masked })), []);
-  const raw = P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser });
-  assert.equal(raw.recording.environment.browser, browser, 'buildPayload never cuts');
+  const masked = S.cleanLine(browser, { keywords: ['Acme'], maxLength: 60 }).runs;
+  assert.ok(!show(masked).includes('A'), show(masked));
+  assert.deepEqual(P.checkPayload(P.buildPayload(withRuns(clone(rec)), { generator: 'template', markdown: '' }, { browser: masked })), []);
+  const raw = P.buildPayload(withRuns(clone(rec)), { generator: 'template', markdown: '' }, { browser: [browser] });
+  assert.deepEqual(raw.recording.environment.browser, [browser], 'buildPayload never cuts');
   assert.ok(P.checkPayload(raw).some((p) => p.path === 'recording.environment.browser'));
 });
 
@@ -421,7 +453,7 @@ test('the exits refuse what the masking cannot make: a personal card, a scheme t
   url.steps[0].url = '[[url:1]]';
   url.startUrl = '[[url:1]]';
   assert.ok(P.checkPayload(regen(build(url))).some((p) => p.path === 'recording.steps[0].url'));
-  assert.equal(S.scrubUrl('1:').url, '[[url:invalid]]');
+  assert.deepEqual(S.scrubUrl('1:').url, [{ redacted: 'url', as: 'invalid' }]);
 
   for (const [suffix, ok] of [['-0', false], ['-1', false], ['-01', false], ['-2', true], ['-10', true]]) {
     const r = clone(rec);
@@ -445,8 +477,8 @@ test('one-line fields refuse a line break, a control or an invisible character a
       assert.ok(P.checkPayload(regen(build(r))).some((p) => ['not one line', 'hidden character'].includes(p.problem)), `${field} ${JSON.stringify(bad)}`);
     }
   }
-  const env = P.buildPayload(rec, { generator: 'template', markdown: '' }, { browser: 'Chrome\n141' });
-  assert.ok(P.checkPayload(env).some((p) => p.path === 'recording.environment.browser' && p.problem === 'not one line'));
+  const env = P.buildPayload(withRuns(clone(rec)), { generator: 'template', markdown: '' }, { browser: ['Chrome\n141'] });
+  assert.ok(P.checkPayload(env).some((p) => p.path.startsWith('recording.environment.browser') && p.problem === 'not one line'));
 });
 
 test('a selector never carries a placeholder of ours (T3, E6; review R26)', () => {
@@ -474,15 +506,15 @@ test('checkCanonical finds what is safe but not what the masking writes (E8; rev
 test('a line break in a URL or a hidden character in an argument is refused, and never renders as a line (E7; review R27)', () => {
   const url = clone(rec);
   url.steps[2].url = 'https://site-1.invalid/\n    Then injected';
-  assert.ok(P.checkPayload(regen(build(url))).some((p) => p.path === 'recording.steps[2].url' && p.problem === 'not one line'));
-  assert.ok(!/^\s*Then injected/m.test(D.toGherkin(url)), 'the renderer keeps it on one line even past the gate');
+  assert.ok(P.checkPayload(regen(build(url))).some((p) => p.path.startsWith('recording.steps[2].url') && p.problem === 'not one line'));
+  assert.ok(!/^\s*Then injected/m.test(D.toGherkin(withRuns(url))), 'the renderer keeps it on one line even past the gate');
 
   const arg = clone(rec);
   arg.steps[4].args = { 'a\u202Eb': typed.kept('arg', 'x'), q: typed.kept('arg', 'c\u202Ed') };
   arg.steps.forEach((s) => { s.env = 'standard'; });
   const problems = P.checkPayload(regen(build(arg)));
   assert.ok(problems.some((p) => p.problem === 'key not one line'));
-  assert.ok(problems.some((p) => p.path.endsWith('.q.text') && p.problem === 'hidden character'));
+  assert.ok(problems.some((p) => p.path.includes('.q.text') && p.problem === 'hidden character'));
   assert.ok(!/\u202E/.test(D.toGherkin(arg)) && !/\u202E/.test(D.toMarkdown(D.buildReproduction(arg))));
 
   // A person's line breaks in a kept text are theirs: allowed, and rendered on one line.
@@ -494,7 +526,7 @@ test('a line break in a URL or a hidden character in an argument is refused, and
 
 test('every bidi control and default-ignorable character is removed, never rendered and refused, from one definition (E7; review R28)', () => {
   for (const c of ['\u061C', '\u2066', '\u2067', '\u2068', '\u2069', '\u00AD', '\u{E0041}']) {
-    assert.equal(S.cleanLine(`a${c}b`).text, 'ab', JSON.stringify(c));
+    assert.deepEqual(S.cleanLine(`a${c}b`).runs, ['ab'], JSON.stringify(c));
     const r = clone(rec);
     r.steps[1].target.name = `a${c}b`;
     assert.ok(!D.toGherkin(r).includes(c) && !D.toMarkdown(D.buildReproduction(r)).includes(c), JSON.stringify(c));
@@ -502,13 +534,28 @@ test('every bidi control and default-ignorable character is removed, never rende
   }
 });
 
-test('the exits refuse a bracket in a URL outside the masking own [[v]] (K1, E2; review R29)', () => {
-  for (const [value, ok] of [['https://site-1.invalid/[[secret]]', false], ['https://site-1.invalid/a?q=[[secret]]x', false],
-    ['https://site-1.invalid/a?[[k]]=1', false], ['https://site-1.invalid/a?q=[[v]]&r=1', true], ['https://site-1.invalid/%5B%5Bx%5D%5D', true]]) {
+test('a URL holds a masked part only where the masking puts one, and no bracket of its own (K1, U1-U8, E2; review R29, #28)', () => {
+  const v = { redacted: 'v' };
+  for (const [value, ok] of [
+    [['https://site-1.invalid/[x]'], false], // a bracket in a text of the URL
+    [['https://site-1.invalid/a?q=', v, 'x'], false], // a masked value with text after it
+    [['https://site-1.invalid/', v], false], // a query value's part in the path
+    [['https://site-1.invalid/a', { redacted: 'id' }], false], // half a path segment
+    [['https://site-1.invalid/a?q=', { redacted: 'id' }], false], // a path part in the query
+    [['https://site-1.invalid/a#/', { redacted: 'id' }], false], // in the fragment
+    [['https://site-1.invalid/', { redacted: 'email' }], false], // not a kind a URL holds
+    [['https://', { redacted: 'id' }, '/'], false], // as the host
+    [['https://site-1.invalid/a?', { redacted: 'masked' }, '=1'], true],
+    [['https://site-1.invalid/a?q=', v, '&r=1'], true],
+    [['https://site-1.invalid/users/', { redacted: 'id' }, '/', { redacted: 'user' }], true],
+    [['https://[::1]:8080/a'], true],
+    [['https://site-1.invalid/%5B%5Bx%5D%5D'], true]
+  ]) {
     const r = clone(rec);
-    r.steps.forEach((s) => { s.env = 'standard'; });
+    r.steps.forEach((step) => { step.env = 'standard'; });
     r.steps[2].url = value;
-    assert.equal(P.checkPayload(regen(build(r))).some((p) => p.problem === 'bracket outside a placeholder'), !ok, value);
+    const problems = P.checkPayload(regen(build(r))).filter((p) => p.path.startsWith('recording.steps[2].url'));
+    assert.equal(problems.length === 0, ok, `${JSON.stringify(value)}: ${JSON.stringify(problems)}`);
   }
 });
 
@@ -544,9 +591,9 @@ test('a deleted start URL never comes back, not even when a later step goes ther
     { type: 'click', t: 1, env: 'standard', source: 'user', url: 'https://site-1.invalid/b', target: { role: 'button', name: 'x' } },
     { type: 'navigate', t: 2, env: 'standard', source: 'user', url: 'https://site-1.invalid/a' }
   ];
-  assert.equal(D.startUrlOf(r), 'https://site-1.invalid/b');
+  assert.equal(D.rendered(D.startUrlOf(r)), 'https://site-1.invalid/b');
   const payload = build(r);
-  assert.equal(payload.recording.startUrl, 'https://site-1.invalid/b');
+  assert.equal(show(payload.recording.startUrl), 'https://site-1.invalid/b');
   payload.recording.startUrl = 'https://site-1.invalid/a';
   assert.ok(P.checkPayload(regen(payload)).some((p) => p.problem === 'not the first URL of the steps'));
 });
@@ -561,4 +608,38 @@ test('the count of aliased hosts is within the alias limit (M1, E2; review R44)'
   const p = build();
   p.privacy.hostsAliased = 1e100;
   assert.ok(P.checkPayload(regen(p)).some((x) => x.path === 'privacy.hostsAliased'));
+});
+
+test('checkPayload refuses runs that are not in the one form the masking writes (#28)', () => {
+  const standardRec = clone(rec);
+  for (const step of standardRec.steps) step.env = 'standard';
+  for (const [text, problem] of [
+    [['a', 'b'], 'texts not joined'],
+    [['a', ''], 'empty text in runs'],
+    [['[[email]]'], 'placeholder in text'],
+    [[{ redacted: 'email', note: 'x' }], 'unknown field in a masked part'],
+    [[{ redacted: 'v' }], 'not a masked part'],
+    [[{ redacted: 'url', as: 'invalid' }], 'not a masked part'],
+    ['plain string', 'not runs']
+  ]) {
+    const payload = build(standardRec);
+    payload.recording.steps[3].value = { treatment: 'kept', field: 'text', text };
+    payload.reproduction.gherkin = D.toGherkin(payload.recording);
+    const problems = P.checkPayload(payload);
+    assert.ok(problems.some((p) => p.path === 'recording.steps[3].value' && p.problem === problem), `${JSON.stringify(text)}: ${JSON.stringify(problems)}`);
+  }
+});
+
+test('a keyword that is a placeholder name passes the exits when the page never wrote it (K2, E6; #28)', () => {
+  const r = clone(rec);
+  r.steps.forEach((step) => { step.env = 'standard'; });
+  r.steps[3].value = typed.kept('text', ['問い合わせ ', { redacted: 'email' }]);
+  const payload = build(r, D.toMarkdown(D.buildReproduction(withRuns(clone(r)))));
+  assert.deepEqual(P.checkPayload(payload), []);
+  assert.ok(payload.reproduction.gherkin.includes('[[email]]'), 'the Gherkin keeps the placeholder for agents');
+  assert.ok(!payload.reproduction.markdown.includes('[['), payload.reproduction.markdown);
+  assert.deepEqual(S.finalScan(payload, { keywords: ['mail', 'email', 'masked', 'url', 'invalid', 'text', 'site', 'value'] }), []);
+  // ... and stops a payload where the page did write it.
+  r.steps[5].note = 'mail の件';
+  assert.deepEqual(S.finalScan(build(r), { keywords: ['mail'] }).map((f) => f.path), ['recording.steps[5].note[0]']);
 });

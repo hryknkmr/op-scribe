@@ -1,5 +1,5 @@
 /**
- * op-scribe - the one definition of the payload (op-scribe.recording/v2).
+ * op-scribe - the one definition of the payload (op-scribe.recording/v3).
  *
  * SHAPE lists every field that may leave the browser, with its type and the
  * row of docs/adr/0003 that decides its treatment. buildPayload copies only
@@ -19,9 +19,10 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, SCHEME, renderRuns } = root.OpScribeLimits || require('./limits.js');
 
-  const SCHEMA = 'op-scribe.recording/v2';
+  // v3: every text the masking keeps is runs, not a string with placeholders in it (#28).
+  const SCHEMA = 'op-scribe.recording/v3';
   const POLICY = 'commercial-strict/1';
 
   // ------------------------------------------------------------------- shape
@@ -31,6 +32,8 @@
   // Always one line, with nothing hidden (E7, safety): a line break forges a Gherkin step
   // or a Markdown heading, and an invisible or bidi control hides text from the reviewer.
   const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
+  // A kept text as runs (#28), cut at n rendered characters like cutStr.
+  const runs = (row, n) => ({ type: 'runs', row, max: cut(n), cutAt: n });
   const BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
   const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
 
@@ -46,7 +49,8 @@
       return;
     }
     if (Array.isArray(node)) {
-      node.forEach((v, i) => checkLines(v, `${path}[${i}]`, problems));
+      // The runs of a kept text are the text a person typed, part by part.
+      node.forEach((v, i) => checkLines(v, `${path}[${i}]`, problems, inKept));
       return;
     }
     if (!isObject(node)) return;
@@ -58,7 +62,32 @@
   }
   const overCut = (text, n) => [...text].length > n && !text.endsWith('…');
   const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-  const URL_VALUE = str('U1', LIMITS.url);
+  // A URL is runs too; where each masked part may sit is checked by checkUrl (U1-U8, K1).
+  const URL_VALUE = { type: 'runs', row: 'U1', max: LIMITS.url, url: true };
+  const SITE = str('W6', LIMITS.url);
+
+  /**
+   * Why v is not runs of these kinds, or '' (#28): strings and { redacted } parts, the strings
+   * joined (no two in a row, none empty) and never holding "[[" - a placeholder is a part,
+   * never text (K1). A URL marker is the whole URL's only part.
+   */
+  function runsProblem(v, kinds) {
+    if (!Array.isArray(v)) return 'not runs';
+    for (let i = 0; i < v.length; i += 1) {
+      const p = v[i];
+      if (typeof p === 'string') {
+        if (!p) return 'empty text in runs';
+        if (typeof v[i - 1] === 'string') return 'texts not joined';
+        if (p.includes('[[')) return 'placeholder in text';
+      } else if (isObject(p) && kinds.includes(p.redacted)) {
+        if (p.redacted !== 'url' && !hasOnly(p, ['redacted'])) return 'unknown field in a masked part';
+        if (p.redacted === 'url' && (!hasOnly(p, ['redacted', 'as']) || !(URL_MARKERS.includes(p.as) || SCHEME.test(p.as)) || v.length !== 1)) return 'bad URL marker';
+      } else {
+        return 'not a masked part';
+      }
+    }
+    return '';
+  }
   const opt = (node) => ({ ...node, optional: true });
 
   const TARGET = {
@@ -66,7 +95,7 @@
     fields: {
       role: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
       tag: opt(str('T4', 24, /^[a-z][a-z0-9-]{0,23}$/)),
-      name: opt(cutStr('T2', LIMITS.name)),
+      name: opt(runs('T2', LIMITS.name)),
       // Page text with "[[" is escaped by the masking: a "[[" here would forge a placeholder finalScan skips.
       selector: opt({ ...cutStr('T3', LIMITS.selector), re: /^(?![\s\S]*\[\[)/ }),
       href: opt(URL_VALUE)
@@ -86,10 +115,10 @@
       value: opt({ type: 'typed', row: 'I1-I8' }),
       checked: opt({ type: 'bool', row: 'T6' }),
       key: opt(str('T5', 32, /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/)),
-      tool: opt(cutStr('W6', LIMITS.tool)),
+      tool: opt(runs('W6', LIMITS.tool)),
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
-      note: opt(cutStr('T1', LIMITS.note))
+      note: opt(runs('T1', LIMITS.note))
     }
   };
 
@@ -116,9 +145,9 @@
           environment: {
             type: 'object',
             fields: {
-              browser: opt(cutStr('M3', LIMITS.environment)),
-              platform: opt(cutStr('M3', LIMITS.environment)),
-              language: opt(cutStr('M3', LIMITS.environment))
+              browser: opt(runs('M3', LIMITS.environment)),
+              platform: opt(runs('M3', LIMITS.environment)),
+              language: opt(runs('M3', LIMITS.environment))
             }
           },
           steps: { type: 'array', max: LIMITS.steps, of: STEP },
@@ -128,8 +157,8 @@
             of: {
               type: 'object',
               fields: {
-                site: URL_VALUE,
-                tools: { type: 'array', max: LIMITS.toolList, of: cutStr('W6', LIMITS.tool) }
+                site: SITE,
+                tools: { type: 'array', max: LIMITS.toolList, of: runs('W6', LIMITS.tool) }
               }
             }
           }
@@ -183,7 +212,7 @@
       startUrl: D.startUrlOf(rec),
       // Masked and cut by the panel (cleanLine), never cut here: a cut before the
       // masking leaves half a keyword (M3). Too long is refused by the check.
-      environment: Object.fromEntries(Object.entries(pick(environment || {}, ENV_FIELDS)).map(([k, v]) => [k, String(v)])),
+      environment: pick(environment || {}, ENV_FIELDS),
       steps: (rec.steps || []).map((step, i) => {
         const out = { n: i + 1, ...pick(step, STEP_FIELDS) };
         if (D.isPanelNote(step)) out.env = D.panelNoteEnv(rec.steps);
@@ -231,10 +260,13 @@
         if (env === 'commercial') return bad('commercial number kept');
         return undefined;
       }
-      if (typeof v.text !== 'string' || v.number !== undefined) return bad('kept value is not text');
-      if (v.text === '') return env === 'commercial' && (v.field === 'text' || v.field === 'arg') ? bad('commercial free text kept') : undefined;
+      if (v.number !== undefined) return bad('kept value is not text');
+      const problem = runsProblem(v.text, RUN_KINDS.text);
+      if (problem) return bad(problem);
+      if (!v.text.length) return env === 'commercial' && (v.field === 'text' || v.field === 'arg') ? bad('commercial free text kept') : undefined;
       if (env === 'commercial' && (v.field === 'text' || v.field === 'arg')) return bad('commercial free text kept');
-      if ([...v.text].length > KEPT_MAX[v.field] || overCut(v.text, LIMITS.kept[v.field])) return bad('too long');
+      const text = renderRuns(v.text);
+      if ([...text].length > KEPT_MAX[v.field] || overCut(text, LIMITS.kept[v.field])) return bad('too long');
       return undefined;
     }
     if (v.treatment === 'length') {
@@ -283,6 +315,8 @@
       if (entries.length > LIMITS.argKeys) problems.push({ path, problem: 'too many keys' });
       for (const [k, v] of entries) {
         if ([...k].length > cut(LIMITS.argKey) || (overCut(k, LIMITS.argKey) && !/-(?:[2-9]|[1-9]\d+)$/.test(k))) problems.push({ path, problem: 'key too long' });
+        // A key is rendered into the Gherkin: no "[[" there but the masking's own (K1).
+        if (k.includes('[[')) problems.push({ path, problem: 'placeholder in a key' });
         checkArgs(v, env, `${path}.${k}`, problems, depth + 1);
       }
       return;
@@ -321,6 +355,13 @@
           checkNode(node.of, v, `${path}.${k}`, problems);
         }
         return undefined;
+      case 'runs': {
+        const problem = runsProblem(value, node.url ? RUN_KINDS.url : RUN_KINDS.text);
+        if (problem) return bad(problem);
+        const text = renderRuns(value);
+        if ([...text].length > node.max || (node.cutAt && overCut(text, node.cutAt))) return bad('too long');
+        return undefined;
+      }
       case 'string':
         if (value === null && node.nullable) return undefined;
         if (typeof value !== 'string') return bad('not a string');
@@ -355,7 +396,7 @@
   function checkStepKind(step, path, problems) {
     const rule = STEP_RULES[step.type];
     for (const f of rule.required) {
-      if (step[f] === undefined || step[f] === '') problems.push({ path: `${path}.${f}`, problem: `missing for ${step.type}` });
+      if (step[f] === undefined || step[f] === '' || (Array.isArray(step[f]) && !step[f].length)) problems.push({ path: `${path}.${f}`, problem: `missing for ${step.type}` });
     }
     for (const f of Object.keys(step)) {
       if (!BASE_FIELDS.includes(f) && !rule.allowed.includes(f)) problems.push({ path: `${path}.${f}`, problem: `not allowed for ${step.type}` });
@@ -372,35 +413,57 @@
 
   const SAFE_VALUE = /^[\w.-]{1,24}$/;
   const SPA_ROUTE = /^#\/[\w/-]{0,60}$/;
-  // A scheme starts with a letter (scrubUrl writes the parsed one, or invalid / none).
-  const PLACEHOLDER_URL = /^\[\[url:[a-z][a-z0-9+.-]{0,15}\]\]$/;
+  const PATH_PARTS = ['[[id]]', '[[user]]', '[[masked]]'];
 
   /**
-   * Rows U1-U4, U7, U8: a URL value is either the placeholder for a URL that was
-   * redacted as a whole, or an http(s) URL without user:pass@. In a commercial
-   * step every query value is [[v]] and there is no fragment (the interim
-   * rule until ③). site (WebMCP) is an origin only.
+   * Rows U1-U4, U7, U8, K1: a URL is either one marker for a URL redacted as a
+   * whole, or an http(s) URL without user:pass@ whose masked parts sit where
+   * the masking puts them - id, user and masked as a whole path segment,
+   * masked as a query key, v as a query value. Its texts hold no bracket but
+   * an IPv6 host's, so every bracket of the rendering is a masked part. In a
+   * commercial step every query value is masked and there is no fragment (the
+   * interim rule until ③).
    */
-  function checkUrl(value, env, path, problems, { origin = false, none = false } = {}) {
+  function checkUrl(value, env, path, problems, { none = false } = {}) {
     const bad = (problem) => problems.push({ path, problem });
-    // The no-URL marker is a start URL only, never a URL a step holds (review R30).
-    if (value === '[[url:none]]' && !none) return bad('no-URL marker as a URL');
-    if (PLACEHOLDER_URL.test(value)) return;
+    if (value.length === 1 && value[0]?.redacted === 'url') {
+      // The no-URL marker is a start URL only, never a URL a step holds (review R30).
+      if (value[0].as === 'none' && !none) bad('no-URL marker as a URL');
+      return;
+    }
+    if (!value.length) return bad('empty URL');
+    const brackets = value.some((p, i) => typeof p === 'string' && /[[\]]/.test(i === 0 ? p.replace(/^https?:\/\/\[[0-9A-Fa-f:.]+\]/i, '') : p));
+    if (brackets) return bad('bracket outside a placeholder');
     let url;
-    try { url = new URL(value); } catch { return bad('not a URL'); }
+    try { url = new URL(renderRuns(value)); } catch { return bad('not a URL'); }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return bad('not http(s)');
     if (url.username || url.password) return bad('credentials in URL');
-    if (origin && (url.pathname !== '/' || url.search || url.hash || value !== url.origin)) return bad('not an origin');
-    // K1 in URLs: the only "[" a URL carries is the masking's own [[v]] query value (review R29).
-    if (/[[\]]/.test(url.pathname) || /[[\]]/.test(url.search.replace(/=\[\[v\]\](?=&|$)/g, '='))) return bad('bracket outside a placeholder');
+    if (url.pathname.split('/').some((seg) => /[[\]]/.test(seg) && !PATH_PARTS.includes(seg))) return bad('masked part out of place in the path');
+    const pairs = url.search ? url.search.slice(1).split('&').map((pair) => {
+      const at = pair.indexOf('=');
+      return at < 0 ? [pair, ''] : [pair.slice(0, at), pair.slice(at + 1)];
+    }) : [];
+    for (const [k, v] of pairs) {
+      if (/[[\]]/.test(k) && k !== '[[masked]]') return bad('masked part out of place in the query');
+      if (/[[\]]/.test(v) && v !== '[[v]]') return bad('masked part out of place in the query');
+    }
+    if (/[[\]]/.test(url.hash)) return bad('masked part in the fragment');
     if (env === 'commercial') {
-      for (const [, v] of url.searchParams) if (v && v !== '[[v]]') return bad('commercial query value kept');
+      if (pairs.some(([, v]) => v && v !== '[[v]]')) return bad('commercial query value kept');
       if (url.hash) return bad('commercial fragment kept');
       return;
     }
     // standard (rows U7, U8): only the allowed forms; the key names are the worker's job (E2).
     for (const [, v] of url.searchParams) if (v && v !== '[[v]]' && !SAFE_VALUE.test(v)) return bad('query value not in an allowed form');
     if (url.hash && !SPA_ROUTE.test(url.hash)) return bad('fragment is not an SPA route');
+  }
+
+  /** Row W6: the site of a WebMCP tool list is an http(s) origin, as the URL parser writes it. */
+  function checkSite(value, path, problems) {
+    let url;
+    try { url = new URL(value); } catch { return problems.push({ path, problem: 'not a URL' }); }
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || value !== url.origin) problems.push({ path, problem: 'not an origin' });
+    return undefined;
   }
 
   /**
@@ -414,14 +477,14 @@
 
     const steps = payload.recording.steps;
     // The start URL is one of the steps' URLs, or [[url:none]]; it is judged by that step's environment.
-    const start = payload.recording.startUrl;
-    const startStep = steps.find((s) => s.url === start);
+    const start = renderRuns(payload.recording.startUrl);
+    const startStep = steps.find((s) => s.url !== undefined && renderRuns(s.url) === start);
     if (!startStep && start !== '[[url:none]]') problems.push({ path: 'recording.startUrl', problem: 'not a URL of the steps' });
-    else if (start !== D.startUrlOf(payload.recording)) problems.push({ path: 'recording.startUrl', problem: 'not the first URL of the steps' });
+    else if (start !== renderRuns(D.startUrlOf(payload.recording))) problems.push({ path: 'recording.startUrl', problem: 'not the first URL of the steps' });
     // [[url:none]] means no step has a URL: with one, the start is that URL (startUrlOf; review R30).
     if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
-    checkUrl(start, startStep?.env, 'recording.startUrl', problems, { none: true });
-    payload.recording.webmcpTools.forEach((w, i) => checkUrl(w.site, 'standard', `recording.webmcpTools[${i}].site`, problems, { origin: true }));
+    checkUrl(payload.recording.startUrl, startStep?.env, 'recording.startUrl', problems, { none: true });
+    payload.recording.webmcpTools.forEach((w, i) => checkSite(w.site, `recording.webmcpTools[${i}].site`, problems));
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });
@@ -465,10 +528,7 @@
         // The "…" a cut appends is ours and is not NFKC ("..."); everything before it is.
         const body = v.replace(/…$/u, '');
         if (body.normalize('NFKC') !== body) bad(path, 'not NFKC');
-        const scheme = /^\[\[url:([^\]]*)\]\]$/.exec(v)?.[1];
-        // scrubUrl keeps http(s) URLs as URLs; only other schemes become a placeholder (U2).
-        if (scheme === 'http' || scheme === 'https') bad(path, 'http placeholder');
-        else if (/^https?:\/\//i.test(v)) {
+        if (/^https?:\/\//i.test(v)) {
           // The URL parser's own form: lowercase scheme and host, no default port.
           try {
             const u = new URL(v);
@@ -478,6 +538,8 @@
       } else if (Array.isArray(v)) {
         v.forEach((x, i) => walk(x, `${path}[${i}]`));
       } else if (isObject(v)) {
+        // scrubUrl keeps http(s) URLs as URLs; only other schemes become a marker (U2).
+        if (v.redacted === 'url' && (v.as === 'http' || v.as === 'https')) bad(path, 'http placeholder');
         Object.entries(v).forEach(([k, x]) => walk(x, `${path}.${k}`));
       }
     };

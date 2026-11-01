@@ -14,7 +14,8 @@
 importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 'shared/record.js');
 
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
-const { LIMITS } = self.OpScribeLimits;
+const { LIMITS, renderRuns } = self.OpScribeLimits;
+const { humanize } = self.OpScribeDescribe;
 const { policyOf, envOf, cleanStep, appendStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
@@ -209,16 +210,22 @@ const addPattern = (url) => mutate(async (rec) => {
   return { save: rec, reply: { ok: true } };
 });
 
-/** Origin as it appears in the recording (real if allowlisted, otherwise its alias). */
+/**
+ * Origin as it appears in the recording (real if allowlisted, otherwise its alias), or null
+ * for a site the recording does not hold (past the alias limit, K5).
+ */
 function siteOf(rec, settings, origin) {
   const { url } = scrubUrl(`${origin}/`, { ...rec.policy, keywords: settings.keywords, aliases: { ...rec.aliases } });
-  try { return new URL(url).origin; } catch { return url; }
+  if (url.length !== 1 || typeof url[0] !== 'string') return null;
+  try { return new URL(url[0]).origin; } catch { return null; }
 }
 
 async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
+  // A site past the alias limit is not recorded (K5): there is nothing to tell it or add from it.
+  if (!site) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   // Steps on other sites are never handed to this page; every answer goes through the final scan (W8, E6).
   const answer = webmcpReply(rec, settings, site, op);
   if (answer) return { reply: answer };
@@ -226,7 +233,9 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, fromOf(sender)));
-    return { save: rec, reply: guardReply({ ok: true, added: rec.steps[rec.steps.length - 1].note }, rec, settings) };
+    // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
+    const added = humanize(renderRuns(rec.steps[rec.steps.length - 1].note));
+    return { save: rec, reply: guardReply({ ok: true, added }, rec, settings) };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
 }
@@ -282,11 +291,11 @@ async function handle(message, sender) {
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
         // A site past the alias limit is not recorded (K5): neither are its tools.
-        if (site.startsWith('[[')) return { reply: { ok: true } };
+        if (!site) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).
         if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
         rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
-          .map((n) => cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool }).text);
+          .map((n) => cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool }).runs);
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);
@@ -317,7 +326,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     const settings = await getSettings();
     const step = cleanStep({ type: 'navigate', pageUrl: changeInfo.url }, rec, settings, { tabUrl: changeInfo.url });
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
-    if (last?.url === step.url && rec.steps[rec.steps.length - 1] === last) return null;
+    if (step && last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last) return null;
     appendStep(rec, step);
     return { save: rec };
   });

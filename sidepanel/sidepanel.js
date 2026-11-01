@@ -146,7 +146,7 @@ function environment() {
     platform: navigator.userAgentData?.platform || '',
     language: navigator.language || ''
   };
-  const clean = (v) => S.cleanLine(v, { keywords: settings.keywords, maxLength: LIMITS.environment }).text;
+  const clean = (v) => S.cleanLine(v, { keywords: settings.keywords, maxLength: LIMITS.environment }).runs;
   return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, clean(v)]));
 }
 
@@ -334,8 +334,9 @@ async function generateAi() {
   ui.genAi.disabled = true;
   try {
     const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
-    const start = D.startUrlOf(rec);
-    const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : start, (text) => { ui.genStatus.textContent = text; });
+    const start = D.rendered(D.startUrlOf(rec));
+    // The model reads what the Markdown shows: ‹…› labels, never [[…]] (#28).
+    const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : D.humanize(start), (text) => { ui.genStatus.textContent = text; });
     const problems = validate(output, prompt, scanWith(rec));
     if (problems.length) {
       await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
@@ -554,7 +555,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
     if (next.commercialHosts.length) await dismissNotice();
     const unused = next.keywords.filter((k) => !S.usableKeyword(k));
     ui.settingsStatus.textContent = (await granted)
-      ? `保存しました${unused.length ? `（1 文字の語と、伏せ字の名前の一部になる語は使いません: ${unused.slice(0, 5).join('、')}）` : ''}`
+      ? `保存しました${unused.length ? `（1 文字の語は使いません: ${unused.slice(0, 5).join('、')}）` : ''}`
       : '保存しました（送信先へのアクセスは未許可です）';
   })();
 });
