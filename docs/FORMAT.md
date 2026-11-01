@@ -105,6 +105,14 @@ Feature: 記録された操作の再現
 ...
 ```
 
+## 探索メモ
+
+Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`bug` / `question` / `idea` / `next`）が付きます。
+種類のないメモは今までどおり期待結果と `Then` になります。種類のあるメモは手順の外に残します。
+
+- Markdown: `## 探索メモ` の節に `- [不具合] 保存が2回走る（手順 1 の後）` の形で並ぶ。AI で整理したときは手順の番号を付けない
+- Gherkin: その位置のコメント行 `# [不具合] 保存が2回走る` になる。シナリオの意味は変わらない
+
 ## 送信ペイロード（`op-scribe.recording/v2`）
 
 形の唯一の定義は `shared/payload.js` の `SHAPE` です。各欄が [ADR 0003](adr/0003-privacy-guarantee-matrix.md)

@@ -266,7 +266,7 @@ async function handle(message, sender) {
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
-        appendStep(rec, cleanStep({ type: 'note', note: String(detail.text || '') }, rec, await getSettings()));
+        appendStep(rec, cleanStep({ type: 'note', note: String(detail.text || ''), kind: detail.kind }, rec, await getSettings()));
         return { save: rec, reply: { ok: true } };
       });
       default: return { ok: false, error: 'UNKNOWN' };

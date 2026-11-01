@@ -107,7 +107,7 @@
     key: { required: ['key'], allowed: ['url', 'target', 'key'] },
     submit: { required: [], allowed: ['url', 'target'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
-    note: { required: ['note'], allowed: ['url', 'note'] }
+    note: { required: ['note'], allowed: ['url', 'note', 'kind'] }
   });
 
   /**
