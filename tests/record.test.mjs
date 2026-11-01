@@ -590,3 +590,19 @@ test('WebMCP names the asking site site-1 and its links after it, whatever the r
   // The step stored in the recording keeps its alias.
   assert.equal(new URL(S.renderRuns(second.url)).host, 'site-2.invalid');
 });
+
+test('WebMCP keeps an allowed asking site by name and numbers the other sites from site-1 (rows U4, W8; review of #37 R13)', () => {
+  const s = { ...settings, keywords: [], hostAllowlist: ['allowed.example.com'] };
+  const rec = { ...newRec(), policy: R.policyOf(s) };
+  const step = (pageUrl, href) => R.cleanStep({ type: 'click', pageUrl, target: { role: 'link', name: 'OK', ...(href && { href }) } }, rec, s, { tabUrl: pageUrl });
+  rec.steps.push(step('https://first.example.com/a'), step('https://second.example.com/b'), step('https://allowed.example.com/c', 'https://second.example.com/d'));
+  const site = rec.steps[2].site;
+  assert.equal(site, 'https://allowed.example.com');
+  assert.equal(R.webmcpReply(rec, s, site, 'status').site, site);
+  const repro = R.webmcpReply(rec, s, site, 'reproduction');
+  const text = repro.markdown + repro.gherkin;
+  assert.ok(text.includes('https://allowed.example.com/c'), text);
+  // second.example.com is the recording's site-2; to this page it is the first alias its steps name.
+  assert.ok(text.includes('https://site-1.invalid/d'), text);
+  assert.ok(!text.includes('site-2.invalid'), text);
+});

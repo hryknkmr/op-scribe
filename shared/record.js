@@ -294,8 +294,9 @@
 
   /**
    * An alias numbers a site in the whole recording: site-2 says another site came first.
-   * The page gets aliases of its own, its site first and then in the order its steps
-   * name them, so a reply tells nothing of the other sites (W8; review of #37 R12).
+   * The page gets aliases of its own from site-1, its site first when it is an alias and then
+   * in the order its steps name them, so a reply tells nothing of the other sites (W8; review
+   * of #37 R12). An allowed host keeps its name (U4).
    * Only hosts are renamed (url, target.href): text is the page's own and stays as it is.
    */
   function localAliases(site, steps) {
