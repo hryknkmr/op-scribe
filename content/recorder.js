@@ -102,8 +102,7 @@
       // Whole: the worker masks first and then cuts, so a keyword across the limit is never left half (K2).
       name: accessibleName(el),
       tag: el.tagName.toLowerCase(),
-      selector: selectorFor(el),
-      ...T.semanticPosition(el, document)
+      selector: selectorFor(el)
     };
     if ((el.tagName === 'A' || el.tagName === 'AREA') && el.href) target.href = el.href;
     return target;

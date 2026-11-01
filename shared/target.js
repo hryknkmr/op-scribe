@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, primaryRole } = root.OpScribeLimits || require('./limits.js');
+  const { primaryRole } = root.OpScribeLimits || require('./limits.js');
 
   // Elements a person operates by their tag. No <label>: one without a control is page
   // text, and one with a control is recorded through the control it forwards the click to.
@@ -113,45 +113,7 @@
     return textOf(el) || oneLine(el.querySelector('img[alt]')?.alt) || declared;
   }
 
-  /**
-   * Whether a person (and a role-based replay, like getByRole) can reach this
-   * element: rendered, not a hidden input, not inside aria-hidden or inert (#42).
-   */
-  const exposed = (el) => !(el.tagName === 'INPUT' && el.type === 'hidden')
-    && el.checkVisibility?.({ visibilityProperty: true }) !== false
-    && !el.closest('[aria-hidden="true"], [inert]');
-
-  /**
-   * The 1-based position of this element among targets with the same semantic
-   * role and accessible name - the name the step records, aria-labelledby
-   * included. It stores no surrounding text, and it gives up (no position)
-   * past LIMITS.targetMatches operated candidates or LIMITS.targetMs of work,
-   * rather than make a person's operation wait (#42).
-   */
-  function semanticPosition(el, doc, now = () => performance.now()) {
-    if (!el || !doc?.querySelectorAll) return undefined;
-    const start = now();
-    let candidates;
-    try { candidates = doc.querySelectorAll(`${NATIVE}, [role]`); } catch { return undefined; }
-    const role = implicitRole(el);
-    const name = accessibleName(el, doc);
-    let operatedCount = 0;
-    let ordinal = 0;
-    let matches = 0;
-    const late = () => now() - start > LIMITS.targetMs;
-    if (late()) return undefined;
-    for (const candidate of candidates) {
-      if (late()) return undefined;
-      if (!isOperated(candidate)) continue;
-      if (++operatedCount > LIMITS.targetMatches) return undefined;
-      if (implicitRole(candidate) !== role || !exposed(candidate) || accessibleName(candidate, doc) !== name) continue;
-      matches += 1;
-      if (candidate === el) ordinal = matches;
-    }
-    return ordinal && matches && !late() ? { ordinal, matches } : undefined;
-  }
-
-  const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName, semanticPosition };
+  const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName };
   root.OpScribeTarget = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
