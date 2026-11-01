@@ -225,6 +225,7 @@ test('the Gherkin is not scanned as a text, the Markdown is scanned as written (
     [{ path: 'reproduction.markdown', kinds: ['keyword'] }]);
   // An alias as the host of a URL is ours: "site" and "invalid" are not looked for in it. Anywhere else it is text.
   assert.deepEqual(S.finalScan({ m: 'https://site-2.invalid/a を開く https://site-3.invalid:8443/b' }, { keywords: ['site', 'invalid'] }), []);
+  assert.equal(S.finalScan({ m: 'https://site-3.invalid:8443/b' }, { keywords: ['8443'] }).length, 1, 'the port is not part of the alias');
   for (const m of ['site-N.invalid は別名', 'site-2.invalid に移動', 'https://website.invalid/']) {
     assert.equal(S.finalScan({ m }, { keywords: ['site'] }).length, 1, m);
   }

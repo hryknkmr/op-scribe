@@ -589,8 +589,11 @@
           return `${scheme} `;
         });
         return [...scrubText(body, { keywords: opts.keywords }).kinds,
-          // The alias is the host name; a port after it is not part of it (review of #34 R2).
-          ...(keywords && urlHosts.some((h) => !ALIAS.test(h.toLowerCase().replace(/:\d*$/, '')) && h.match(keywords)) ? ['keyword'] : []),
+          // Only the alias's host name is left out; a port after it is scanned like any text (reviews of #34 R2, R9).
+          ...(keywords && urlHosts.some((h) => {
+            const name = h.replace(/:\d*$/, '');
+            return (ALIAS.test(name.toLowerCase()) ? h.slice(name.length) : h).match(keywords);
+          }) ? ['keyword'] : []),
           ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
       });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
