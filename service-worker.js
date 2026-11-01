@@ -15,14 +15,12 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS } = self.OpScribeLimits;
-const { buildReproduction, toMarkdown, toGherkin } = self.OpScribeDescribe;
-const { policyOf, envOf, cleanStep } = self.OpScribeRecord;
+const { policyOf, envOf, cleanStep, appendStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
-const MAX_STEPS = LIMITS.steps;
 
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {
   try {
@@ -64,7 +62,12 @@ function mutate(fn) {
   const run = queue.then(async () => {
     const rec = await getRecording();
     const result = await fn(rec);
-    if (result?.save) await chrome.storage.session.set({ [REC_KEY]: result.save });
+    // Every save fits the recording's share first (fitRecord); one that still fails is an error
+    // to the caller, never a step that silently went missing (reviews R40, R43).
+    if (result?.save) {
+      fitRecord(result.save);
+      await chrome.storage.session.set({ [REC_KEY]: result.save });
+    }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
     await result?.after?.();
@@ -136,12 +139,6 @@ function newId() {
  * Every change to the steps bumps the revision, so the panel can tell that a
  * reproduction it generated earlier no longer matches the recording (#16).
  */
-function appendStep(rec, step) {
-  if (!step) return;
-  rec.revision = (rec.revision || 0) + 1;
-  rec.steps.push(step);
-  if (rec.steps.length > MAX_STEPS) rec.steps.splice(0, rec.steps.length - MAX_STEPS);
-}
 
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
 
@@ -209,7 +206,11 @@ const addPattern = (url) => mutate(async (rec) => {
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
   }
-  if (!rec.grantedPatterns.includes(pattern)) rec.grantedPatterns.push(pattern);
+  if (!rec.grantedPatterns.includes(pattern)) {
+    // As many sites as the alias table holds, no more (E2; review R43).
+    if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
+    rec.grantedPatterns.push(pattern);
+  }
   await syncContentScripts(rec.grantedPatterns);
   await injectNow(rec.tabId);
   return { save: rec, reply: { ok: true } };
@@ -225,23 +226,14 @@ async function webmcpRequest(rec, sender, { op, args }) {
   if (!isRecordingTab(rec, sender.tab?.id)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const settings = await getSettings();
   const site = siteOf(rec, settings, sender.origin);
-  // Steps on other sites are never handed to this page.
-  const own = rec.steps.filter((s) => s.url?.startsWith(`${site}/`) || (!s.url && s.type === 'note'));
-
-  if (op === 'status') {
-    return { reply: { ok: true, recording: true, site, stepsOnThisSite: own.length, totalSteps: rec.steps.length } };
-  }
-  if (op === 'reproduction') {
-    const scoped = { ...rec, steps: own, startUrl: own[0]?.url };
-    return {
-      reply: { ok: true, site, steps: own.length, markdown: toMarkdown(buildReproduction(scoped)), gherkin: toGherkin(scoped) }
-    };
-  }
+  // Steps on other sites are never handed to this page; every answer goes through the final scan (W8, E6).
+  const answer = webmcpReply(rec, settings, site, op);
+  if (answer) return { reply: answer };
   if (op === 'expect') {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     appendStep(rec, cleanStep({ type: 'note', note, source: 'agent' }, rec, settings, fromOf(sender)));
-    return { save: rec, reply: { ok: true, added: rec.steps[rec.steps.length - 1].note } };
+    return { save: rec, reply: guardReply({ ok: true, added: rec.steps[rec.steps.length - 1].note }, rec, settings) };
   }
   return { reply: { ok: false, error: 'UNKNOWN_OP' } };
 }
@@ -296,6 +288,8 @@ async function handle(message, sender) {
       }
       if (type === 'WEBMCP_TOOLS') {
         const site = siteOf(rec, settings, new URL(detail.pageUrl).origin);
+        // A site past the alias limit is not recorded (K5): neither are its tools.
+        if (site.startsWith('[[')) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).
         if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
         rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)

@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 GUARD="$ROOT/scripts/pii-guard.sh"
-[[ -x "$GUARD" ]] || { echo "pre-commit: pii-guard.sh が無い/実行不可のためスキップ"; exit 0; }
+[[ -x "$GUARD" ]] || { echo "pre-commit: pii-guard.sh が無い/実行不可のため中止します" >&2; exit 1; }
 
 if [[ "${PII_GUARD_SKIP:-}" == "1" ]]; then
   echo "⚠ pre-commit: PII_GUARD_SKIP=1 によりバイパス（CI では遮断されます）"

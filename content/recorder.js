@@ -104,7 +104,7 @@
       tag: el.tagName.toLowerCase(),
       selector: selectorFor(el)
     };
-    if (el.tagName === 'A' && el.href) target.href = el.href;
+    if ((el.tagName === 'A' || el.tagName === 'AREA') && el.href) target.href = el.href;
     return target;
   }
 
@@ -116,6 +116,12 @@
       id: el.id,
       autocomplete: el.getAttribute('autocomplete'),
       label: accessibleName(el),
+      // The text of every <label> of the field, apart from its accessible name: an aria-label
+      // must not hide a label that says "password" from the classification (I3, I4; review R38).
+      // aria-labelledby too: an aria-label must not hide either (review R42).
+      labelText: [...(el.labels || []),
+        ...String(el.getAttribute('aria-labelledby') || '').split(/\s+/).filter(Boolean).map((id) => document.getElementById(id)).filter(Boolean)]
+        .map((l) => l.innerText || l.textContent || '').join(' '),
       placeholder: el.getAttribute('placeholder'),
       ariaLabel: el.getAttribute('aria-label'),
       role: el.getAttribute('role'),

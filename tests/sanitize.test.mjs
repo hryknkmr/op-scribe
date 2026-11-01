@@ -280,8 +280,23 @@ test('finalScan still scans what a placeholder carries (rows E4, E6; review new 
 test('one call keeps at most 20 argument values (row W5)', () => {
   const wide = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`, Array.from({ length: 10 }, (_, j) => j)]));
   const out = S.maskArgs(wide, { env: 'standard' });
-  const leaves = Object.values(out).reduce((n, list) => n + list.length, 0);
-  assert.equal(leaves, 20);
+  // Each array is a value too (review R38): the arrays and their items add up to 20.
+  const values = Object.values(out).reduce((n, list) => n + 1 + list.length, 0);
+  assert.equal(values, 20);
+});
+
+test('nesting cannot hold more values than the budget: empty objects and arrays count (row W5; review R38)', () => {
+  const deep = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`k${i}`,
+    Array.from({ length: 10 }, () => Object.fromEntries(Array.from({ length: 20 }, (_, j) => [`j${j}`, {}])))]));
+  const out = S.maskArgs(deep, { env: 'standard' });
+  const count = (node, depth = 0) => (node === null || typeof node !== 'object' || node.treatment ? 1
+    : (depth > 0 ? 1 : 0) + Object.values(node).reduce((n, c) => n + count(c, depth + 1), 0));
+  assert.ok(count(out) <= 20, String(count(out)));
+});
+
+test('a field labelled as a password is classified by its label, whatever its aria-label (rows I3, I4; review R38)', () => {
+  assert.equal(S.classifyField({ type: 'text', label: 'Comment', labelText: 'Password' }).kind, 'secret');
+  assert.equal(S.classifyField({ type: 'text', label: 'Comment', labelText: 'メールアドレス' }).kind, 'pii');
 });
 
 test('the count in [[text:N]] is not a number to find (review R11)', () => {
@@ -361,4 +376,80 @@ test('a host with a trailing dot is the same site (row U4; review R24)', () => {
 test('argument keys are one line before they are kept (E7; review R27)', () => {
   const args = S.maskArgs({ 'a\tb\nc': 'x' }, { env: 'standard' });
   assert.deepEqual(Object.keys(args), ['a b c']);
+});
+
+test('a URL path never carries a page-made placeholder (K1, U5; review R29)', () => {
+  const { url } = S.scrubUrl('https://example.com/[[secret]]/a', { hostAllowlist: ['example.com'] });
+  assert.equal(url, 'https://example.com/%5B%5Bsecret%5D%5D/a');
+  assert.deepEqual(S.finalScan({ url }), []);
+});
+
+test('a scheme named like a marker of ours is just invalid (U2; review R30)', () => {
+  for (const scheme of ['none', 'long', 'invalid']) assert.equal(S.scrubUrl(`${scheme}:private`).url, '[[url:invalid]]', scheme);
+  assert.equal(S.scrubUrl('mailto:x').url, '[[url:mailto]]');
+});
+
+test('patterns see the text before keywords are masked (K2, K3; review R30)', () => {
+  const token = S.scrubText('token=abcdef', { keywords: ['token'] });
+  assert.ok(token.kinds.includes('secret') && !token.text.includes('abcdef'), token.text);
+  const mail = S.scrubText('user@example.com', { keywords: ['example'] });
+  assert.ok(mail.kinds.includes('email') && !mail.text.includes('user'), mail.text);
+  assert.deepEqual(S.scrubText('Acme の件', { keywords: ['Acme'] }), { text: '[[masked]] の件', kinds: ['keyword'] });
+});
+
+test('a keyword never breaks a placeholder the patterns made (K2; review R31)', () => {
+  const r = S.scrubText('to user@example.com', { keywords: ['[['] });
+  assert.equal(r.text, 'to [[email]]');
+  assert.equal(S.scrubText('x [[ y', { keywords: ['[['] }).text, 'x [ [ y', 'a page "[[" is broken first (K1), so the word never appears');
+});
+
+test('the host of a URL is left out of the patterns only: an allowed IP host passes, user info and keywords do not (U4, E6; review R32)', () => {
+  assert.deepEqual(S.finalScan({ u: 'https://10.0.0.1/a', g: 'Given "https://10.0.0.1:8080/x" を開いている' }), []);
+  assert.deepEqual(S.finalScan({ n: 'メモ 10.0.0.1' }), [{ path: 'n', kinds: ['ip'] }]);
+  // Built here so no credential-shaped URL sits in the file (AGENTS.md).
+  const withUser = [`https://user:${'pa'}ss`, '10.0.0.1/'].join('@');
+  assert.ok(S.finalScan({ u: withUser }).length);
+  assert.deepEqual(S.finalScan({ u: 'https://acme.example.com/' }, { keywords: ['acme'] }), [{ path: 'u', kinds: ['keyword'] }]);
+});
+
+test('an address with an IP domain literal is one email (K3; review R32)', () => {
+  assert.equal(S.scrubText('alice@[127.0.0.1] x').text, '[[email]] x');
+});
+
+test('keywords fold case outside the BMP, and a local part keeps none of its ASCII symbols (K2, K3; review R33)', () => {
+  assert.equal(S.scrubText('\u{10428}\u{10429} x', { keywords: ['\u{10400}\u{10401}'] }).text, '[[masked]] x');
+  assert.equal(S.scrubText('sales!ops@example.com').text, '[[email]]');
+  assert.equal(S.scrubText("o'brien+tag@example.com").text, '[[email]]');
+});
+
+test('a keyword is normalized like the text it is matched against (K2, E6; review R35)', () => {
+  for (const hidden of ['\u200B', '\u2060', '\u00AD']) {
+    const keyword = `Ac${hidden}me`;
+    assert.deepEqual(S.scrubText(`${keyword} の件`, { keywords: [keyword] }), { text: '[[masked]] の件', kinds: ['keyword'] }, JSON.stringify(hidden));
+    assert.deepEqual(S.finalScan({ s: 'Acme' }, { keywords: [keyword] }), [{ path: 's', kinds: ['keyword'] }]);
+  }
+  assert.equal(S.usableKeyword('a\u200B'), false, 'one character once the hidden one is gone');
+});
+
+test('a quoted local part with an escaped quote is one email (K3; review R39)', () => {
+  assert.equal(S.scrubText('"customer-name\\"x"@example.com').text, '[[email]]');
+});
+
+test('North American phone numbers are found (K3; review R41)', () => {
+  assert.equal(S.scrubText('call 212-555-0123 or (212) 555-0123').text, 'call [[phone]] or [[phone]]');
+});
+
+test('past the alias limit a new host is redacted whole and marked untracked; the table stops growing (U4, K5; reviews R41, R42)', () => {
+  const { LIMITS } = require('../shared/limits.js');
+  const aliases = {};
+  for (let i = 0; i < LIMITS.aliases; i += 1) S.scrubUrl(`https://h${i}.example.com/`, { aliases });
+  const r = S.scrubUrl('https://one-more.example.com/', { aliases });
+  assert.equal(r.url, '[[url:invalid]]');
+  assert.equal(r.untracked, true);
+  assert.equal(Object.keys(aliases).length, LIMITS.aliases);
+  assert.equal(new URL(S.scrubUrl('https://h3.example.com/x', { aliases }).url).host, 'site-4.invalid', 'known hosts keep theirs');
+});
+
+test('a card number with dots is found (K3; review R43)', () => {
+  assert.equal(S.scrubText(['4111', '1111', '1111', '1111'].join('.')).text, '[[card]]');
 });

@@ -17,7 +17,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, cut, primaryRole } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, cut, primaryRole, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
   const mark = (kind) => `[[${kind}]]`;
   const PLACEHOLDER = /\[\[[a-z0-9:_-]+\]\]/gi;
   // Only the placeholders this extension makes. finalScan skips these and nothing
@@ -25,7 +25,7 @@
   // Counts only within the limits (text up to 1,000,000, file up to 999), without leading zeros,
   // so "[[text:09012345678]]" written by hand is scanned like any other text.
   // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
-  const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/g;
+  const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
   const OWN_PLACEHOLDER = /\[\[(?:url:([a-z][a-z0-9+.-]{0,15})|text:(?:0|[1-9]\d{0,5}|1000000)|file:(?:0|[1-9]\d{0,2})|secret|card|email|phone|personal|postal|id|ip|number|masked|nested|value|v)\]\]/g;
 
   /** The redaction kind of each of our placeholders in a text: what it holds now, however it got there (row M1). */
@@ -74,10 +74,13 @@
       replace: (match, word, sep) => `${word}${sep}${mark('secret')}`
     },
     // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
-    { kind: 'email', re: /(?:"[^"\r\n]{1,64}"|[\w.%+-]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*/g },
-    { kind: 'card', re: /(?<!\d)\d(?:[ -]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
+    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|[\w.!#$%&'*+/=?^`{|}~-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
+    { kind: 'card', re: /(?<!\d)\d(?:[ .-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
+    // North American numbers: 212-555-0123, (212) 555-0123 (review R41).
+    { kind: 'phone', re: /(?<![\d-])\d{3}-\d{3}-\d{4}(?![\d-])|\(\d{3}\) ?\d{3}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g },
     { kind: 'postal', re: /〒\s*\d{3}-?\d{4}|(?<![\d-])\d{3}-\d{4}(?![\d-])/g },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi },
@@ -99,17 +102,21 @@
    * a placeholder name. A keyword such as "mail" cannot tell a real [[email]]
    * from one written by hand, so it is not used rather than used half way.
    */
+  /** A keyword as the text it is matched against: NFKC and without hidden characters (K2; review R35). */
+  const keywordForm = (raw) => String(raw).normalize('NFKC').replace(INVISIBLE, '').trim();
+
   function usableKeyword(raw) {
-    const k = String(raw).normalize('NFKC').trim();
+    const k = keywordForm(raw);
     return [...k].length >= 2 && !PLACEHOLDER_WORDS.some((w) => w.includes(k.toLowerCase()));
   }
 
   function keywordPattern(keywords) {
     const list = (keywords || [])
-      .map((k) => String(k).normalize('NFKC').trim())
+      .map(keywordForm)
       .filter(usableKeyword)
       .sort((a, b) => b.length - a.length);
-    return list.length ? new RegExp(list.map(escapeRe).join('|'), 'gi') : null;
+    // u: case is folded for every character, outside the BMP too ("𐐀" and "𐐨"; review R33).
+    return list.length ? new RegExp(list.map(escapeRe).join('|'), 'giu') : null;
   }
 
   /**
@@ -133,14 +140,9 @@
       text = text.replace(/[\uE000\uE001]/g, '').replace(OWN_PLACEHOLDER, (m) => `\uE000${String.fromCharCode(0xE100 + kept.push(m) - 1)}\uE001`);
     }
 
-    const keywords = keywordPattern(opts.keywords);
-    if (keywords) {
-      text = text.replace(keywords, () => {
-        kinds.push('keyword');
-        return mark('masked');
-      });
-    }
-
+    // The patterns first, on the text as written: a keyword masked first would break the
+    // context they need ("token=abcd", "user@example.com" with "example" listed; review R30).
+    // A keyword is never part of a placeholder name (usableKeyword), so it cannot break one.
     for (const rule of RULES) {
       text = text.replace(rule.re, (...args) => {
         const match = args[0];
@@ -148,6 +150,23 @@
         kinds.push(rule.kind);
         return rule.replace ? rule.replace(...args) : mark(rule.kind);
       });
+    }
+
+    // Keywords only between the placeholders: a keyword such as "[[" must not break one
+    // the patterns just made into "[[masked]]email]]" (review R31).
+    const keywords = keywordPattern(opts.keywords);
+    if (keywords) {
+      const mask = (part) => part.replace(keywords, () => {
+        kinds.push('keyword');
+        return mark('masked');
+      });
+      let out = '';
+      let last = 0;
+      for (const m of text.matchAll(OWN_PLACEHOLDER)) {
+        out += mask(text.slice(last, m.index)) + m[0];
+        last = m.index + m[0].length;
+      }
+      text = out + mask(text.slice(last));
     }
 
     if (kept.length) text = text.replace(/\uE000([\uE100-\uF8FF])\uE001/g, (m, c) => kept[c.charCodeAt(0) - 0xE100] ?? '');
@@ -192,7 +211,7 @@
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
-    const hints = [meta.name, meta.id, meta.label, meta.placeholder, meta.ariaLabel]
+    const hints = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel]
       .filter(Boolean).join(' ').normalize('NFKC').replace(INVISIBLE, '');
 
     if (type === 'hidden') return { kind: 'ignore' };
@@ -281,6 +300,9 @@
     const spend = () => (budget.leaves -= 1) >= 0;
     if (isLeaf(node)) return spend() ? leaf(node) : DROP;
     if (depth >= LIMITS.argDepth) return spend() ? typed.redacted('arg', 'nested') : DROP;
+    // An object or array below the root is a value too, empty or not: counted, so nesting
+    // cannot hold thousands of keys past the argLeaves the totals are built on (W5; review R38).
+    if (depth > 0 && !spend()) return DROP;
     const walk = (child) => walkArgs(child, handlers, depth + 1, budget);
     if (Array.isArray(node)) return node.slice(0, LIMITS.argItems).map(walk).filter((v) => v !== DROP);
     const out = {};
@@ -361,7 +383,11 @@
   }
 
   function aliasFor(origin, aliases) {
-    if (!aliases[origin]) aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
+    if (aliases[origin]) return aliases[origin];
+    // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
+    // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
+    if (Object.keys(aliases).length >= LIMITS.aliases) return null;
+    aliases[origin] = `site-${Object.keys(aliases).length + 1}.invalid`;
     return aliases[origin];
   }
 
@@ -387,18 +413,23 @@
       return { url: mark('url:invalid'), kinds: ['url'] };
     }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return { url: mark(`url:${url.protocol.replace(':', '').slice(0, LIMITS.scheme)}`), kinds: ['url'] };
+      // none, long and invalid name our own markers (no URL, too long, unparsable): a
+      // scheme of that name would read as one of them, so it is just invalid (U2; review R30).
+      const scheme = url.protocol.replace(':', '').slice(0, LIMITS.scheme);
+      return { url: mark(`url:${['none', 'long', 'invalid'].includes(scheme) ? 'invalid' : scheme}`), kinds: ['url'] };
     }
 
     const host = parsedHost(url.hostname);
-    const commercial = ctx.env === 'commercial' || hostAllowed(host, ctx.commercialHosts);
+    const commercial = ctx.env === 'commercial' || ctx.allCommercial === true || hostAllowed(host, ctx.commercialHosts);
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
     if (hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
-      origin = `${url.protocol}//${aliasFor(`${url.protocol}//${host}${port}`, aliases)}`;
+      const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
+      if (!alias) return { url: mark('url:invalid'), kinds: ['url', 'host'], untracked: true };
+      origin = `${url.protocol}//${alias}`;
       kinds.push('host');
     }
 
@@ -410,7 +441,8 @@
       if (ID_SEGMENT.test(decoded)) { kinds.push('id'); return ':id'; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
       if (r.kinds.length) { kinds.push(...r.kinds); return ':masked'; }
-      return seg;
+      // The parser leaves [ and ] as they are; encoded, a page's "[[secret]]" never reads as ours (K1).
+      return seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D');
     }).join('/');
 
     const params = [];
@@ -473,6 +505,9 @@
     return code === 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) ? '\uFFFD' : String.fromCodePoint(code);
   });
 
+  // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
+  const URL_HOST = /(https?:\/\/)([^\/\s"'<>|?#\\@]+)(?=[\/\s"'<>|?#\\]|$)/gi;
+
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
@@ -482,8 +517,19 @@
       // [[file:N]] is ours and only digits, so it is skipped with the placeholder.
       const plain = String(text).replace(OWN_PLACEHOLDER, (m, arg) => ` ${arg ?? ''} `);
       // As written and with CSS escapes undone: a selector carries them (review R23).
-      const kinds = [plain, cssUnescape(plain)].flatMap((t) => [...scrubText(t, { keywords: opts.keywords }).kinds,
-        ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])]);
+      const kinds = [plain, cssUnescape(plain)].flatMap((t) => {
+        // The host of a URL is left out of the patterns (K3) only: it is an alias or a host the
+        // user allowed by name, an IP host too (U4; review R32). Keywords and real hosts still apply.
+        const urlHosts = [];
+        const body = t.replace(URL_HOST, (m, scheme, host) => {
+          urlHosts.push(host.normalize('NFKC'));
+          return `${scheme} `;
+        });
+        const keywords = keywordPattern(opts.keywords);
+        return [...scrubText(body, { keywords: opts.keywords }).kinds,
+          ...(keywords && urlHosts.some((h) => h.match(keywords)) ? ['keyword'] : []),
+          ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
+      });
       if (kinds.length) findings.push({ path: path || '(root)', kinds: [...new Set(kinds)] });
     };
     const walk = (v, path) => {

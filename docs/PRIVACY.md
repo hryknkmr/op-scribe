@@ -31,10 +31,10 @@ op-scribe は公開リポジトリで管理する前提で作っています。�
 | 段 | 仕組み | 回避 |
 | --- | --- | --- |
 | commit | `.githooks/pre-commit`（identity・staged 内容・unit test）、`commit-msg` | `PII_GUARD_SKIP=1` で一時回避可 |
-| push | `.githooks/pre-push`（push 範囲の追加行と identity） | 同上 |
-| merge | `.github/workflows/pii-guard.yml`（全 tracked ファイルと PR の全コミット） | 回避不可。required check にする |
+| push | `.githooks/pre-push`（push 範囲の各コミットの追加行とコミットメッセージ、identity） | 同上 |
+| merge | `.github/workflows/pii-guard.yml`（全 tracked ファイル、範囲内の**各コミット**の追加行とコミットメッセージ、author/committer の email。範囲は PR ではその PR のコミット、main への push では root からの全履歴） | required check にすれば回避できない（今のプランの private リポジトリでは設定できないので、公開時に設定する。#20） |
 
-CI にはローカル denylist が無いため、CI が見るのは汎用パターンだけです。社名などの検出はローカル hooks
+CI にはローカル denylist が無いため、CI が見るのは汎用パターンだけです。author/committer の**名前**はまだ検査していません（GitHub 上でマージしたコミットにはアカウントの表示名が入るため、扱いを #20 で決めてから入れます）。社名などの検出はローカル hooks
 が担うので、**clone したら最初に `pnpm setup-hooks` と local denylist の配置**を行ってください。
 
 ## 2. 送信境界（拡張が記録するデータ）

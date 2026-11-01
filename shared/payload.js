@@ -19,7 +19,7 @@
 
   const D = root.OpScribeDescribe || require('./describe.js');
   // Limits are shared with the masking; the judgment is not (see above).
-  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
 
   const SCHEMA = 'op-scribe.recording/v2';
   const POLICY = 'commercial-strict/1';
@@ -32,7 +32,7 @@
   // or a Markdown heading, and an invisible or bidi control hides text from the reviewer.
   const cutStr = (row, n) => ({ type: 'string', row, max: cut(n), cutAt: n });
   const BREAKS = /[\p{Cc}\p{Zl}\p{Zp}]/u;
-  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/u;
+  const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
 
   /**
    * Row E7 at the gate, for every string of the recording rather than a list of
@@ -103,7 +103,7 @@
         fields: {
           policy: { type: 'const', row: 'M1', value: POLICY },
           coverage: { type: 'enum', row: 'M1', values: ['commercial', 'standard', 'mixed', 'none'] },
-          hostsAliased: { type: 'int', row: 'M1', min: 0 },
+          hostsAliased: { type: 'int', row: 'M1', min: 0, max: LIMITS.aliases },
           redactions: { type: 'map', row: 'M1', keys: REDACTION_KINDS, of: { type: 'int', row: 'M1', min: 0, max: LIMITS.redactionCount } }
         }
       },
@@ -257,9 +257,10 @@
 
   /** Rows W1-W5: null, booleans and typed values, in arrays and objects up to depth 3. */
   /** Values (leaves) in an argument tree, counted only as deep as checkArgs accepts. */
-  function countLeaves(node, depth = 0) {
+  // Every value of the arguments, an object or array below the root included (W5; review R38).
+  function countValues(node, depth = 0) {
     if (node === null || typeof node !== 'object' || typeof node.treatment === 'string' || depth > LIMITS.argDepth) return 1;
-    return Object.values(node).reduce((n, child) => n + countLeaves(child, depth + 1), 0);
+    return (depth > 0 ? 1 : 0) + Object.values(node).reduce((n, child) => n + countValues(child, depth + 1), 0);
   }
 
   function checkArgs(node, env, path, problems, depth = 0) {
@@ -364,6 +365,10 @@
     if (step.type === 'upload' && step.value !== undefined && field !== 'file') problems.push({ path: `${path}.value`, problem: 'upload is not a file value' });
     if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
     if (step.type === 'tool' && step.source !== 'agent') problems.push({ path: `${path}.source`, problem: 'tool step not from agent' });
+    // The fields each kind of step can hold (I5): a select is a choice (or secret or personal by its names),
+    // never free text with the longer limit; an input is never a file (review R31).
+    const allowed = { select: ['choice', 'secret', 'pii'], input: ['text', 'search', 'choice', 'secret', 'pii'] }[step.type];
+    if (allowed && field !== undefined && !allowed.includes(field)) problems.push({ path: `${path}.value`, problem: `${field} value in ${step.type}` });
   }
 
   const SAFE_VALUE = /^[\w.-]{1,24}$/;
@@ -377,14 +382,18 @@
    * step every query value is [[v]] and there is no fragment (the interim
    * rule until ③). site (WebMCP) is an origin only.
    */
-  function checkUrl(value, env, path, problems, { origin = false } = {}) {
+  function checkUrl(value, env, path, problems, { origin = false, none = false } = {}) {
     const bad = (problem) => problems.push({ path, problem });
+    // The no-URL marker is a start URL only, never a URL a step holds (review R30).
+    if (value === '[[url:none]]' && !none) return bad('no-URL marker as a URL');
     if (PLACEHOLDER_URL.test(value)) return;
     let url;
     try { url = new URL(value); } catch { return bad('not a URL'); }
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return bad('not http(s)');
     if (url.username || url.password) return bad('credentials in URL');
     if (origin && (url.pathname !== '/' || url.search || url.hash || value !== url.origin)) return bad('not an origin');
+    // K1 in URLs: the only "[" a URL carries is the masking's own [[v]] query value (review R29).
+    if (/[[\]]/.test(url.pathname) || /[[\]]/.test(url.search.replace(/=\[\[v\]\](?=&|$)/g, '='))) return bad('bracket outside a placeholder');
     if (env === 'commercial') {
       for (const [, v] of url.searchParams) if (v && v !== '[[v]]') return bad('commercial query value kept');
       if (url.hash) return bad('commercial fragment kept');
@@ -409,7 +418,10 @@
     const start = payload.recording.startUrl;
     const startStep = steps.find((s) => s.url === start);
     if (!startStep && start !== '[[url:none]]') problems.push({ path: 'recording.startUrl', problem: 'not a URL of the steps' });
-    checkUrl(start, startStep?.env, 'recording.startUrl', problems);
+    else if (start !== D.startUrlOf(payload.recording)) problems.push({ path: 'recording.startUrl', problem: 'not the first URL of the steps' });
+    // [[url:none]] means no step has a URL: with one, the start is that URL (startUrlOf; review R30).
+    if (start === '[[url:none]]' && steps.some((s) => s.url !== undefined)) problems.push({ path: 'recording.startUrl', problem: 'no URL while a step has one' });
+    checkUrl(start, startStep?.env, 'recording.startUrl', problems, { none: true });
     payload.recording.webmcpTools.forEach((w, i) => checkUrl(w.site, 'standard', `recording.webmcpTools[${i}].site`, problems, { origin: true }));
     steps.forEach((step, i) => {
       const path = `recording.steps[${i}]`;
@@ -422,7 +434,7 @@
       if (step.value?.field === 'arg') problems.push({ path: `${path}.value`, problem: 'argument value outside args' });
       if (step.args !== undefined) {
         checkArgs(step.args, step.env, `${path}.args`, problems);
-        if (countLeaves(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
+        if (countValues(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
       }
     });
     // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.
@@ -471,11 +483,17 @@
       }
     };
     walk(payload?.recording, 'recording');
+    // A search box or a choice is kept in either environment (I5, I6): redacted only when the worker had to.
+    (payload?.recording?.steps || []).forEach((step, i) => {
+      if (['search', 'choice'].includes(step.value?.field) && step.value.treatment !== 'kept') bad(`recording.steps[${i}].value`, 'search or choice not kept');
+    });
     // A key the masking made unique ends in -2 .. -argKeys, at its cut length (W5).
     const keys = (node, path) => {
       if (!isObject(node) && !Array.isArray(node)) return;
       if (isTypedLeaf(node)) return;
       for (const [k, v] of Object.entries(node)) {
+        const body = k.replace(/…$/u, '');
+        if (body.normalize('NFKC') !== body) bad(`${path}.${k}`, 'key not NFKC');
         const n = Number(/-(\d+)$/.exec(k)?.[1]);
         if (!Array.isArray(node) && [...k].length === cut(LIMITS.argKey) && n > LIMITS.argKeys) bad(`${path}.${k}`, 'key suffix past the key count');
         keys(v, `${path}.${k}`);

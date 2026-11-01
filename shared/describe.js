@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, typedAllowed } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, typedAllowed, HIDDEN_CHARS } = root.OpScribeLimits || require('./limits.js');
 
   const LABELS = {
     secret: '秘匿値',
@@ -74,15 +74,14 @@
   }
 
   /**
-   * Where the recording starts, from the steps it still has: the recorded
-   * start URL only while a step still carries it (a deleted first navigation
-   * must not come back, #16), otherwise the first step's URL, or [[url:none]].
+   * Where the recording starts, from the steps it still has: the URL of the
+   * first step that has one, or [[url:none]]. Never the recorded start URL by
+   * itself: a deleted first navigation must not come back, not even when a
+   * later step goes to the same URL (#16; review R34).
    * The Markdown, the Gherkin, the payload and the model input all use this.
    */
   function startUrlOf(rec) {
-    const steps = rec?.steps || [];
-    if (rec?.startUrl && steps.some((s) => s.url === rec.startUrl)) return rec.startUrl;
-    return steps.find((s) => s.url)?.url || '[[url:none]]';
+    return (rec?.steps || []).find((s) => s.url)?.url || '[[url:none]]';
   }
 
   const NOTE_KIND_LABELS = { bug: '不具合', question: '疑問', idea: '気づき', next: '次に試す' };
@@ -96,6 +95,16 @@
 
   function panelNoteEnv(steps) {
     return (steps || []).some((s) => !isPanelNote(s) && s.env === 'commercial') ? 'commercial' : 'standard';
+  }
+
+  /**
+   * The steps with every panel note's environment decided again from the
+   * recording (all: its whole step list, when steps is a part of it), so each
+   * output reads one environment for the same recording (review R36).
+   */
+  function withPanelNoteEnv(steps, all = steps) {
+    const env = panelNoteEnv(all);
+    return (steps || []).map((s) => (isPanelNote(s) && s.env !== env ? { ...s, env } : s));
   }
 
   /** commercial | standard | mixed | none, from the environment of each step. */
@@ -146,7 +155,7 @@
    * otherwise start a new Gherkin step or Markdown item.
    */
   // Zero-width and bidi controls hide or reorder text for the reader (E7): never rendered.
-  const HIDDEN = /[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]/gu;
+  const HIDDEN = new RegExp(HIDDEN_CHARS, 'gu');
   const line = (text) => String(text ?? '').replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
 
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
@@ -330,9 +339,9 @@
    *   When   - each operation, with its attribute table
    *   Then   - navigation it caused, and notes / expected results
    */
-  function toGherkin(rec) {
+  function toGherkin(rec, { envSteps } = {}) {
     const steps = rec?.steps || [];
-    const coverage = coverageOf(steps);
+    const coverage = coverageOf(withPanelNoteEnv(steps, envSteps || steps));
     const out = [
       '# op-scribe: Gherkin + attributes',
       `# recording: ${rec?.id || 'unknown'} / environments: ${coverage}`,
@@ -381,7 +390,7 @@
     return `${out.map(line).join('\n')}\n`;
   }
 
-  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
