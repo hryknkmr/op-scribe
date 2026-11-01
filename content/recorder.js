@@ -48,6 +48,8 @@
   }
 
   async function hello() {
+    // What the last recording's operation caused stays out of the next one.
+    stopNotices();
     const response = await send('HELLO');
     config = response?.active ? response.config : null;
     if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
@@ -164,7 +166,7 @@
 
   /** Each notice once: a region inside one that is read is part of it, and one inside a form region stands alone. */
   function noticeRegions() {
-    const read = [...document.querySelectorAll(NOTICE)].slice(0, 50).map((el) => [el, noticeText(el)]).filter(([, text]) => text);
+    const read = [...document.querySelectorAll(NOTICE)].map((el) => [el, noticeText(el)]).filter(([, text]) => text).slice(0, 50);
     return read.filter(([el]) => !read.some(([other]) => other !== el && other.contains(el)));
   }
 
