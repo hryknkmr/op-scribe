@@ -326,8 +326,10 @@ test('a git hook\'s GIT_DIR never reaches the scratch repositories (review of #2
   // A repository standing in for the one a worktree commit runs the hook in.
   const victim = mkdtempSync(join(tmpdir(), 'opscribe-victim-'));
   execFileSync('git', ['init', '-q', '-b', 'main', victim]);
+  writeFileSync(join(victim, 'v.txt'), 'v\n');
+  execFileSync('git', ['-C', victim, 'add', 'v.txt']);
   const gitDir = join(victim, '.git');
-  const before = readFileSync(join(gitDir, 'config'), 'utf8');
+  const before = { config: readFileSync(join(gitDir, 'config'), 'utf8'), index: readFileSync(join(gitDir, 'index')) };
   // The child's scratch repositories go here, so the test can see that they were made.
   const scratch = mkdtempSync(join(tmpdir(), 'opscribe-scratch-'));
   const env = { ...process.env, GIT_DIR: gitDir, GIT_INDEX_FILE: join(gitDir, 'index'), TMPDIR: scratch };
@@ -341,6 +343,7 @@ test('a git hook\'s GIT_DIR never reaches the scratch repositories (review of #2
   assert.equal(made.length, 1, readdirSync(scratch).join(', '));
   assert.equal(spawnSync('git', ['-C', join(scratch, made[0]), 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 0);
   // ... and the repository the hook pointed at is as it was.
-  assert.equal(readFileSync(join(gitDir, 'config'), 'utf8'), before);
+  assert.equal(readFileSync(join(gitDir, 'config'), 'utf8'), before.config);
+  assert.ok(readFileSync(join(gitDir, 'index')).equals(before.index), 'its index is as it was');
   assert.equal(spawnSync('git', ['-C', victim, 'rev-parse', '--verify', '-q', 'HEAD'], { encoding: 'utf8' }).status, 1, 'no commit was made there');
 });
