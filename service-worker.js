@@ -70,8 +70,8 @@ function mutate(fn) {
     }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
-    await result?.after?.();
-    return result?.reply;
+    const late = await result?.after?.();
+    return late ?? result?.reply;
   });
   queue = run.catch(() => {});
   return run;
@@ -118,8 +118,10 @@ async function injectNow(tabId) {
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
+    return true;
   } catch (error) {
     console.warn('[op-scribe] inject failed', error);
+    return false;
   }
 }
 
@@ -152,7 +154,6 @@ async function start({ tabId, url }) {
     return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
-    if (previous?.state === 'recording') await stopTab(previous);
     const rec = {
       id: newId(),
       state: 'recording',
@@ -172,15 +173,17 @@ async function start({ tabId, url }) {
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
     appendStep(rec, cleanStep({ type: 'navigate', pageUrl: url }, rec, settings, { tabUrl: url }));
     try {
+      if (previous?.state === 'recording') await stopTab(previous);
       await syncContentScripts(rec.grantedPatterns);
       await setBadge(true);
     } catch (error) {
       if (previous?.state !== 'recording') throw error;
-      // stopTab has already ended it: do not leave it saved as still recording.
+      // stopTab may have ended it already, in part: do not leave it saved as still recording.
       return { save: { ...previous, state: 'stopped', endedAt: Date.now() }, reply: { ok: false, error: String(error?.message || error) } };
     }
     // After the save: the injected script asks at once whether this tab is recording.
-    return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
+    // A failed injection is not a failed start: the registered scripts still reach the next page.
+    return { save: rec, after: async () => ((await injectNow(tabId)) ? { ok: true } : { ok: true, warning: 'PAGE_NOT_ATTACHED' }) };
   });
 }
 

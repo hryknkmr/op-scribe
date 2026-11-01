@@ -171,6 +171,9 @@ async function refreshActiveTab() {
   }
 }
 
+// What the last START left to say; a plain status line would be rewritten by the next render.
+let startNotice = '';
+
 function renderStatus() {
   const url = activeTab?.url || '';
   if (!pagePattern(url)) {
@@ -179,6 +182,9 @@ function renderStatus() {
   }
   const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
+  // A step after the opening one shows the recorder has reached the page.
+  if (startNotice && (!isRecTab || recording.steps.length <= 1)) ui.tabStatus.textContent = startNotice;
+  else startNotice = '';
 }
 
 function render() {
@@ -246,7 +252,9 @@ ui.start.addEventListener('click', () => {
       return;
     }
     const result = await send('START', { tabId: tab.id, url: tab.url });
-    if (!result?.ok) ui.tabStatus.textContent = `記録を開始できません (${result?.error || 'unknown'})`;
+    if (!result?.ok) startNotice = `記録を開始できません (${result?.error || 'unknown'})`;
+    else if (result.warning) startNotice = '開いているページを記録できていません。ページを再読み込みしてください';
+    else startNotice = '';
     ui.repro.value = '';
     generator = 'none';
     basis = null;
