@@ -57,6 +57,9 @@ export async function availability() {
 
 const URLS = /https?:\/\/[^\s)」』>]+/g;
 const MARKS = /‹[^›]*›/g;
+// The input shows every masked part as ‹…› and never holds "[[" (#28): a [[…]] in the output was
+// made up by the model, and the Markdown would render it as a masked part the recording lacks.
+const PLACEHOLDERS = /\[\[[^\]]*\]\]/g;
 
 /** Returns a list of reasons the model output cannot be trusted; empty means usable. */
 export function validate(output, inputText, scan) {
@@ -71,6 +74,8 @@ export function validate(output, inputText, scan) {
   const inputMarks = new Set(inputText.match(MARKS) || []);
   const newMarks = (text.match(MARKS) || []).filter((m) => !inputMarks.has(m));
   if (newMarks.length) problems.push(`入力にない伏せ字を含みます: ${newMarks.slice(0, 2).join(', ')}`);
+  const placeholders = text.match(PLACEHOLDERS) || [];
+  if (placeholders.length) problems.push(`入力にない伏せ字を含みます: ${placeholders.slice(0, 2).join(', ')}`);
   const findings = scan(output);
   if (findings.length) problems.push(`伏せるべき値が残っています (${findings.map((f) => f.kinds.join('/')).join(', ')})`);
   return problems;
