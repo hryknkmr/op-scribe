@@ -207,9 +207,15 @@
       return r.url;
     };
 
-    // user only for what the content script saw a person do; the worker says agent or unknown (W7).
-    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source: ['agent', 'unknown'].includes(raw.source) ? raw.source : 'user' };
-    if (raw.pageUrl) {
+    // Where a step came from follows from its kind (W7): a navigation is unknown, a tool call and an
+    // expectation from the page are agent, everything else - what the content script saw a person do,
+    // a note in the side panel - is user. The worker marks the page's expectation (raw.source).
+    const source = type === 'navigate' ? 'unknown' : type === 'tool' || (type === 'note' && raw.source === 'agent') ? 'agent' : 'user';
+    // The page's expectation belongs to its page (W8): without one it is not recorded.
+    if (type === 'note' && source === 'agent' && !raw.pageUrl) return null;
+    const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source };
+    // A note of the person's is written in the side panel and belongs to no page (W7, W8).
+    if (raw.pageUrl && !(type === 'note' && source === 'user')) {
       // A page on a host past the alias limit is not recorded (K5; review R42).
       if (scrubUrl(raw.pageUrl, { ...ctx, aliases: { ...rec.aliases } }).untracked) return null;
       step.url = url(raw.pageUrl, true);
