@@ -231,29 +231,32 @@ check_identities() {
 }
 
 # 名前は表示しない（CI のログも公開される）。
-check_names() {
-  local range="$1" bad=0 an cn h log
-  if ! log="$(git log --format='%h|%an' "$range")"; then
+# 行を読み飛ばさない: 区切りを含む名前や空の名前も、許可された値でなければ止める。
+check_names_of() {
+  local role="$1" format="$2" range="$3" bad=0 line name log
+  if ! log="$(git log --format="%h|${format}" "$range")"; then
     echo "pii-guard: コミットの一覧を取得できません: $range" >&2
     return 2
   fi
-  while IFS='|' read -r h an; do
-    [[ -z "$h" ]] && continue
-    if ! printf '%s' "$an" | grep -qE "$ALLOWED_NAME_RE"; then
-      echo "  ✗ $h: author name not allowed"; bad=1
-    fi
-  done <<< "$log"
-  if ! log="$(git log --format='%h|%cn' "$range")"; then
-    echo "pii-guard: コミットの一覧を取得できません: $range" >&2
-    return 2
-  fi
-  while IFS='|' read -r h cn; do
-    [[ -z "$h" ]] && continue
-    if ! printf '%s' "$cn" | grep -qE "$ALLOWED_NAME_RE"; then
-      echo "  ✗ $h: committer name not allowed"; bad=1
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    name="${line#*|}"
+    if ! printf '%s\n' "$name" | grep -qE "$ALLOWED_NAME_RE"; then
+      echo "  ✗ ${line%%|*}: $role name not allowed"; bad=1
     fi
   done <<< "$log"
   return $bad
+}
+
+check_names() {
+  local status rc=0 pair
+  for pair in 'author:%an' 'committer:%cn'; do
+    status=0
+    check_names_of "${pair%%:*}" "${pair#*:}" "$1" || status=$?
+    if (( status > 1 )); then return 2; fi
+    if (( status == 1 )); then rc=1; fi
+  done
+  return $rc
 }
 
 check_config() {

@@ -187,6 +187,19 @@ test('a name that is not allowed fails, as author and as committer, and is not p
   assert.match(committer.stdout, /committer name not allowed/);
 });
 
+test('an allowed name followed by more text, on any line, does not pass', () => {
+  const { git, guard, dir } = repo();
+  const tree = git('rev-parse', 'HEAD^{tree}').trim();
+  const mail = 'tester@users.noreply.github.com';
+  const commit = (name) => {
+    const object = `tree ${tree}\nauthor ${name} <${mail}> 0 +0000\ncommitter hryknkmr <${mail}> 0 +0000\n\nx\n`;
+    return execFileSync('git', ['hash-object', '-t', 'commit', '-w', '--stdin', '--literally'], { cwd: dir, input: object, encoding: 'utf8' }).trim();
+  };
+  assert.equal(guard('check-names', commit('hryknkmr|Someone')).status, 1);
+  assert.equal(guard('check-names', commit('hryknkmr Someone')).status, 1);
+  assert.equal(guard('check-names', commit('|Someone')).status, 1);
+});
+
 test('a web merge passes the name check, and a range git cannot read is an error', () => {
   const { git, guard, dir } = repo();
   const tree = git('rev-parse', 'HEAD^{tree}').trim();
