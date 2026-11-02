@@ -169,3 +169,21 @@ test('an untouched verdict form shows what another panel saved, and a saved actu
   expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toEqual({ ok: true });
   await expect(ui.locator('form.verdict').getByLabel('OK', { exact: true })).toBeChecked();
 });
+
+test('what was not tested stays in its field when the stop came too late to save it (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  // The worker's reply when another panel stopped first (tests/worker.test.mjs makes the race itself).
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (message) => (message?.type === 'STOP' ? Promise.resolve({ ok: false, reason: 'ALREADY_STOPPED' }) : original(message));
+  });
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('決済と返品');
+  await ui.locator('#rec-stop').click();
+  await expect(ui.locator('#tab-status')).toContainText('やっていないことは保存しませんでした');
+  await expect(ui.locator('#not-tested')).toHaveValue('決済と返品');
+});

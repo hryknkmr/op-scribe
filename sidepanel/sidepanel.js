@@ -435,7 +435,11 @@ ui.addOrigin.addEventListener('click', () => {
 ui.stop.addEventListener('click', async () => {
   // The recording this panel shows, with what was not tested (ADR 0005).
   const reply = await send('STOP', { recordingId: recording?.id, notTested: ui.notTested.value });
-  stopError = reply?.ok ? '' : reply?.reason === 'OTHER_RECORDING' ? '別の記録に変わったため停止しませんでした' : `停止できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
+  const STOP_REASONS = {
+    OTHER_RECORDING: '別の記録に変わったため停止しませんでした',
+    ALREADY_STOPPED: 'すでに停止していたため、やっていないことは保存しませんでした'
+  };
+  stopError = reply?.ok ? '' : STOP_REASONS[reply?.reason] || `停止できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
   if (reply?.ok) ui.notTested.value = '';
   await refresh();
 });

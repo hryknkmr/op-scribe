@@ -212,11 +212,14 @@ async function flushTab(rec) {
  * Stops the recording the panel showed (recordingId, ADR 0005), with what the tester
  * did not test. Without recordingId it stops the one recording now, as before.
  */
+// A stop that came too late for what was not tested says so, so the panel keeps the text (ADR 0005).
+const unsaved = (notTested) => (typeof notTested === 'string' && notTested.trim() ? { ok: false, reason: 'ALREADY_STOPPED' } : { ok: true });
+
 const stop = async ({ recordingId, notTested } = {}) => {
   const rec = await getRecording();
   if (recordingId !== undefined && rec?.id !== recordingId) return { ok: false, reason: 'OTHER_RECORDING' };
   // Nothing to stop: a recording started meanwhile is not the one asked to stop.
-  if (rec?.state !== 'recording') return { ok: true };
+  if (rec?.state !== 'recording') return unsaved(notTested);
   stopping = rec.id;
   try {
     await flushTab(rec);
@@ -228,7 +231,8 @@ const stop = async ({ recordingId, notTested } = {}) => {
 };
 
 const stopNow = (id, notTested) => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
+  // Stopped meanwhile (another panel, the tab closed): what was not tested is not saved, and the reply says so.
+  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: unsaved(notTested) };
   await stopTab(rec);
   rec.state = 'stopped';
   rec.endedAt = endAt(rec);
