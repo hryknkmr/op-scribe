@@ -291,12 +291,21 @@
     },
 
     click(event) {
+      // A checkbox or radio is recorded from the person's click (Space and arrow keys click it too), as
+      // it is at that click; its change is not, since a page's click() makes a trusted change too (W7).
+      const hit = asElement(event.composedPath()[0]);
+      if (hit && isToggle(hit)) {
+        const owner = pendingFor(hit);
+        if (owner) commit(owner);
+        emit('check', { target: describe(hit), checked: hit.checked });
+        return;
+      }
       // Enter in a field makes the browser "click" the submit button (detail 0, still
       // trusted). The key step already explains it; recording the click invents an action.
       if (event.detail === 0 && lastStep?.type === 'key' && Date.now() - lastStep.at < 800) return;
       const el = resolveTarget(event.composedPath()[0]);
       if (!el) return;
-      // Fields and toggles are recorded by their change, not by the focusing click.
+      // Fields are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
       // A label with a control: the browser forwards the click to the control, which records itself.
       if (!T.isOperated(el) && el.closest('label')?.control) return;
@@ -310,7 +319,7 @@
       const owner = pendingFor(el);
       if (owner) commit(owner);
       if (isToggle(el)) {
-        emit('check', { target: describe(el), checked: el.checked });
+        // Recorded from the click.
       } else if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
       } else if (!owner && el.matches('input, select, textarea')) {
@@ -347,13 +356,10 @@
         // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
         emit('key', { key: 'Escape' });
       }
-    },
-
-    submit(event) {
-      // Usually already explained by the click or Enter that caused it.
-      if (lastStep && Date.now() - lastStep.at < 800 && ['click', 'key'].includes(lastStep.type)) return;
-      emit('submit', { target: describe(asElement(event.target)) });
     }
+
+    // No submit: a person's is explained by the click or Enter that caused it, and a submit
+    // with neither is a page's own requestSubmit(), not the person's (W7, #37 R15).
   };
 
   for (const [type, handler] of Object.entries(handlers)) {
