@@ -261,6 +261,11 @@ E2E の依存はロックファイルを置かずに `package.json` で版を固
 [`scripts/pii-guard.patterns.local.example.txt`](scripts/pii-guard.patterns.local.example.txt) にあります。
 これらの語を、リポジトリ内のファイル（禁止語リストを含む）に書いてはいけません。
 
+ガードは 2 段です。
+
+- **手元**（`pnpm setup-hooks` で有効になる commit / push のフック）: 汎用のパターン（メール・電話・トークンの形など）と、上のファイルがあればそこに書いた語で、追加する内容を見ます。ファイルが無いときは汎用のパターンだけになり、そのことを pre-commit が警告します（pre-push は警告しません）。外部から参加する人はこのファイルを持たないので、無くても止めません（オーナー判断 #20）。関係者は必ず置いてください。
+- **CI**（PII Guard）: 内容は汎用のパターンだけで見ます。あわせて、コミットの author / committer の名前とアドレスを検査します。手元の語は CI に渡さないので、社名や実ホスト名を内容から止められるのは手元のフックだけです。
+
 テストやドキュメントの例には `example.com` / `*.invalid` / `*.test` だけを使います。詳しくは [docs/PRIVACY.md](docs/PRIVACY.md)。
 
 ### 構成
