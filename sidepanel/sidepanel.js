@@ -197,10 +197,12 @@ const VERDICT_REASONS = {
   BAD_VERDICT: '判定を読み取れませんでした'
 };
 /**
- * What is being written for each expectation, by ref, until it is saved: the list is drawn
- * again whenever a step arrives, and a choice or a half-written actual result stays.
+ * What is being written for each expectation, by recording and ref, until it is saved: the list
+ * is drawn again whenever a step arrives, and a choice or a half-written actual result stays.
+ * The recording id is in the key: a ref may come back in another recording (ADR 0005).
  */
 const verdictDrafts = new Map();
+const draftKey = (rec, step) => `${rec.id} ${step.ref}`;
 
 /**
  * The verdict of one expectation (ADR 0005): not judged, OK or NG, and for an NG the actual
@@ -209,7 +211,7 @@ const verdictDrafts = new Map();
  */
 function verdictForm(rec, step) {
   const saved = { verdict: step.verdict || '', actual: step.actual ? D.humanize(S.renderRuns(step.actual)) : '' };
-  const draft = verdictDrafts.get(step.ref) || saved;
+  const draft = verdictDrafts.get(draftKey(rec, step)) || saved;
   const form = document.createElement('form');
   form.className = 'verdict';
   form.dataset.ref = step.ref;
@@ -251,9 +253,13 @@ function verdictForm(rec, step) {
 
   const choice = () => form.querySelector('[name="verdict"]:checked')?.value ?? '';
   const sync = () => {
-    actualLabel.hidden = choice() !== 'ng';
-    actual.required = choice() === 'ng';
-    verdictDrafts.set(step.ref, { verdict: choice(), actual: actual.value });
+    const ng = choice() === 'ng';
+    // Hidden and disabled unless NG, so a check it failed as an NG never holds back an OK.
+    actualLabel.hidden = !ng;
+    actual.disabled = !ng;
+    actual.required = ng;
+    if (!ng) actual.setCustomValidity('');
+    verdictDrafts.set(draftKey(rec, step), { verdict: choice(), actual: actual.value });
   };
   sync();
   form.addEventListener('change', sync);
@@ -275,7 +281,7 @@ function verdictForm(rec, step) {
       recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(verdict === 'ng' && { actual: actual.value })
     });
     save.disabled = false;
-    if (reply?.ok) verdictDrafts.delete(step.ref);
+    if (reply?.ok) verdictDrafts.delete(draftKey(rec, step));
     // What the worker kept is drawn from the recording read again, whatever the reply.
     await refresh();
     if (!reply?.ok) {
@@ -377,6 +383,7 @@ ui.start.addEventListener('click', () => {
       stopError = '';
       ui.scope.value = '';
       ui.targetVersion.value = '';
+      ui.notTested.value = '';
       verdictDrafts.clear();
     }
     ui.repro.value = '';
@@ -409,6 +416,9 @@ ui.stop.addEventListener('click', async () => {
 ui.clear.addEventListener('click', async () => {
   if (!confirm('記録を破棄します。元に戻せません。')) return;
   await send('CLEAR');
+  // Nothing written for the discarded recording is carried into the next one.
+  ui.notTested.value = '';
+  verdictDrafts.clear();
   ui.repro.value = '';
   basis = null;
   generator = 'none';

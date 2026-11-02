@@ -38,6 +38,12 @@ test('the panel takes a verdict on each expectation and what was not tested at t
   await expect(form.locator('[name="actual"]')).toHaveJSProperty('validity.valueMissing', true);
   expect((await verdictOf()).verdict).toBeUndefined();
 
+  // A failed NG does not hold back another choice: OK saves at once, and NG is back to write.
+  await form.getByLabel('OK', { exact: true }).check();
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect.poll(async () => (await verdictOf()).verdict).toBe('ok');
+  await ui.locator('form.verdict').getByLabel('NG', { exact: true }).check();
+
   // With it, the worker keeps the NG and the panel draws what was kept.
   await form.locator('[name="actual"]').fill('一覧が空のまま');
   await form.getByRole('button', { name: '判定を保存' }).click();
@@ -79,4 +85,22 @@ test('a verdict being written keeps its choice and its text while steps arrive (
   await expect(ui.locator('form.verdict').getByLabel('NG', { exact: true })).toBeChecked();
   await expect(ui.locator('form.verdict [name="actual"]')).toHaveValue('エラーが');
   await expect(ui.locator('form.verdict [name="actual"]')).toBeFocused();
+});
+
+test('what was not tested is not carried from a discarded recording into the next (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('前の記録のメモ');
+  ui.once('dialog', (dialog) => dialog.accept());
+  await ui.locator('#rec-clear').click();
+  await expect.poll(() => panel.recording()).toBeUndefined();
+  await expect(ui.locator('#not-tested')).toHaveValue('');
+  await panel.start(site);
+  await ui.locator('#rec-stop').click();
+  await expect.poll(async () => (await panel.recording())?.state).toBe('stopped');
+  expect((await panel.recording()).notTested).toBeUndefined();
 });
