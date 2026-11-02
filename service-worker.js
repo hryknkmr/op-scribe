@@ -294,8 +294,11 @@ async function handle(message, sender) {
       });
       case 'DELETE_STEP': return mutate(async (rec) => {
         const index = detail?.index;
+        // Only a step of the recording the panel showed (its id and revision, as the panel's basisOf
+        // writes them): after another delete or a new step, the same index is another step.
+        if (!rec || detail?.basis !== `${rec.id}@${rec.revision ?? 0}`) return { reply: { ok: false, error: 'STALE' } };
         // Only a number the recording has: splice() reads NaN, null, '' or [] as 0, the first step.
-        if (!rec || !Number.isInteger(index) || index < 0 || index >= rec.steps.length) return { reply: { ok: false } };
+        if (!Number.isInteger(index) || index < 0 || index >= rec.steps.length) return { reply: { ok: false } };
         rec.steps.splice(index, 1);
         rec.revision = (rec.revision || 0) + 1;
         return { save: rec, reply: { ok: true } };

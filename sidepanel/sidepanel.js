@@ -215,7 +215,8 @@ function render() {
     remove.className = 'icon';
     remove.title = 'この操作を削除';
     remove.textContent = '×';
-    remove.addEventListener('click', () => send('DELETE_STEP', { index }));
+    // The recording as shown: a second click before the list is drawn again removes nothing.
+    remove.addEventListener('click', () => send('DELETE_STEP', { index, basis: basisOf(rec) }));
     li.append(text, remove);
     ui.steps.append(li);
   });

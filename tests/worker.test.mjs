@@ -197,18 +197,26 @@ test('a note keeps a known kind and drops any other', async () => {
   assert.equal(notes[1].kind, undefined);
 });
 
-test('a step is deleted only by an index it has, and a note not recorded is not reported as added', async () => {
+test('a step is deleted only by an index it has, on the recording the panel showed (#56)', async () => {
   const { send, session } = worker();
   await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
-  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } });
+  for (const text of ['a', 'b', 'c']) await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text } });
   const before = structuredClone(session.opsRecording);
-  for (const detail of [{}, { index: 'x' }, { index: '0' }, { index: null }, { index: '' }, { index: false }, { index: [] }, { index: -1 }, { index: 1.5 }, { index: before.steps.length }]) {
-    assert.equal((await send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail })).ok, false, JSON.stringify(detail));
+  const basis = `${before.id}@${before.revision}`;
+  const del = (detail) => send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail });
+  for (const index of [undefined, 'x', '0', null, '', false, [], -1, 1.5, before.steps.length]) {
+    assert.equal((await del({ index, basis })).ok, false, JSON.stringify(index));
+  }
+  // Without the basis, or with another recording's or an earlier revision's.
+  for (const other of [undefined, `rec-other@${before.revision}`, `${before.id}@${before.revision - 1}`]) {
+    assert.equal((await del({ index: 1, basis: other })).ok, false, String(other));
   }
   assert.equal((await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: '' } })).ok, false);
   assert.deepEqual(session.opsRecording, before);
-  assert.equal((await send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail: { index: before.steps.length - 1 } })).ok, true);
-  assert.equal(session.opsRecording.steps.length, before.steps.length - 1);
+  // A double click: the first removes the step, the second, on the same basis, removes nothing.
+  const replies = await Promise.all([del({ index: 1, basis }), del({ index: 1, basis })]);
+  assert.deepEqual(replies.map((r) => r.ok), [true, false]);
+  assert.deepEqual(session.opsRecording.steps, [before.steps[0], ...before.steps.slice(2)]);
 });
 
 test('a restart that cannot stop the earlier recording does not leave it saved as recording', async () => {
