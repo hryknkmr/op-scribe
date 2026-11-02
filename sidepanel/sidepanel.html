@@ -19,11 +19,27 @@
           開始すると、このタブのサイトに対する記録許可を求めます。「商用環境のホスト」での自由入力は文字数だけを残し、
           記録データはブラウザを閉じると消えます。
         </p>
+        <fieldset class="fields">
+          <legend>開始するときに書く（どちらも空欄でよい）</legend>
+          <label class="field">
+            <span>対象と範囲</span>
+            <input id="scope" type="text" maxlength="300" placeholder="例: 検索画面の絞り込み">
+          </label>
+          <label class="field">
+            <span>対象のバージョン</span>
+            <input id="target-version" type="text" maxlength="80" placeholder="例: 2.3.0">
+          </label>
+        </fieldset>
+        <label class="field">
+          <span>やっていないこと（停止するときに記録する。空欄でよい）</span>
+          <input id="not-tested" type="text" maxlength="300" placeholder="例: 決済と返品は確かめていない" disabled>
+        </label>
         <div class="row">
           <button id="rec-start" type="button">記録開始</button>
           <button id="rec-stop" type="button" class="secondary" disabled>停止</button>
           <button id="rec-clear" type="button" class="secondary" disabled>破棄</button>
         </div>
+        <p id="rec-meta" class="hint"></p>
         <div id="origin-gate" class="callout" hidden>
           <p>このサイトはまだ記録を許可していないため、ページ遷移以外の操作は記録されません。</p>
           <button id="add-origin" type="button" class="secondary">このサイトも記録する</button>

@@ -375,3 +375,21 @@ test('a start masks what the tester wrote with the keywords as they are when it 
   await started;
   assert.ok(!JSON.stringify(session.opsRecording.scope).includes('Acme'), JSON.stringify(session.opsRecording.scope));
 });
+
+test('a stop that comes after another one says what was not tested was not saved (ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  const id = session.opsRecording.id;
+  // Two panels stop at once; the second one's text cannot be saved and it is told so.
+  const [first, second] = await Promise.all([
+    send(panel('STOP', { recordingId: id, notTested: '決済' })),
+    send(panel('STOP', { recordingId: id, notTested: '返品' }))
+  ]);
+  assert.deepEqual([plain(first), plain(second)], [{ ok: true }, { ok: false, reason: 'ALREADY_STOPPED' }]);
+  assert.deepEqual(plain(session.opsRecording.notTested), ['決済']);
+  // A stop with nothing written after the end is no failure.
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id }))), { ok: true });
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '  ' }))), { ok: true });
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '在庫' }))), { ok: false, reason: 'ALREADY_STOPPED' });
+});
