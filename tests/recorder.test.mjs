@@ -62,13 +62,14 @@ function recorder() {
     pageEvents.input({ isTrusted: true, composedPath: () => [field] });
   };
   const change = () => pageEvents.change({ isTrusted: true, composedPath: () => [field] });
+  const click = () => pageEvents.click({ isTrusted: true, detail: 1, composedPath: () => [field] });
   const blur = () => pageEvents.focusout({ isTrusted: true, composedPath: () => [field] });
   const steps = () => sent.filter((m) => m.type === 'STEP').map((m) => m.detail.type);
   const worker = (message) => new Promise((resolve) => {
     if (onMessage({ from: 'op-scribe/worker', ...message }, {}, resolve) !== true) resolve();
   });
   const inputs = () => sent.filter((m) => m.type === 'STEP' && m.detail.type === 'input');
-  return { field, type, change, blur, steps, worker, inputs, control, again: () => context.__opScribeRecorder.hello() };
+  return { field, type, change, click, blur, steps, worker, inputs, control, again: () => context.__opScribeRecorder.hello() };
 }
 
 test('the value a person is still typing is committed when the recording stops (#9)', async () => {
@@ -126,12 +127,13 @@ test('a step sent again after a failed try names the recording it was sent for (
 });
 
 test('a pending input is committed by the field it was typed into, whatever the page made of the field (#9)', async () => {
-  // Turned into a checkbox: the change commits the typed value first, still redacted, once.
+  // Turned into a checkbox the person then clicks: the change commits the typed value first, still redacted, once.
   let r = recorder();
   await tick();
   r.field.attrs.type = 'password';
   r.type('ひみつ');
   r.field.attrs.type = 'checkbox';
+  r.click();
   r.change();
   r.blur();
   assert.deepEqual(r.steps(), ['input', 'check']);

@@ -113,6 +113,40 @@ for (const [name, script] of [
   });
 }
 
+// A checkbox, its label and two radios, on the page the tests use.
+const toggles = () => document.body.insertAdjacentHTML('beforeend',
+  '<label id="agree"><input type="checkbox" id="box"> 同意</label><input type="radio" name="r" id="r1"><input type="radio" name="r" id="r2">');
+
+test('a page that clicks a checkbox, its label or a radio makes no step of the person\'s (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await site.evaluate(toggles);
+  await panel.start(site);
+  await site.evaluate(() => {
+    document.getElementById('box').click();
+    document.getElementById('agree').click();
+    document.getElementById('r2').click();
+    document.getElementById('box').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await site.waitForTimeout(1000);
+  await panel.stop();
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user')).toEqual([]);
+});
+
+test('a person\'s click, label click, Space and arrow key on toggles are each recorded once (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await site.evaluate(toggles);
+  await panel.start(site);
+  await site.click('#box');
+  await site.click('#agree');
+  await site.focus('#box');
+  await site.keyboard.press('Space');
+  await site.click('#r2');
+  await site.keyboard.press('ArrowLeft');
+  await expect.poll(async () => (await panel.recording()).steps.filter((s) => s.type === 'check' && s.source === 'user').length).toBe(5);
+});
+
 test('known limit: a page\'s execCommand(\'insertText\') is recorded as the person\'s input (W7)', async ({ context, panel }) => {
   // Kept to watch the limit the owner accepted; when it is closed, this test is to say so.
   const site = await context.newPage();
