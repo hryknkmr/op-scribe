@@ -13,7 +13,8 @@ const PARTS = ['manifest.json', 'service-worker.js', 'content', 'shared', 'sidep
 function extensionCopy(dir) {
   for (const part of PARTS) fs.cpSync(path.join(ROOT, part), path.join(dir, part), { recursive: true });
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
-  manifest.host_permissions = ['http://*.test/*'];
+  // https: the send endpoint in e2e/exits.spec.mjs, granted ahead as a person grants it in the panel.
+  manifest.host_permissions = ['http://*.test/*', 'https://*.test/*'];
   fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest));
   return dir;
 }
