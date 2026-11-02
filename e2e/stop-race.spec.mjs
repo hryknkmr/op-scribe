@@ -34,15 +34,36 @@ test('#9: a value the page set, not typed, is not committed at stop', async ({ c
   expect((await panel.recording()).steps.filter((s) => s.type === 'input')).toEqual([]);
 });
 
-test('#9: a value the page set after the person typed is not committed for them', async ({ context, panel }) => {
+test('#9: what is committed is what the person typed, not a value the page set afterwards', async ({ context, panel }) => {
   const site = await context.newPage();
   await site.goto('http://a.test/');
   await panel.start(site);
   await site.fill('#q', 'いぬ');
   await site.evaluate(() => { document.querySelector('#q').value = 'うそ'; });
   await panel.stop();
-  expect((await panel.recording()).steps.filter((s) => s.type === 'input')).toEqual([]);
+  expect((await panel.recording()).steps.filter((s) => s.type === 'input').map((s) => s.value))
+    .toEqual([{ field: 'text', text: ['いぬ'], treatment: 'kept' }]);
 });
+
+for (const [name, commit] of [
+  ['at stop', async () => {}],
+  ['on leaving the field', async (site) => { await site.locator('#q').blur(); }],
+]) {
+  test(`#9: a value typed as a password stays redacted when the page renames the field, committed ${name}`, async ({ context, panel }) => {
+    const site = await context.newPage();
+    await site.goto('http://a.test/');
+    await site.evaluate(() => { document.querySelector('#q').type = 'password'; });
+    await panel.start(site);
+    await site.fill('#q', 'ひみつ');
+    await site.evaluate(() => { const q = document.querySelector('#q'); q.type = 'text'; q.setAttribute('autocomplete', 'off'); });
+    await commit(site);
+    await panel.stop();
+    const inputs = (await panel.recording()).steps.filter((s) => s.type === 'input');
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0].value.treatment).not.toBe('kept');
+    expect(JSON.stringify(inputs)).not.toContain('ひみつ');
+  });
+}
 
 test('#9: what was typed for the last recording does not let the page fill the next one', async ({ context, panel }) => {
   const site = await context.newPage();

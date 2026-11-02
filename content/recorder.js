@@ -33,8 +33,8 @@
   let lastStep = null;
   // Per recording: what the last one saw does not carry over to the next (#9).
   let committed = new WeakMap();
-  // Field -> its value as a person's typing left it, until committed: only that value is committed at stop (#9, W7).
-  let typed = new WeakMap();
+  // Field -> what a person's last input left in it, classified and masked then, until committed (#9).
+  let pending = new Map();
 
   // The recording is the one this message was sent for, on every try: a retry never moves it to the next (#9).
   async function send(type, detail, attempt = 0, recording = config?.recording) {
@@ -226,41 +226,42 @@
     return el.value;
   }
 
-  /** The field that has the focus, inside open shadow roots too, or null. */
-  function focusedField() {
-    let el = document.activeElement;
-    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
-    if (!el) return null;
-    if (el.isContentEditable) return el.closest('[contenteditable=""],[contenteditable="true"]') || el;
-    return isTextField(el) ? el : null;
-  }
+  const fieldOf = (el) => (el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el);
 
   /**
-   * A value is recorded on change or blur, so what is still being typed when the recording
-   * stops would be lost (#9). Committed here, once the worker has it; only if it is still what a
-   * person typed, so a value the page set, before or after, is not taken for theirs.
+   * The field as a person's operation leaves it, classified and masked at that moment: the page
+   * may change the field's value or names before it is committed, and neither is taken (I1-I8, W7; #9).
    */
-  async function flush() {
-    const el = focusedField();
-    if (el && typed.has(el) && typed.get(el) === currentValue(el)) await recordValue(el);
-  }
-
-  function recordValue(el) {
-    if (!config) return;
+  function snapshot(el) {
     const value = currentValue(el);
-    typed.delete(el);
-    if (committed.get(el) === value) return;
-    committed.set(el, value);
     const meta = fieldMeta(el);
     const masked = S.maskFieldValue(value, meta, maskOptions());
-    if (!masked) return;
-    return emit(el.tagName === 'SELECT' ? 'select' : 'input', {
-      target: describe(el),
-      // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
-      field: { ...meta, contentEditable: undefined },
-      value: masked.value,
-      valueKinds: masked.kinds
-    });
+    return {
+      value,
+      step: masked && {
+        target: describe(el),
+        // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
+        field: { ...meta, contentEditable: undefined },
+        value: masked.value,
+        valueKinds: masked.kinds
+      }
+    };
+  }
+
+  /** Records what a person's last input left in the field; `now`: a trusted change with no input before it. */
+  function commit(el, now = false) {
+    if (!config) return;
+    const taken = pending.get(el) || (now ? snapshot(el) : null);
+    pending.delete(el);
+    if (!taken || committed.get(el) === taken.value) return;
+    committed.set(el, taken.value);
+    if (!taken.step) return;
+    return emit(el.tagName === 'SELECT' ? 'select' : 'input', taken.step);
+  }
+
+  /** A value is committed on change or blur; what is still being typed when the recording stops is committed here (#9). */
+  async function flush() {
+    await Promise.all([...pending.keys()].map((el) => commit(el)));
   }
 
   const handlers = {
@@ -293,20 +294,20 @@
       } else if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
       } else if (el.matches('input, select, textarea')) {
-        recordValue(el);
+        commit(el, true);
       }
     },
 
     input(event) {
       const el = asElement(event.composedPath()[0]);
       if (!el) return;
-      const field = el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el;
-      typed.set(field, currentValue(field));
+      const field = fieldOf(el);
+      if (isTextField(field) || field.tagName === 'SELECT') pending.set(field, snapshot(field));
     },
 
     focusout(event) {
       const el = asElement(event.composedPath()[0]);
-      if (el?.isContentEditable) recordValue(el.closest('[contenteditable=""],[contenteditable="true"]') || el);
+      if (el?.isContentEditable) commit(fieldOf(el));
     },
 
     keydown(event) {
@@ -315,7 +316,7 @@
       const modifiers = ['ctrlKey', 'metaKey', 'altKey'].filter((m) => event[m]).map((m) => m.replace('Key', ''));
       if (event.key === 'Enter' && !event.shiftKey) {
         if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable) && !modifiers.length) return;
-        if (el && isTextField(el)) recordValue(el);
+        if (el && isTextField(el)) commit(fieldOf(el));
         emit('key', { key: [...modifiers, 'Enter'].join('+'), target: el ? describe(resolveTarget(el)) : undefined });
       } else if (event.key === 'Escape' && !event.shiftKey && !modifiers.length) {
         // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
@@ -378,7 +379,7 @@
       stopNotices();
       config = null;
       committed = new WeakMap();
-      typed = new WeakMap();
+      pending = new Map();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
   });

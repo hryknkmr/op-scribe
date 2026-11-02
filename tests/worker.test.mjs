@@ -151,6 +151,17 @@ test('a step sent for an earlier recording is not added to the one that follows 
   assert.deepEqual(session.opsRecording.steps.map((s) => s.type), ['navigate']);
 });
 
+test('a stop that finds nothing recording does not stop a recording started meanwhile (#9)', async () => {
+  const { send, control, session } = worker();
+  let release;
+  control.holdRead = new Promise((resolve) => { release = resolve; });
+  const stopping = send({ from: 'op-scribe/panel', type: 'STOP' });
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  release();
+  await stopping;
+  assert.equal(session.opsRecording.state, 'recording');
+});
+
 test('a closed tab stops its own recording, not one started in another tab meanwhile (#9)', async () => {
   const { send, removeTab, control, session } = worker();
   await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });

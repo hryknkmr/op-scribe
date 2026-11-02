@@ -215,7 +215,8 @@ async function flushTab(rec) {
 
 const stop = async () => {
   const rec = await getRecording();
-  if (rec?.state !== 'recording') return stopNow();
+  // Nothing to stop: a recording started meanwhile is not the one asked to stop.
+  if (rec?.state !== 'recording') return { ok: true };
   stopping = rec.id;
   try {
     await flushTab(rec);
@@ -227,7 +228,7 @@ const stop = async () => {
 };
 
 const stopNow = (id) => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording' || (id && rec.id !== id)) return { reply: { ok: true } };
+  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
   await stopTab(rec);
   rec.state = 'stopped';
   rec.endedAt = Date.now();
