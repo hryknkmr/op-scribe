@@ -180,6 +180,27 @@
     return cleanValue(value, env, settings, kinds, field);
   }
 
+  /** The tester's expectation (ADR 0005): a note without a kind, written in the side panel. */
+  const isExpectation = (step) => step.type === 'note' && step.kind === undefined && step.source === 'user';
+
+  const REF_CHARS = '0123456789abcdefghijklmnopqrstuvwxyz';
+  /**
+   * A random id for an expectation, E- and 6 characters, drawn again while a step of the
+   * recording has it. No history of ids is kept: one that went with its step may come
+   * back, which ADR 0005 accepts (36^6 ids).
+   */
+  function newRef(rec) {
+    for (;;) {
+      let id = 'E-';
+      while (id.length < 8) {
+        const [b] = crypto.getRandomValues(new Uint8Array(1));
+        // 252 = 7 * 36: no character is likelier than another.
+        if (b < 252) id += REF_CHARS[b % 36];
+      }
+      if (!(rec.steps || []).some((s) => s.ref === id)) return id;
+    }
+  }
+
   /**
    * raw: what the content script, the panel or the tab listener reported.
    * from: { tabUrl, frameUrl } as Chrome reports the sender; empty for the panel.
@@ -263,6 +284,8 @@
     if (type === 'note') {
       step.note = text(raw.note, LIMITS.note);
       if (NOTE_KINDS.has(raw.kind)) step.kind = raw.kind;
+      // The tester's expectation gets an id of its own, never one that arrived (ADR 0005).
+      if (isExpectation(step)) step.ref = newRef(rec);
     }
     if (type === 'notice') {
       // Runs (#28), masked in the page and again here; anything else is refused.
@@ -358,6 +381,17 @@
 
   const bytesOf = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
 
+  /**
+   * Marks that a limit kept a step out (ADR 0005): user when it was the person's, other
+   * when it was a navigation, a notice or what the page reported. Only ever stronger,
+   * none -> other -> user, so the panel's delete or a later step never clears it.
+   */
+  function promoteTrimmed(rec, source) {
+    const mark = source === 'user' ? 'user' : 'other';
+    if (rec.trimmed === 'user' || rec.trimmed === mark) return;
+    rec.trimmed = mark;
+  }
+
   /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
   const reported = (s) => s.source !== 'user';
   const nextToDrop = (rec) => Math.max(rec.steps.findIndex(reported), 0);
@@ -372,16 +406,23 @@
    */
   function appendStep(rec, step) {
     if (!step) return false;
-    // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).
-    if (reported(step) && reportedOn(rec, step.site).length >= LIMITS.agentSteps) return false;
+    // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17),
+    // and the recording says a step is missing (ADR 0005).
+    if (reported(step) && reportedOn(rec, step.site).length >= LIMITS.agentSteps) {
+      promoteTrimmed(rec, step.source);
+      return false;
+    }
     // At the step limit with only the person's steps, a reported step would go itself: not recorded,
-    // and the recording - its revision too - stays as it was (E4; review of #37 R11).
-    if (reported(step) && rec.steps.length >= LIMITS.steps && !rec.steps.some(reported)) return false;
+    // and the recording - its revision too - stays as it was (E4; review of #37 R11) but for the mark.
+    if (reported(step) && rec.steps.length >= LIMITS.steps && !rec.steps.some(reported)) {
+      promoteTrimmed(rec, step.source);
+      return false;
+    }
     rec.revision = (rec.revision || 0) + 1;
     rec.steps.push(step);
     // Past the step limit the steps the page reported go first, oldest first, whoever added the
     // new one; a reported step with none to give way goes itself. The person's go only after them.
-    while (rec.steps.length > LIMITS.steps) rec.steps.splice(nextToDrop(rec), 1);
+    while (rec.steps.length > LIMITS.steps) promoteTrimmed(rec, rec.steps.splice(nextToDrop(rec), 1)[0].source);
     fitRecord(rec);
     return rec.steps[rec.steps.length - 1] === step;
   }
@@ -389,7 +430,8 @@
   /**
    * Cleans and adds a step in one go. Cleaning names new sites and counts what it
    * redacted; a step that is not recorded - not a step, not kept, or past a limit -
-   * leaves both as they were (W7, E4; review of #37 R14).
+   * leaves both as they were (W7, E4; review of #37 R14). A limit that kept it out
+   * still marks the recording trimmed (ADR 0005): the caller saves when rec.trimmed changed.
    * keep: whether to add the cleaned step at all (a navigation to where the tab already is).
    * Returns the step when it is recorded, else null.
    */
@@ -416,6 +458,7 @@
       const extra = reportedOn(rec, site).slice(0, -LIMITS.agentSteps);
       if (!extra.length) continue;
       rec.steps = rec.steps.filter((s) => !extra.includes(s));
+      extra.forEach((s) => promoteTrimmed(rec, s.source));
       changed = true;
     }
     if (changed) rec.revision = (rec.revision || 0) + 1;
@@ -428,12 +471,73 @@
     // a single step too large for the room is dropped too rather than break the save (review R41).
     // The steps the page reported go first, oldest first, then the person's (W7, #17).
     const before = rec.steps.length;
-    while (rec.steps.length && bytes > LIMITS.storeBytes) bytes -= bytesOf(rec.steps.splice(nextToDrop(rec), 1)[0]) + 1;
+    // Steps will go, so the recording gets its trimmed mark: room for it is kept, so the
+    // recording still fits once marked (ADR 0005). user is shorter than other.
+    const mark = bytes > LIMITS.storeBytes && !rec.trimmed ? bytesOf({ trimmed: 'other' }) : 0;
+    while (rec.steps.length && bytes + mark > LIMITS.storeBytes) {
+      const [gone] = rec.steps.splice(nextToDrop(rec), 1);
+      promoteTrimmed(rec, gone.source);
+      bytes -= bytesOf(gone) + 1;
+    }
     // Steps went: a Markdown made from the recording before is stale now (E4; review R44).
     if (rec.steps.length !== before) rec.revision = (rec.revision || 0) + 1;
   }
 
-  const api = { policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply };
+  /**
+   * What the tester writes for the whole recording (ADR 0005): scope and targetVersion
+   * at start, notTested at stop. Masked like a note (T1) and counted (M1); an empty one
+   * is not kept.
+   */
+  const RECORDING_TEXTS = { scope: LIMITS.scope, targetVersion: LIMITS.targetVersion, notTested: LIMITS.notTested };
+  function setRecordingText(rec, field, value, settings) {
+    if (!Object.hasOwn(RECORDING_TEXTS, field) || typeof value !== 'string') return;
+    const r = cleanLine(value, { keywords: settings.keywords, maxLength: RECORDING_TEXTS[field] });
+    if (!renderRuns(r.runs).trim()) return;
+    rec[field] = r.runs;
+    countKinds(rec, r.kinds);
+  }
+
+  function countKinds(rec, kinds) {
+    for (const kind of kinds) {
+      if (REDACTION_KINDS.includes(kind)) rec.redactions[kind] = Math.min((rec.redactions[kind] || 0) + 1, LIMITS.redactionCount);
+    }
+  }
+
+  /**
+   * The tester's verdict on an expectation (ADR 0005). It names the recording and the
+   * expectation's ref and nothing else: a step or a tool list that arrived meanwhile does
+   * not refuse it, and of two updates to one ref the later stays. verdict is 'ok', 'ng'
+   * or null (not judged); an NG needs an actual result with text in it once masked.
+   * Leaves the recording as it was and says why when it does not update it.
+   * revision does not move: a Markdown draft made earlier is not stale for this.
+   */
+  function setVerdict(rec, update, settings) {
+    if (!rec || update?.recordingId !== rec.id) return { ok: false, reason: 'OTHER_RECORDING' };
+    const { verdict } = update;
+    if (!Object.hasOwn(update, 'verdict') || !(verdict === 'ok' || verdict === 'ng' || verdict === null)) return { ok: false, reason: 'BAD_VERDICT' };
+    const step = rec.steps.find((s) => isExpectation(s) && s.ref === update.ref);
+    if (!step) return { ok: false, reason: 'NO_REF' };
+    if (verdict === 'ng') {
+      const r = cleanLine(typeof update.actual === 'string' ? update.actual : '', { keywords: settings.keywords, maxLength: LIMITS.actual });
+      if (!renderRuns(r.runs).trim()) return { ok: false, reason: 'NO_ACTUAL' };
+      step.verdict = 'ng';
+      step.actual = r.runs;
+      countKinds(rec, r.kinds);
+    } else {
+      if (verdict === 'ok') step.verdict = 'ok';
+      else delete step.verdict;
+      delete step.actual;
+    }
+    return { ok: true };
+  }
+
+  /** The end of a recording: now, but never before its start, whatever the clock did (ADR 0005). */
+  const endAt = (rec, now = Date.now()) => Math.max(now, rec.startedAt);
+
+  const api = {
+    policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply,
+    isExpectation, setVerdict, setRecordingText, endAt
+  };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

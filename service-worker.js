@@ -16,7 +16,7 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS, renderRuns } = self.OpScribeLimits;
 const { humanize } = self.OpScribeDescribe;
-const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply } = self.OpScribeRecord;
+const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply, setVerdict, setRecordingText, endAt } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -136,7 +136,7 @@ const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId =
 
 // ------------------------------------------------------------------ actions
 
-async function start({ tabId, url }) {
+async function start({ tabId, url, scope, targetVersion }) {
   const settings = await getSettings();
   const pattern = originPattern(url);
   // Outside mutate, so this is the reply itself, not a { reply } for mutate to unwrap.
@@ -163,6 +163,9 @@ async function start({ tabId, url }) {
     };
     const env = envOf([url], rec.policy);
     rec.startUrl = scrubUrl(url, { ...rec.policy, aliases: rec.aliases, keywords: settings.keywords, env }).url;
+    // What the tester writes at the start, masked like a note (ADR 0005).
+    setRecordingText(rec, 'scope', scope, settings);
+    setRecordingText(rec, 'targetVersion', targetVersion, settings);
     addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url });
     try {
       if (previous?.state === 'recording') await stopTab(previous);
@@ -171,7 +174,7 @@ async function start({ tabId, url }) {
     } catch (error) {
       if (previous?.state !== 'recording') throw error;
       // stopTab may have ended it already, in part: do not leave it saved as still recording.
-      return { save: { ...previous, state: 'stopped', endedAt: Date.now() }, reply: { ok: false, error: String(error?.message || error) } };
+      return { save: { ...previous, state: 'stopped', endedAt: endAt(previous) }, reply: { ok: false, error: String(error?.message || error) } };
     }
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
@@ -204,25 +207,31 @@ async function flushTab(rec) {
   }
 }
 
-const stop = async () => {
+/**
+ * Stops the recording the panel showed (recordingId, ADR 0005), with what the tester
+ * did not test. Without recordingId it stops the one recording now, as before.
+ */
+const stop = async ({ recordingId, notTested } = {}) => {
   const rec = await getRecording();
+  if (recordingId !== undefined && rec?.id !== recordingId) return { ok: false, reason: 'OTHER_RECORDING' };
   // Nothing to stop: a recording started meanwhile is not the one asked to stop.
   if (rec?.state !== 'recording') return { ok: true };
   stopping = rec.id;
   try {
     await flushTab(rec);
     // A recording started while this one was flushing is not the one asked to stop.
-    return await stopNow(rec.id);
+    return await stopNow(rec.id, notTested);
   } finally {
     if (stopping === rec.id) stopping = null;
   }
 };
 
-const stopNow = (id) => mutate(async (rec) => {
+const stopNow = (id, notTested) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
   await stopTab(rec);
   rec.state = 'stopped';
-  rec.endedAt = Date.now();
+  rec.endedAt = endAt(rec);
+  setRecordingText(rec, 'notTested', notTested, await getSettings());
   return { save: rec, reply: { ok: true } };
 });
 
@@ -265,9 +274,10 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     // The note belongs to the page it came from, so only that site gets it back (W8, #17).
+    const trimmed = rec.trimmed;
     const step = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender));
-    // Past the limit of what the page may report, nothing is added (W7).
-    if (!step) return { reply: { ok: false, error: 'NOT_RECORDED' } };
+    // Past the limit of what the page may report, nothing is added (W7); the recording keeps its trimmed mark (ADR 0005).
+    if (!step) return { ...(rec.trimmed !== trimmed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
     // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
     const added = humanize(renderRuns(step.note));
     return { save: rec, reply: guardReply({ ok: true, added }, rec, settings) };
@@ -286,7 +296,12 @@ async function handle(message, sender) {
   if (message.from === 'op-scribe/panel') {
     switch (type) {
       case 'START': return start(detail);
-      case 'STOP': return stop();
+      case 'STOP': return stop(detail);
+      // The tester's verdict on an expectation (ADR 0005): by the recording and the ref only.
+      case 'SET_VERDICT': return mutate(async (rec) => {
+        const reply = setVerdict(rec, detail, await getSettings());
+        return reply.ok ? { save: rec, reply } : { reply };
+      });
       case 'ADD_ORIGIN': return addPattern(detail.url);
       case 'CLEAR': return mutate(async (rec) => {
         if (rec?.state === 'recording') await stopTab(rec);
@@ -305,8 +320,11 @@ async function handle(message, sender) {
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
+        const trimmed = rec.trimmed;
         const step = addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
-        return step ? { save: rec, reply: { ok: true } } : { reply: { ok: false, error: 'NOT_RECORDED' } };
+        // A note a limit kept out still marks the recording trimmed (ADR 0005).
+        if (!step) return { ...(rec.trimmed !== trimmed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
+        return { save: rec, reply: { ok: true } };
       });
       default: return { ok: false, error: 'UNKNOWN' };
     }
@@ -371,7 +389,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     const settings = await getSettings();
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
     const moved = (step) => !(last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last);
-    if (!addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved)) return null;
+    const trimmed = rec.trimmed;
+    if (!addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved)) {
+      // A navigation a limit kept out still marks the recording trimmed (ADR 0005).
+      return rec.trimmed !== trimmed ? { save: rec } : null;
+    }
     return { save: rec };
   });
 });

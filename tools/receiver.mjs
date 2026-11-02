@@ -26,7 +26,7 @@ import { join } from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { finalScan } = require('../shared/sanitize.js');
-const { SCHEMA, checkPayload } = require('../shared/payload.js');
+const { SCHEMAS, checkPayload } = require('../shared/payload.js');
 
 const PORT = Number(process.env.PORT || 8787);
 const TOKEN = process.env.OPSCRIBE_TOKEN || '';
@@ -63,7 +63,8 @@ createServer(async (req, res) => {
   } catch {
     return reply(res, 400, { error: 'invalid json' });
   }
-  if (payload?.schema !== SCHEMA) return reply(res, 422, { error: 'unknown schema' });
+  // v3 and v4 (ADR 0005): checkPayload checks each against its own version's shape.
+  if (!SCHEMAS.includes(payload?.schema)) return reply(res, 422, { error: 'unknown schema' });
 
   let problems;
   try {

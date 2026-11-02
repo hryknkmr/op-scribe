@@ -286,3 +286,71 @@ test('a page on a host of the alias form gets no tools recorded and no answer (r
   }
   assert.equal(Object.keys(session.opsRecording.aliases).length, before);
 });
+
+// ------------------------------------------------------------- ADR 0005 (v4)
+
+// The worker runs in a vm: what it returns is made plain before it is compared.
+const plain = (v) => JSON.parse(JSON.stringify(v));
+const panel = (type, detail) => ({ from: 'op-scribe/panel', type, detail });
+const startAt = (send, detail = {}) => send(panel('START', { tabId: 7, url: 'https://example.com/', ...detail }));
+
+test('the start and the stop keep what the tester wrote, masked, and the stop names the recording it ends (ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send, { scope: '検索画面 tester@example.com', targetVersion: '2.3.0' });
+  await control.hello;
+  const rec = session.opsRecording;
+  assert.ok(Array.isArray(rec.scope) && !JSON.stringify(rec.scope).includes('tester@example.com'), JSON.stringify(rec.scope));
+  assert.equal(rec.redactions.email, 1);
+  assert.deepEqual(plain(rec.targetVersion), ['2.3.0']);
+  // Another recording's panel does not stop this one.
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: 'rec-other', notTested: 'x' }))), { ok: false, reason: 'OTHER_RECORDING' });
+  assert.equal(session.opsRecording.state, 'recording');
+  const revision = session.opsRecording.revision;
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: rec.id, notTested: '決済' }))), { ok: true });
+  assert.equal(session.opsRecording.state, 'stopped');
+  assert.deepEqual(plain(session.opsRecording.notTested), ['決済']);
+  assert.equal(session.opsRecording.revision, revision, 'the stop is not a change to the steps');
+});
+
+test('a stop writes an end no earlier than the start, whatever the clock did (ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  session.opsRecording.startedAt = Date.now() + 60 * 60 * 1000;
+  await send(panel('STOP'));
+  assert.equal(session.opsRecording.endedAt, session.opsRecording.startedAt);
+});
+
+test('SET_VERDICT judges an expectation by the recording and its ref, while steps keep arriving (ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  assert.deepEqual(plain(await send(panel('ADD_NOTE', { text: '一覧が出る' }))), { ok: true });
+  const { id, steps } = session.opsRecording;
+  const { ref } = steps.at(-1);
+  assert.match(ref, /^E-[0-9a-z]{6}$/);
+  // A step arrives between what the panel showed and its update: the update still lands.
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
+  await send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'click', pageUrl: 'https://example.com/', target: { tag: 'button' } } }, page);
+  const revision = session.opsRecording.revision;
+  assert.deepEqual(plain(await send(panel('SET_VERDICT', { recordingId: id, ref, verdict: 'ng', actual: '空のまま' }))), { ok: true });
+  const judged = session.opsRecording.steps.find((s) => s.ref === ref);
+  assert.equal(judged.verdict, 'ng');
+  assert.deepEqual(plain(judged.actual), ['空のまま']);
+  assert.equal(session.opsRecording.revision, revision, 'a verdict does not make a draft stale');
+  assert.deepEqual(plain(await send(panel('SET_VERDICT', { recordingId: 'rec-other', ref, verdict: 'ok' }))), { ok: false, reason: 'OTHER_RECORDING' });
+  assert.deepEqual(plain(await send(panel('SET_VERDICT', { recordingId: id, ref, verdict: 'ng' }))), { ok: false, reason: 'NO_ACTUAL' });
+  assert.equal(session.opsRecording.steps.find((s) => s.ref === ref).verdict, 'ng', 'left as it was');
+});
+
+test('a note a limit keeps out still saves the recording\'s trimmed mark (ADR 0005, M5)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/', origin: 'https://example.com' };
+  // The page's own expectations up to its limit, then one more.
+  let reply;
+  for (let i = 0; i <= 100; i += 1) reply = await send({ from: 'op-scribe/content', type: 'WEBMCP_REQUEST', detail: { op: 'expect', args: { text: `期待 ${i}` } } }, page);
+  assert.equal(reply.error, 'NOT_RECORDED');
+  assert.equal(session.opsRecording.trimmed, 'other');
+});

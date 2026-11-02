@@ -78,12 +78,13 @@
 
 | ID | 経路 | commercial | standard | 強さ | 実装 |
 | --- | --- | --- | --- | --- | --- |
-| T1 | メモ（利用者・エージェントが書く期待結果） | `kept`（300 字・1 行） | 同じ | できる限り | ② |
+| T1 | メモ（利用者・エージェントが書く期待結果）。テスターが書く実際の結果 `actual`（NG の期待結果だけ）・対象と範囲 `scope`・対象のバージョン `targetVersion`・やっていないこと `notTested`（ADR 0005、v4） | `kept`（300 字・1 行。`targetVersion` は 80 字）。worker がメモと同じ `cleanLine` で伏せ、伏せ字は `privacy.redactions` に数える。伏せた後の文が空なら持たない | 同じ | できる限り | ②・ADR 0005 |
 | T2 | 操作した要素の名前 | 人が操作する要素（リンク・ボタン・入力欄・ARIA の部品）は、表示文字・ラベル・ARIA 名から取る。それ以外の要素（本文・余白・`main`・`form`・`body` など）は、作り手が宣言した名前（`aria-label`・`aria-labelledby`・`title`・`alt`）だけから取り、表示文字は読まない。どちらも `kept`（80 字・1 行） | 同じ | 構造（どこから読むか）・できる限り（中） | ② |
 | T3 | selector | できる限りの検出（書かれたままと、CSS のエスケープを戻した形の両方。worker は記録が知る実ホスト名も見る）に当たれば `dropped`、ほかは `kept`（160 字・1 行） | 同じ | できる限り | ② |
 | T4 | 要素の役割（`role`）・タグ名 | 形 `^[a-z][a-z0-9-]{0,23}$` に合えば `kept`、合わなければ `dropped` | 同じ | 構造（形の許可リスト） | ② |
 | T5 | キー入力 | `Enter`・`Escape`、`ctrl`・`meta`・`alt` をこの順に高々 1 つずつ前に付けた `Enter` だけ `kept`。ほかのキーはステップごと `dropped` | 同じ | 構造（許可リスト） | ② |
-| T6 | 決まった値の欄（ステップの種類・番号・時刻・環境・`ok`・`source`・`checked`・メモの種類 `kind`・通知の強さ `level`） | `kept` | 同じ | 構造（型と列挙で検査し、合わなければ出口で止める） | ② |
+| T6 | 決まった値の欄（ステップの種類・番号・時刻・環境・`ok`・`source`・`checked`・メモの種類 `kind`・通知の強さ `level`・期待結果の ID `ref`・判定 `verdict`） | `kept` | 同じ | 構造（型と列挙で検査し、合わなければ出口で止める） | ② |
+| T8 | 期待結果の ID と判定の組み合わせ（ADR 0005、v4） | `ref`（形 `^E-[0-9a-z]{6}$`。worker が乱数で振り、届いた値は使わない）はテスターの期待結果（種類が `note`・`kind` が無い・`source: user`）すべてに必ず付き、記録の中で重ならず、ほかのステップには付かない。`verdict`（`ok` / `ng`）はテスターの期待結果にだけ付く（無ければ未判定）。`actual` は `verdict: ng` のステップに必ず付き（描いて前後の空白を除いた文が空なら付いていないものとする）、ほかには付かない。`endedAt` があれば `startedAt` 以後。worker はこの組み合わせで作り、出口と受信サーバは合わないものを拒否する。v3 の送信データにはどれも無い（あれば知らない欄として拒否） | 同じ | 構造 | ADR 0005 |
 | T7 | ページの通知（作り手が `role="status"`・`role="alert"`・`aria-live="polite"`/`"assertive"` で宣言した領域の文。人の操作の直後 5 秒間に変わったものだけ。1 操作 4 件まで。ステップは `notice`、`source` は `unknown` で W7 の上限に入る。入力欄を含む領域、1000 字を超える領域、見えていない領域は読まない。読む領域は 1 ページ 50 件まで。同じ文は 1 操作につき 1 件。200 ミリ秒以内に消えた文と、送信に失敗した文は記録されないことがある。Shadow DOM と iframe の中は読まない） | `dropped`（content script は読まず、worker はステップを作らず、出口は止める） | `kept`（200 字・1 行）。できる限りの検出で伏せる。記録が知る実ホスト名に当たればステップごと `dropped` | 構造（commercial）・できる限り（standard） | #14 |
 
 ### URL の値（U）
@@ -117,10 +118,11 @@
 
 | ID | 欄 | 扱い | 強さ | 実装 |
 | --- | --- | --- | --- | --- |
-| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` と `policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
+| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` は受け付ける版の一覧（`op-scribe.recording/v3`・`v4`）のどれかで、出口と受信サーバはその版の形だけで全体を検査する（ADR 0005）。`policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
 | M2 | `recording.id`・`startedAt`・`endedAt`・`sentAt` | `kept`。ID は `^rec-[a-z0-9-]{1,40}$`、日時は ISO 8601（`endedAt` は `null` も可） | 構造 | ② |
 | M3 | `recording.environment`（ブラウザ・プラットフォーム・言語） | `kept`（60 字）。サイドパネルが `cleanLine` で伏せてから切る。`buildPayload` は切らず、上限を超えたものは出口で拒否する | 構造（型と長さ）・できる限り（中） | ② |
 | M4 | `reproduction.generator` | `template`・`on-device-ai`・`manual`・`none` のどれか | 構造 | ② |
+| M5 | `recording.trimmed`（ADR 0005、v4） | `user` か `other` だけ（無ければ欠けていない）。worker が、上限のためにステップを保持できなかったときに付ける: 保持できなかったステップが `source: user` なら `user`、ほかなら `other`。強まるだけで弱まらない。テスターの削除では付かない | 構造 | ADR 0005 |
 
 ### 出口と受信（E）
 
