@@ -299,19 +299,22 @@ async function joinIfAllowed(tabId, url) {
  */
 async function noticeOpenedTab(tab) {
   if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
-  // Chrome gives the page to open in url or pendingUrl, or only when asked (a link), or only in the
-  // tab's first update (window.open): then the tab is kept as opening until that update decides.
-  const asked = tab.pendingUrl || tab.url ? null : await chrome.tabs.get(tab.id).catch(() => null);
-  const url = tab.pendingUrl || tab.url || asked?.pendingUrl || asked?.url;
-  if (url && !httpUrl(url)) return;
-  const waits = await mutate(async (rec) => {
-    if (!isRecordingTab(rec, tab.openerTabId) || isRecordingTab(rec, tab.id) || isWaitingTab(rec, tab.id)) return { reply: false };
+  const given = tab.pendingUrl || tab.url;
+  if (given && !httpUrl(given)) return;
+  // Kept as opening first, in the queue, so its close and its first update are handled after this
+  // whatever the order Chrome sends them in; its first page then decides (firstPage).
+  const kept = await mutate(async (rec) => {
+    if (!isRecordingTab(rec, tab.openerTabId) || isRecordingTab(rec, tab.id) || isWaitingTab(rec, tab.id) || openingOf(rec).includes(tab.id)) return { reply: false };
     if (tabsOf(rec).length + waitingOf(rec).length + openingOf(rec).length >= LIMITS.tabs) return { reply: false };
-    if (url) rec.waitingTabIds = [...waitingOf(rec), tab.id];
-    else rec.openingTabIds = [...openingOf(rec), tab.id];
-    return { save: rec, reply: Boolean(url) };
+    rec.openingTabIds = [...openingOf(rec), tab.id];
+    return { save: rec, reply: true };
   });
-  if (waits) await joinIfAllowed(tab.id, url);
+  if (!kept) return;
+  // Chrome gives the page to open in url or pendingUrl, or only when asked (a link), or only in the
+  // tab's first update (window.open), which firstPage handles when it comes.
+  const asked = given ? null : await chrome.tabs.get(tab.id).catch(() => null);
+  const url = given || asked?.pendingUrl || asked?.url;
+  if (url) await firstPage(tab.id, url);
 }
 
 /** The first page of an opening tab: a page of the web makes it wait to join, anything else drops it (#72). */

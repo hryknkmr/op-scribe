@@ -195,7 +195,9 @@ function render() {
 
   const pattern = pagePattern(activeTab?.url);
   const ofRecording = isRecording && [...(rec.tabIds || [rec.tabId]), ...(rec.waitingTabIds || [])].includes(activeTab?.id);
-  ui.originGate.hidden = !(ofRecording && pattern && !rec.grantedPatterns.includes(pattern));
+  // A waiting tab joins only from here, even on a site the recording already has (#72).
+  const waits = isRecording && (rec.waitingTabIds || []).includes(activeTab?.id);
+  ui.originGate.hidden = !(ofRecording && pattern && (waits || !rec.grantedPatterns.includes(pattern)));
 
   const steps = rec?.steps || [];
   ui.stepCount.textContent = String(steps.length);

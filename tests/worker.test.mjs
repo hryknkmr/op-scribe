@@ -48,7 +48,7 @@ function worker() {
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
-    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => (control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }), sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
+    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => { await control.holdGet; if (control.gone?.includes(id)) throw new Error('No tab'); return control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }; }, sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
   // A recorder names the recording it was told about (HELLO); a test may name another.
@@ -528,4 +528,39 @@ test('a navigation is recorded before the click that follows it (#72)', async ()
   const clicked = stepIn(w, 7, 'https://example.com/next');
   await Promise.all([moved, clicked]);
   assert.deepEqual(w.session.opsRecording.steps.map((x) => x.type).slice(-2), ['navigate', 'click']);
+});
+
+test('a tab that closes while its page is asked for is forgotten, so it never holds a place (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  for (let id = 20; id < 29; id += 1) {
+    let release;
+    w.control.holdGet = new Promise((resolve) => { release = resolve; });
+    const opened = w.openTab({ id, openerTabId: 7 });
+    await w.removeTab(id);
+    w.control.gone = [...(w.control.gone || []), id];
+    release();
+    await opened;
+  }
+  w.control.holdGet = null;
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+  // A link opened afterwards still joins.
+  await w.openTab({ id: 30, openerTabId: 7, pendingUrl: 'https://example.com/link' });
+  assert.deepEqual(w.session.opsRecording.tabIds, [7, 30]);
+});
+
+test('a first update that comes while the page is asked for decides, and a later one does not (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  let release;
+  w.control.holdGet = new Promise((resolve) => { release = resolve; });
+  const opened = w.openTab({ id: 9, openerTabId: 7 });
+  // Ctrl+T: the new tab page comes first, then the address the person types.
+  await w.urlChanged(9, 'chrome://newtab/');
+  release();
+  await opened;
+  await w.urlChanged(9, 'https://example.com/typed');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
 });
