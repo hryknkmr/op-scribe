@@ -169,7 +169,23 @@ test('a person\'s click, label click, Space and arrow key on toggles are each re
   await site.keyboard.press('Space');
   await site.click('#r2');
   await site.keyboard.press('ArrowLeft');
-  await expect.poll(async () => (await panel.recording()).steps.filter((s) => s.type === 'check' && s.source === 'user').length).toBe(5);
+  // Each step holds the state the person left: the box on, off, on; then r2, then r1 by the arrow key.
+  await expect.poll(async () => (await panel.recording()).steps.filter((s) => s.type === 'check' && s.source === 'user')
+    .map((s) => `${s.target.selector}:${s.checked}`))
+    .toEqual(['#box:true', '#box:false', '#box:true', '#r2:true', '#r1:true']);
+});
+
+test('a person\'s Enter that submits a form is their one key step, with no click or submit of its own (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await site.fill('#q', '天気');
+  await site.press('#q', 'Enter');
+  await expect(site.locator('#result')).toHaveText('結果を表示しました');
+  // Long enough for the click Chrome sends to the submit button to arrive, if it were recorded.
+  await site.waitForTimeout(1000);
+  await panel.stop();
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => s.type)).toEqual(['input', 'key']);
 });
 
 test('known limit: a page\'s execCommand(\'insertText\') is recorded as the person\'s input (W7)', async ({ context, panel }) => {
