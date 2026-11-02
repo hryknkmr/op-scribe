@@ -770,6 +770,8 @@ test('setVerdict updates an expectation by the recording id and its ref, and say
   assert.equal(first.actual, undefined);
   assert.deepEqual(set({ ref: first.ref, verdict: null }), { ok: true });
   assert.equal(first.verdict, undefined);
+  // privacy.redactions is a running total of what was masked: clearing the actual result does not lower it.
+  assert.equal(rec.redactions.keyword, 1);
   set({ ref: second.ref, verdict: 'ng', actual: 'A' });
   set({ ref: second.ref, verdict: 'ng', actual: 'B' });
   assert.equal(show(second.actual), 'B');

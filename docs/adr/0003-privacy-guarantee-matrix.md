@@ -118,7 +118,7 @@
 
 | ID | 欄 | 扱い | 強さ | 実装 |
 | --- | --- | --- | --- | --- |
-| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` は受け付ける版の一覧（`op-scribe.recording/v3`・`v4`）のどれかで、出口と受信サーバはその版の形だけで全体を検査する（ADR 0005）。`policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` のキーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
+| M1 | `schema`・`privacy.policy`・`privacy.coverage`・`privacy.hostsAliased`・`privacy.redactions` | `kept`。`schema` は受け付ける版の一覧（`op-scribe.recording/v3`・`v4`）のどれかで、出口と受信サーバはその版の形だけで全体を検査する（ADR 0005）。`policy` は決まった値、`coverage` は `commercial`・`standard`・`mixed`・`none` のどれか、数は 0 以上の整数、`redactions` は記録中に伏せた回数の累計（ステップの削除や判定の付け直しでは減らない。今の記録に残っている伏せ字の数ではない）で、キーは拡張が数える伏せ字の種類の一覧（`shared/limits.js` の `REDACTION_KINDS`）だけで、件数は 10 億まで | 構造 | ② |
 | M2 | `recording.id`・`startedAt`・`endedAt`・`sentAt` | `kept`。ID は `^rec-[a-z0-9-]{1,40}$`、日時は ISO 8601（`endedAt` は `null` も可） | 構造 | ② |
 | M3 | `recording.environment`（ブラウザ・プラットフォーム・言語） | `kept`（60 字）。サイドパネルが `cleanLine` で伏せてから切る。`buildPayload` は切らず、上限を超えたものは出口で拒否する | 構造（型と長さ）・できる限り（中） | ② |
 | M4 | `reproduction.generator` | `template`・`on-device-ai`・`manual`・`none` のどれか | 構造 | ② |
