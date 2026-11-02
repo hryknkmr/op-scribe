@@ -131,6 +131,18 @@
   /** The longest text a cut to n can produce. */
   const cut = (n) => n + 1;
 
+  /** A text cut to n characters, with the "…" that says it was cut (the longest is cut(n)). */
+  const ellipsize = (text, n) => {
+    const chars = [...String(text ?? '')];
+    return chars.length > n ? `${chars.slice(0, n).join('')}…` : chars.join('');
+  };
+
+  /** Line breaks and other controls as spaces, so a text stays one line (#18, E7). */
+  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+
+  /** The host of an alias ("site-3.invalid"): a real host of this form is never recorded (U4). */
+  const ALIAS_HOST = /^site-\d+\.invalid$/;
+
   /**
    * What each kind of step must and may carry besides n, type, t, env and
    * source (ADR 0003, row T6). The worker builds steps by it and the check
@@ -236,7 +248,7 @@
   const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 
   const api = {
-    LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, primaryRole,
+    LIMITS, TOTALS, cut, ellipsize, oneLine, ALIAS_HOST, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, primaryRole,
     RUN_KINDS, URL_MARKERS, SCHEME, renderRuns, isVocab
   };
   root.OpScribeLimits = api;

@@ -13,7 +13,7 @@
   'use strict';
 
   const S = root.OpScribeSanitize || require('./sanitize.js');
-  const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed, renderRuns } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, STEP_RULES, REDACTION_KINDS, typedAllowed, renderRuns, ellipsize, ALIAS_HOST } = root.OpScribeLimits || require('./limits.js');
   const { scrubText, scrubRuns, runKinds, cleanLine, oneLine, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
   const NOTE_KINDS = new Set(['bug', 'question', 'idea', 'next']);
@@ -258,8 +258,7 @@
         // CSS escapes undone, and the real hosts this recording knows, too (T3, K5; review R23).
         if (S.finalScan(oneLine(t.selector), { keywords: settings.keywords, hosts: knownHosts() }).length) r.kinds.push('selector');
         // Cut like any kept text, with the "…" that says so (T3; review R21).
-        const chars = [...selector];
-        if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : selector;
+        if (!r.kinds.length) step.target.selector = ellipsize(selector, LIMITS.selector);
       }
       if (t.href) step.target.href = url(t.href);
     }
@@ -326,7 +325,7 @@
   }
 
   // The origin of a URL whose host is an alias. A real host of that form is never recorded (U4), so every match is one.
-  const ALIAS_ORIGIN = /^(https?:\/\/)(site-\d+\.invalid)(?=[/?#]|$)/;
+  const ALIAS_ORIGIN = new RegExp(`^(https?:\\/\\/)(${ALIAS_HOST.source.slice(1, -1)})(?=[/?#]|$)`);
 
   /**
    * An alias numbers a site in the whole recording: site-2 says another site came first.

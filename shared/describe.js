@@ -13,7 +13,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, typedAllowed, HIDDEN_CHARS, renderRuns } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, typedAllowed, HIDDEN_CHARS, renderRuns, oneLine, ellipsize } = root.OpScribeLimits || require('./limits.js');
   // A field of a step (runs, or a plain string such as a selector) as text with [[…]] placeholders (#28).
   const txt = (value) => (value === undefined || value === null ? '' : renderRuns(value));
   const NO_URL = '[[url:none]]';
@@ -168,7 +168,7 @@
    */
   // Zero-width and bidi controls hide or reorder text for the reader (E7): never rendered.
   const HIDDEN = new RegExp(HIDDEN_CHARS, 'gu');
-  const line = (text) => String(text ?? '').replace(HIDDEN, '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
+  const line = (text) => oneLine(String(text ?? '').replace(HIDDEN, ''));
 
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
 
@@ -200,7 +200,7 @@
       case 'tool': {
         const json = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
         // The sentence shows the arguments up to argsInSentence; the Gherkin table keeps them all.
-        const args = [...json].length > LIMITS.argsInSentence ? `${[...json].slice(0, LIMITS.argsInSentence).join('')}…` : json;
+        const args = ellipsize(json, LIMITS.argsInSentence);
         return `WebMCP ツール「${txt(step.tool)}」を実行する${args && args !== '{}' ? `（引数: ${args}）` : ''}${step.ok === false ? '（失敗）' : ''}`;
       }
       case 'note':
