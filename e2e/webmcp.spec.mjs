@@ -169,10 +169,12 @@ test('a person\'s click, label click, Space and arrow key on toggles are each re
   await site.keyboard.press('Space');
   await site.click('#r2');
   await site.keyboard.press('ArrowLeft');
+  // Long enough for a sixth step, a toggle recorded twice, to arrive before the recording stops.
+  await site.waitForTimeout(1000);
+  await panel.stop();
   // Each step holds the state the person left: the box on, off, on; then r2, then r1 by the arrow key.
-  await expect.poll(async () => (await panel.recording()).steps.filter((s) => s.type === 'check' && s.source === 'user')
-    .map((s) => `${s.target.selector}:${s.checked}`))
-    .toEqual(['#box:true', '#box:false', '#box:true', '#r2:true', '#r1:true']);
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => `${s.type}:${s.target.selector}:${s.checked}`))
+    .toEqual(['check:#box:true', 'check:#box:false', 'check:#box:true', 'check:#r2:true', 'check:#r1:true']);
 });
 
 test('a person\'s Enter that submits a form is their one key step, with no click or submit of its own (W7)', async ({ context, panel }) => {
