@@ -755,6 +755,12 @@ test('v4: a ref on every expectation of the tester and nowhere else, a verdict o
   assert.deepEqual(problems((p) => { at(p).verdict = 'ok'; }), []);
   assert.deepEqual(problems((p) => { at(p).verdict = 'maybe'; }), ['recording.steps[5].verdict unexpected value']);
   assert.deepEqual(problems((p) => { p.recording.trimmed = 'all'; }), ['recording.trimmed unexpected value']);
+  // The recording's own texts: kept only with text in them; a masked part alone is text once rendered.
+  for (const f of ['scope', 'targetVersion', 'notTested']) {
+    assert.deepEqual(problems((p) => { p.recording[f] = []; }), [`recording.${f} empty`]);
+    assert.deepEqual(problems((p) => { p.recording[f] = ['   ']; }), [`recording.${f} empty`]);
+    assert.deepEqual(problems((p) => { p.recording[f] = [{ redacted: 'email' }]; }), []);
+  }
 });
 
 test('buildPayload copies the recording\'s own texts and builds the same payload again for the same sentAt (ADR 0005)', () => {

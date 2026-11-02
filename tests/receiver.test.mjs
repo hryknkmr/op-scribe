@@ -102,5 +102,10 @@ test('a v3 payload is still stored, and a v3 payload with a v4 field is refused 
   assert.equal(res.status, 422);
   assert.ok(res.body.problems.some((p) => p.problem === 'unknown field trimmed'), JSON.stringify(res.body));
   assert.equal((await post({ ...good(), schema: 'op-scribe.recording/v9' })).status, 422);
-  assert.ok(!readdirSync(join(dir, 'recordings')).includes('rec-recv-mix.json'));
+  const blank = good();
+  blank.recording.id = 'rec-recv-blank';
+  blank.recording.scope = ['  '];
+  blank.reproduction.gherkin = D.toGherkin(blank.recording);
+  assert.equal((await post(blank)).status, 422);
+  for (const id of ['rec-recv-mix', 'rec-recv-blank']) assert.ok(!readdirSync(join(dir, 'recordings')).includes(`${id}.json`));
 });

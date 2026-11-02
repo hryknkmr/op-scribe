@@ -537,6 +537,10 @@
       // An actual result that renders to nothing is no actual result (ADR 0005).
       if (step.verdict === 'ng' && !(step.actual !== undefined && renderRuns(step.actual).trim())) problems.push({ path: `${path}.actual`, problem: 'missing for an NG' });
     });
+    // The recording's own texts are kept only with text in them (T1): the worker drops an empty one.
+    for (const f of ['scope', 'targetVersion', 'notTested']) {
+      if (recording[f] !== undefined && !renderRuns(recording[f]).trim()) problems.push({ path: `recording.${f}`, problem: 'empty' });
+    }
     const { startedAt, endedAt } = recording;
     if (endedAt !== null && new Date(endedAt) < new Date(startedAt)) problems.push({ path: 'recording.endedAt', problem: 'before the start' });
   }
