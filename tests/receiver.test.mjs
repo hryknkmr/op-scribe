@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const S = require('../shared/sanitize.js');
 const P = require('../shared/payload.js');
+const D = require('../shared/describe.js');
 
 const dir = mkdtempSync(join(tmpdir(), 'opscribe-receiver-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
@@ -86,4 +87,25 @@ test('a well-formed payload is stored, and the old checks still hold', async () 
   assert.equal((await post('{not json')).status, 400);
   assert.equal((await post('{}', 'text/plain')).status, 415);
   assert.equal(server.exitCode, null);
+});
+
+test('a v3 payload is still stored, and a v3 payload with a v4 field is refused (ADR 0005, M1)', async () => {
+  const v3 = good();
+  v3.schema = 'op-scribe.recording/v3';
+  v3.recording.id = 'rec-recv-v3';
+  // The Gherkin names the recording: built again for the new id.
+  v3.reproduction.gherkin = D.toGherkin(v3.recording);
+  const stored = await post(v3);
+  assert.equal(stored.status, 201, JSON.stringify(stored.body));
+  const mixed = { ...v3, recording: { ...v3.recording, id: 'rec-recv-mix', trimmed: 'other' } };
+  const res = await post(mixed);
+  assert.equal(res.status, 422);
+  assert.ok(res.body.problems.some((p) => p.problem === 'unknown field trimmed'), JSON.stringify(res.body));
+  assert.equal((await post({ ...good(), schema: 'op-scribe.recording/v9' })).status, 422);
+  const blank = good();
+  blank.recording.id = 'rec-recv-blank';
+  blank.recording.scope = ['  '];
+  blank.reproduction.gherkin = D.toGherkin(blank.recording);
+  assert.equal((await post(blank)).status, 422);
+  for (const id of ['rec-recv-mix', 'rec-recv-blank']) assert.ok(!readdirSync(join(dir, 'recordings')).includes(`${id}.json`));
 });

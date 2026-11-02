@@ -93,3 +93,47 @@ test('a secret written into the Markdown by hand stops its copy (E4)', async ({ 
   await expect(status(panel)).toContainText('伏せ忘れの疑いがあるため中止しました');
   expect(await copies(panel)).toHaveLength(1);
 });
+
+test('a verdict given after the preview stops the send, and a new preview sends it (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  const toWorker = (type, detail) => panel.page.evaluate(([t, d]) => chrome.runtime.sendMessage({ from: 'op-scribe/panel', type: t, detail: d }), [type, detail]);
+  expect(await toWorker('ADD_NOTE', { text: '一覧が出る' })).toEqual({ ok: true });
+  await panel.stop();
+  await panel.page.reload();
+  await setKeywords(panel, []);
+  const sent = [];
+  await context.route('https://recv.test/**', (route) => { sent.push(route.request().postData()); return route.fulfill({ status: 204 }); });
+  await press(panel, 'preview');
+  await expect(panel.page.locator('#send')).toBeEnabled();
+  // The verdict does not move the revision, but it changes what would be sent.
+  const { id, steps } = await panel.recording();
+  const { ref } = steps.find((s) => s.type === 'note');
+  expect(await toWorker('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toEqual({ ok: true });
+  await press(panel, 'send');
+  await expect(panel.page.locator('#send-status')).toContainText('プレビューの後に記録が変わりました');
+  expect(sent).toHaveLength(0);
+  // Previewed again, it goes, with the verdict in it.
+  await press(panel, 'preview');
+  await press(panel, 'send');
+  await expect(panel.page.locator('#send-status')).toContainText('送信しました');
+  expect(sent).toHaveLength(1);
+  expect(JSON.parse(sent[0]).recording.steps.find((s) => s.ref === ref).verdict).toBe('ok');
+});
+
+test('a stop after the preview stops the send (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await setKeywords(panel, []);
+  const sent = [];
+  await context.route('https://recv.test/**', (route) => { sent.push(route.request().postData()); return route.fulfill({ status: 204 }); });
+  await press(panel, 'preview');
+  await expect(panel.page.locator('#send')).toBeEnabled();
+  // The stop writes the end and moves no revision: the send still sees the change.
+  await panel.stop();
+  await press(panel, 'send');
+  await expect(panel.page.locator('#send-status')).toContainText('プレビューの後に記録が変わりました');
+  expect(sent).toHaveLength(0);
+});

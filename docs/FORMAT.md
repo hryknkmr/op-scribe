@@ -121,14 +121,16 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 - Markdown: `## 探索メモ` の節に `- [不具合] 保存が2回走る（手順 1 の後）` の形で並ぶ。AI で整理したときは手順の番号を付けない
 - Gherkin: その位置のコメント行 `# [不具合] 保存が2回走る` になる。シナリオの意味は変わらない
 
-## 送信ペイロード（`op-scribe.recording/v3`）
+## 送信ペイロード（`op-scribe.recording/v4`）
+
+拡張は v4 を作ります。受信サーバと出口の検査は、v3 も受け付けます（`schema` を読み、その版の形だけで全体を検査します。v3 に v4 の欄があれば拒否します）。
 
 形の唯一の定義は `shared/payload.js` の `SHAPE` です。各欄が [ADR 0003](adr/0003-privacy-guarantee-matrix.md)
 の表のどの行で扱いが決まるかも、そこに書いてあります（テストで突き合わせます）。
 
 ```jsonc
 {
-  "schema": "op-scribe.recording/v3",
+  "schema": "op-scribe.recording/v4",
   "privacy": {
     "policy": "commercial-strict/1",
     "coverage": "commercial | standard | mixed | none",
@@ -151,9 +153,15 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
       { "n": 4, "type": "input", "t": 1300, "env": "standard", "source": "user", "url": ["…"],
         "value": { "treatment": "kept", "field": "text", "text": ["問い合わせ ", { "redacted": "email" }] } },
       { "n": 5, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": ["search_catalog"], "ok": true,
-        "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } }
+        "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } },
+      { "n": 6, "type": "note", "t": 1800, "env": "commercial", "source": "user", "note": ["一覧が表示される"],
+        "ref": "E-7f3a9k", "verdict": "ng", "actual": ["一覧が空のまま"] }
     ],
-    "webmcpTools": [{ "site": ["https://site-1.invalid"], "tools": [["search_catalog"]] }]
+    "webmcpTools": [{ "site": ["https://site-1.invalid"], "tools": [["search_catalog"]] }],
+    "scope": ["検索画面の絞り込み"],
+    "targetVersion": ["2.3.0"],
+    "notTested": ["決済"],
+    "trimmed": "other"
   },
   "reproduction": {
     "generator": "template | on-device-ai | manual | none",
@@ -164,7 +172,13 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 }
 ```
 
-- `t` は記録開始からの経過ミリ秒です。
+- `privacy.redactions` は、記録に入れたステップと欄で伏せた回数の、種類ごとの累計です（上限などで記録しなかったステップの分は数えません）。ステップを削除しても、判定を付け直して実際の結果が消えたり置き換わったりしても減りません（今の記録に残っている伏せ字の数ではありません）。
+- `t` は記録開始からの経過ミリ秒です。`endedAt` は v4 では `startedAt` より前になりません。
+- v4 で足した欄（[ADR 0005](adr/0005-output-formats-for-readers.md)）:
+  - `ref` は、テスターが書いた期待結果（`type: "note"`・`kind` が無い・`source: "user"`）すべてに付く ID（`E-` と英小文字・数字 6 文字。拡張が乱数で振る）。ほかのステップには付きません。
+  - `verdict`（`ok` / `ng`）は、テスターが付けた判定です。無ければ未判定。`actual`（実際の結果）は `ng` のステップにだけ、必ず付きます。
+  - `scope`（対象と範囲）・`targetVersion`（対象のバージョン）・`notTested`（やっていないこと）は、テスターが開始時・停止時に書いた文で、無くてもよい欄です。メモと同じように伏せます。
+  - `trimmed` は、上限のためにステップを保持できなかった印です。`user` は人のステップが欠けた、`other` は遷移・通知・ツール呼び出し・ページからの申告（`source` が `user` 以外）だけが欠けた、という意味です。無ければ欠けていません。
 - `type: "notice"` は、人の操作の直後にページが通知領域に出した文です。`notice`（文）と `level`（`status` / `alert`）を持ち、
   商用環境のステップにはありません。観測した事実なので、Markdown では期待結果と分けて「画面の表示」と書きます。
 - `env` は、そのステップが「商用環境のホスト」での操作か（`commercial`）、それ以外か（`standard`）です。

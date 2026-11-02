@@ -31,7 +31,7 @@ const fixTyped = (v) => {
 function withRuns(r) {
   if (typeof r.startUrl === 'string') r.startUrl = runsOf(r.startUrl);
   for (const step of r.steps || []) {
-    for (const f of ['url', 'tool', 'note']) if (typeof step[f] === 'string') step[f] = runsOf(step[f]);
+    for (const f of ['url', 'tool', 'note', 'actual']) if (typeof step[f] === 'string') step[f] = runsOf(step[f]);
     if (step.target) for (const f of ['name', 'href']) if (typeof step.target[f] === 'string') step.target[f] = runsOf(step.target[f]);
     fixTyped(step.value);
     fixTyped(step.args);
@@ -44,6 +44,7 @@ function withRuns(r) {
   }
   else if (r.webmcpTools) for (const site of Object.keys(r.webmcpTools)) r.webmcpTools[site] = r.webmcpTools[site].map((t) => (typeof t === 'string' ? runsOf(t) : t));
   if (r.environment) for (const k of Object.keys(r.environment)) if (typeof r.environment[k] === 'string') r.environment[k] = runsOf(r.environment[k]);
+  for (const f of ['scope', 'targetVersion', 'notTested']) if (typeof r[f] === 'string') r[f] = runsOf(r[f]);
   return r;
 }
 const show = (runs) => S.renderRuns(runs);
@@ -70,7 +71,7 @@ const rec = {
       target: { role: 'textbox', name: '本文' }, value: { treatment: 'length', field: 'text', kind: 'text', length: 5 } },
     { type: 'tool', t: 4000, env: 'commercial', source: 'agent', tool: 'search_catalog', ok: true,
       args: { q: { treatment: 'length', field: 'arg', kind: 'text', length: 3 }, all: true } },
-    { type: 'note', t: 5000, env: 'commercial', source: 'user', note: '結果が出る' }
+    { type: 'note', t: 5000, env: 'commercial', source: 'user', note: '結果が出る', ref: 'E-a1b2c3' }
   ]
 };
 
@@ -84,7 +85,7 @@ test('buildPayload carries no local-only state and passes both exit checks', () 
   for (const leak of ['tabId', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
     assert.ok(!json.includes(leak), `payload contains ${leak}`);
   }
-  assert.equal(payload.schema, 'op-scribe.recording/v3');
+  assert.equal(payload.schema, 'op-scribe.recording/v4');
   assert.deepEqual(payload.privacy, { policy: 'commercial-strict/1', coverage: 'commercial', hostsAliased: 1, redactions: { text: 1, secret: 1 } });
   assert.deepEqual(P.checkPayload(payload), []);
   assert.deepEqual(S.finalScan(payload, { keywords: ['intranet.corp.invalid'] }), []);
@@ -340,11 +341,14 @@ test('the largest recording the limits allow, with the worst characters, passes 
       target: { role: 'button', tag: 'button', name: `${worst(LIMITS.name, false)}…`, selector: worst(LIMITS.selector, false), href: url } }),
     (i) => ({ type: 'input', t: i, env: 'standard', source: 'user', url, target: { role: 'textbox', name: `${worst(LIMITS.name, false)}…` },
       value: { treatment: 'kept', field: 'text', text: `${worst(LIMITS.kept.text)}…` } }),
-    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…` }),
+    // The tester's expectation with every field v4 gives it (ADR 0005): an NG with its actual result.
+    (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…`,
+      ref: `E-${i.toString(36).padStart(6, '0')}`, verdict: 'ng', actual: `${worst(LIMITS.actual, false)}…` }),
     (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…`, kind: 'next' })
   ];
   const steps = Array.from({ length: LIMITS.steps }, (_, i) => kinds[i % kinds.length](i));
-  const big = withRuns({ ...clone(rec), startUrl: url, steps, webmcpTools: {} });
+  const big = withRuns({ ...clone(rec), startUrl: url, steps, webmcpTools: {}, trimmed: 'other',
+    scope: `${worst(LIMITS.scope, false)}…`, targetVersion: `${worst(LIMITS.targetVersion, false)}…`, notTested: `${worst(LIMITS.notTested, false)}…` });
   const markdown = D.toMarkdown(D.buildReproduction(big));
   assert.ok([...markdown].length <= TOTALS.markdown, `markdown ${markdown.length} > ${TOTALS.markdown}`);
   const payload = P.buildPayload(big, { generator: 'template', markdown }, {});
@@ -355,7 +359,7 @@ test('the largest recording the limits allow, with the worst characters, passes 
 });
 
 test('a panel note takes its environment from the recording when the payload is built (M1, E2; review R12)', () => {
-  const note = { type: 'note', t: 1, env: 'standard', source: 'user', note: 'メモ' };
+  const note = { type: 'note', t: 1, env: 'standard', source: 'user', note: 'メモ', ref: 'E-000001' };
   const r = { ...clone(rec), steps: [
     { type: 'navigate', t: 0, env: 'standard', source: 'unknown', url: 'https://site-2.invalid/' },
     note,
@@ -702,4 +706,99 @@ test('each kind of step has the source W7 gives it (row W7; review of #37 R9)', 
     assert.ok(P.checkPayload(regen(payload)).some((p) => p.path === `recording.steps[${index}].source`), `${index} ${source}`);
   }
   assert.deepEqual(P.checkPayload(build()), []);
+});
+
+// ------------------------------------------------------------- ADR 0005 (v4)
+
+test('v3 and v4 are accepted, each against its own shape, and any other schema is refused (ADR 0005, M1)', () => {
+  const v4 = build(rec);
+  assert.deepEqual(P.checkPayload(v4), []);
+  // The same recording as v3: no ref, and no field v4 added.
+  const v3 = clone(v4);
+  v3.schema = 'op-scribe.recording/v3';
+  delete v3.recording.steps[5].ref;
+  assert.deepEqual(P.checkPayload(v3), []);
+  // A v4 field in a v3 payload is an unknown field, not judged by v4's rules.
+  for (const mix of [(p) => { p.recording.steps[5].ref = 'E-a1b2c3'; }, (p) => { p.recording.trimmed = 'other'; }, (p) => { p.recording.scope = ['x']; }]) {
+    const p = clone(v3);
+    mix(p);
+    assert.ok(P.checkPayload(p).some((x) => x.problem.startsWith('unknown field')), JSON.stringify(P.checkPayload(p)));
+  }
+  for (const schema of ['op-scribe.recording/v2', 'op-scribe.recording/v5', undefined]) {
+    assert.deepEqual(P.checkPayload({ ...clone(v4), schema }), [{ path: 'schema', problem: 'unknown schema' }]);
+  }
+  assert.deepEqual(P.checkPayload(null), [{ path: 'schema', problem: 'unknown schema' }]);
+  // v3 keeps accepting an end before the start; v4 does not.
+  const early = (p) => { p.recording.endedAt = new Date(Date.parse(p.recording.startedAt) - 1000).toISOString(); return p; };
+  assert.deepEqual(P.checkPayload(early(clone(v3))), []);
+  assert.deepEqual(P.checkPayload(early(clone(v4))), [{ path: 'recording.endedAt', problem: 'before the start' }]);
+});
+
+test('v4: a ref on every expectation of the tester and nowhere else, a verdict only there, an actual result exactly on an NG (ADR 0005, T8)', () => {
+  const at = (p) => p.recording.steps[5];
+  const problems = (change) => {
+    const p = build(rec);
+    change(p);
+    return P.checkPayload(p).map((x) => `${x.path} ${x.problem}`);
+  };
+  assert.deepEqual(problems((p) => { delete at(p).ref; }), ['recording.steps[5].ref missing for an expectation']);
+  assert.deepEqual(problems((p) => { p.recording.steps[1].ref = 'E-000001'; }), ['recording.steps[1].ref not allowed for input', 'recording.steps[1].ref only on an expectation of the tester']);
+  assert.deepEqual(problems((p) => { at(p).ref = 'E-SHOUT1'; }), ['recording.steps[5].ref unexpected form']);
+  // Two expectations with one ref.
+  assert.deepEqual(problems((p) => { p.recording.steps.push({ ...clone(at(p)), n: 7 }); p.reproduction.gherkin = D.toGherkin(p.recording); }), ['recording.steps[6].ref ref twice']);
+  // An exploration note is not an expectation: no ref, no verdict.
+  assert.deepEqual(problems((p) => { at(p).kind = 'idea'; }), ['recording.steps[5].ref only on an expectation of the tester']);
+  assert.deepEqual(problems((p) => { at(p).actual = ['見えた']; }), ['recording.steps[5].actual actual result without an NG']);
+  assert.deepEqual(problems((p) => { at(p).verdict = 'ok'; at(p).actual = ['見えた']; }), ['recording.steps[5].actual actual result without an NG']);
+  assert.deepEqual(problems((p) => { at(p).verdict = 'ng'; }), ['recording.steps[5].actual missing for an NG']);
+  assert.deepEqual(problems((p) => { at(p).verdict = 'ng'; at(p).actual = ['  ']; }), ['recording.steps[5].actual missing for an NG']);
+  assert.deepEqual(problems((p) => { at(p).verdict = 'ng'; at(p).actual = [{ redacted: 'email' }]; }), [], 'a masked part is text once rendered');
+  assert.deepEqual(problems((p) => { at(p).verdict = 'ok'; }), []);
+  assert.deepEqual(problems((p) => { at(p).verdict = 'maybe'; }), ['recording.steps[5].verdict unexpected value']);
+  assert.deepEqual(problems((p) => { p.recording.trimmed = 'all'; }), ['recording.trimmed unexpected value']);
+  // The recording's own texts: kept only with text in them; a masked part alone is text once rendered.
+  for (const f of ['scope', 'targetVersion', 'notTested']) {
+    assert.deepEqual(problems((p) => { p.recording[f] = []; }), [`recording.${f} empty`]);
+    assert.deepEqual(problems((p) => { p.recording[f] = ['   ']; }), [`recording.${f} empty`]);
+    assert.deepEqual(problems((p) => { p.recording[f] = [{ redacted: 'email' }]; }), []);
+  }
+});
+
+test('buildPayload copies the recording\'s own texts and builds the same payload again for the same sentAt (ADR 0005)', () => {
+  const r = { ...clone(rec), scope: '検索画面', targetVersion: '2.3.0', notTested: '決済', trimmed: 'other' };
+  const first = P.buildPayload(withRuns(clone(r)), { generator: 'none', markdown: '' }, env);
+  assert.deepEqual(P.checkPayload(first), []);
+  assert.equal(show(first.recording.scope), '検索画面');
+  assert.equal(first.recording.trimmed, 'other');
+  const again = P.buildPayload(withRuns(clone(r)), { generator: 'none', markdown: '' }, env, first.sentAt);
+  assert.equal(JSON.stringify(again, null, 2), JSON.stringify(first, null, 2));
+  // A verdict changes the payload: the previewed text and the one built now differ (the send check).
+  // A verdict, the stop or a tool list changes the payload without a step: the previewed text
+  // and the one built now differ, which is what the send compares.
+  const changes = [
+    (x) => { x.steps[5].verdict = 'ok'; },
+    (x) => { x.endedAt += 60000; },
+    (x) => { x.notTested = ['決済と返品']; },
+    (x) => { x.webmcpTools['https://site-1.invalid'] = [['search_catalog'], ['add_to_cart']]; }
+  ];
+  for (const change of changes) {
+    const changed = withRuns(clone(r));
+    change(changed);
+    assert.notEqual(JSON.stringify(P.buildPayload(changed, { generator: 'none', markdown: '' }, env, first.sentAt), null, 2), JSON.stringify(first, null, 2), String(change));
+  }
+});
+
+test('the final scan does not stop on the words v4 adds when a keyword is the same word (ADR 0005, K2)', () => {
+  for (const [verdict, trimmed] of [['ok', 'user'], ['ng', 'other']]) {
+    const r = withRuns({ ...clone(rec), trimmed });
+    r.steps[5].verdict = verdict;
+    if (verdict === 'ng') r.steps[5].actual = ['空のまま'];
+    const payload = P.buildPayload(r, { generator: 'none', markdown: '' }, env);
+    assert.deepEqual(P.checkPayload(payload), []);
+    assert.deepEqual(S.finalScan(payload, { keywords: [verdict, trimmed, 'E-a1b2c3'] }), [], `${verdict} ${trimmed}`);
+  }
+  const payload = P.buildPayload(withRuns(clone(rec)), { generator: 'none', markdown: '' }, env);
+  // The same word anywhere else is still found.
+  payload.recording.steps[5].note = ['user'];
+  assert.ok(S.finalScan(payload, { keywords: ['user'] }).length);
 });

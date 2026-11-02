@@ -69,6 +69,8 @@ let basis = null;
 /** The exact JSON string shown in the preview; this is what gets sent. */
 let previewed = null;
 let previewedBasis = null;
+/** What the previewed payload was built from (reproduction, environment, sentAt): sending builds it again to compare. */
+let previewedInputs = null;
 /** Where the previewed body goes, as shown in the preview: sending uses exactly this. */
 let previewedTarget = null;
 
@@ -388,8 +390,9 @@ async function preparePayload() {
     markdown: ui.repro.value
   };
   // The Gherkin in the payload is rebuilt from the recording here, never taken from the panel.
-  const payload = P.buildPayload(rec, reproduction, environment());
-  return { rec, payload, findings: exitFindings(rec, payload) };
+  const env = environment();
+  const payload = P.buildPayload(rec, reproduction, env);
+  return { rec, payload, findings: exitFindings(rec, payload), inputs: { reproduction, environment: env, sentAt: payload.sentAt } };
 }
 
 function blockedMessage(findings) {
@@ -404,6 +407,7 @@ ui.preview.addEventListener('click', async () => {
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
   previewedBasis = basisOf(prepared.rec);
+  previewedInputs = prepared.inputs;
   ui.payload.textContent = previewed;
   ui.findings.replaceChildren();
   for (const line of describeFindings(prepared.findings)) {
@@ -433,6 +437,7 @@ ui.send.addEventListener('click', () => {
   if (!pattern || !previewed) return;
   const granted = chrome.permissions.request({ origins: [pattern] });
   const body = previewed;
+  const inputs = previewedInputs;
   (async () => {
     ui.send.disabled = true;
     try {
@@ -440,10 +445,17 @@ ui.send.addEventListener('click', () => {
         ui.sendStatus.textContent = '送信先へのアクセスが許可されませんでした';
         return;
       }
-      // Re-check the exact bytes about to leave, not a rebuilt object.
-      const rec = await loadRecording();
+      // Re-check the exact bytes about to leave, not a rebuilt object. The settings first: from
+      // reading the recording to starting the request nothing waits, so a verdict or a stop saved
+      // meanwhile is either in what is compared or comes after the send began (ADR 0005). What is
+      // saved between that read and the request itself is not seen: a known limit, short of
+      // sending from the worker's queue.
       await loadSettings();
-      if (basisOf(rec) !== previewedBasis) {
+      const rec = await loadRecording();
+      // A verdict, the stop or a tool list changes the payload but not the revision (ADR 0005):
+      // the recording as it is now, built from what was previewed, must be the previewed text.
+      if (basisOf(rec) !== previewedBasis || !inputs
+        || JSON.stringify(P.buildPayload(rec, inputs.reproduction, inputs.environment, inputs.sentAt), null, 2) !== body) {
         ui.sendStatus.textContent = 'プレビューの後に記録が変わりました。もう一度プレビューしてください';
         return;
       }

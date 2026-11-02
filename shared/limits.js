@@ -17,6 +17,12 @@
     kept: Object.freeze({ choice: 120, search: 120, text: 200, arg: 200 }),
     name: 80,
     note: 300,
+    // ADR 0005: what the tester writes besides a note - the actual result of an NG, and at start and
+    // stop the scope, the version under test and what was not tested. Masked like a note (T1).
+    actual: 300,
+    scope: 300,
+    targetVersion: 80,
+    notTested: 300,
     notice: 200,
     tool: 80,
     toolList: 50,
@@ -139,7 +145,8 @@
     upload: { required: ['value'], allowed: ['url', 'target', 'value'] },
     key: { required: ['key'], allowed: ['url', 'target', 'key'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
-    note: { required: ['note'], allowed: ['url', 'note', 'kind'] },
+    // ref, verdict and actual only on the tester's expectation, in v4 (ADR 0005); payload.js checks which note may hold them.
+    note: { required: ['note'], allowed: ['url', 'note', 'kind', 'ref', 'verdict', 'actual'] },
     notice: { required: ['url', 'notice', 'level'], allowed: ['url', 'notice', 'level'] }
   });
 
@@ -150,7 +157,7 @@
    * as \u0000 (6 characters) and a quote or backslash as 2; a Gherkin table
    * cell doubles backslashes and pipes once more.
    */
-  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + cut(LIMITS.selector) + cut(LIMITS.note) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
+  const TEXT = 2 * LIMITS.url + cut(LIMITS.name) + cut(LIMITS.selector) + cut(LIMITS.note) + cut(LIMITS.actual) + cut(LIMITS.tool) + cut(LIMITS.kept.text);
   // The arguments as JSON with their typed wrappers ({"treatment":"kept","field":"arg","text":...}).
   const ARGS_JSON = LIMITS.argLeaves * (6 * cut(LIMITS.argKey) + 6 * cut(LIMITS.kept.arg) + 64) + 64;
   const STEP = Object.freeze({
@@ -166,11 +173,13 @@
   const GHERKIN = LIMITS.steps * STEP.gherkin + 4096;
   const TOOLS_JSON = LIMITS.toolList * (6 * LIMITS.url + LIMITS.toolList * 6 * cut(LIMITS.tool));
   const REDACTIONS_JSON = REDACTION_KINDS.length * 32;
+  // The recording's own texts (ADR 0005), as runs in JSON: 6 bytes a rendered character at worst.
+  const RECORDING_TEXT_JSON = 6 * (cut(LIMITS.scope) + cut(LIMITS.targetVersion) + cut(LIMITS.notTested)) + 256;
   const TOTALS = Object.freeze({
     markdown: MARKDOWN,
     gherkin: GHERKIN,
     // The recording, plus the Markdown and the Gherkin as JSON strings: 6 bytes a character at worst.
-    payloadBytes: LIMITS.steps * STEP.json + TOOLS_JSON + REDACTIONS_JSON + 6 * (MARKDOWN + GHERKIN) + 4096
+    payloadBytes: LIMITS.steps * STEP.json + TOOLS_JSON + REDACTIONS_JSON + RECORDING_TEXT_JSON + 6 * (MARKDOWN + GHERKIN) + 4096
   });
 
   /** WAI-ARIA 1.2 roles that are not abstract: the ones an element can take. */
@@ -218,7 +227,11 @@
     id: (value) => /^rec-[a-z0-9-]{1,40}$/.test(value),
     startedAt: (value) => ISO_TIME.test(value),
     endedAt: (value) => ISO_TIME.test(value),
-    sentAt: (value) => ISO_TIME.test(value)
+    sentAt: (value) => ISO_TIME.test(value),
+    // ADR 0005: an expectation's id, the tester's verdict and the recording's trimmed mark.
+    ref: (value) => /^E-[0-9a-z]{6}$/.test(value),
+    verdict: words(['ok', 'ng']),
+    trimmed: words(['user', 'other'])
   });
   const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 

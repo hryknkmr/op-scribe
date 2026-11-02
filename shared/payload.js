@@ -1,5 +1,5 @@
 /**
- * op-scribe - the one definition of the payload (op-scribe.recording/v3).
+ * op-scribe - the one definition of the payload (op-scribe.recording/v4; v3 still accepted).
  *
  * SHAPE lists every field that may leave the browser, with its type and the
  * row of docs/adr/0003 that decides its treatment. buildPayload copies only
@@ -22,7 +22,11 @@
   const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, SCHEME, renderRuns } = root.OpScribeLimits || require('./limits.js');
 
   // v3: every text the masking keeps is runs, not a string with placeholders in it (#28).
-  const SCHEMA = 'op-scribe.recording/v3';
+  // v4: the tester's verdicts and the recording's own texts (ADR 0005). Both are accepted; the
+  // fields v4 added say so with since: 4, and v3 is SHAPE without them (shapeFor).
+  const SCHEMAS = Object.freeze(['op-scribe.recording/v3', 'op-scribe.recording/v4']);
+  const SCHEMA = SCHEMAS[SCHEMAS.length - 1];
+  const versionOf = (schema) => Number(/\/v(\d+)$/.exec(schema)?.[1]);
   const POLICY = 'commercial-strict/1';
 
   // ------------------------------------------------------------------- shape
@@ -91,6 +95,9 @@
     return '';
   }
   const opt = (node) => ({ ...node, optional: true });
+  // A field the payload has had since v4 (ADR 0005).
+  const v4 = (node) => ({ ...node, since: 4 });
+  const REF = /^E-[0-9a-z]{6}$/;
 
   const TARGET = {
     type: 'object',
@@ -123,14 +130,18 @@
       note: opt(runs('T1', LIMITS.note)),
       kind: opt({ type: 'enum', row: 'T6', values: ['bug', 'question', 'idea', 'next'] }),
       notice: opt(runs('T7', LIMITS.notice)),
-      level: opt({ type: 'enum', row: 'T6', values: ['status', 'alert'] })
+      level: opt({ type: 'enum', row: 'T6', values: ['status', 'alert'] }),
+      // The tester's expectation: its id, verdict and the actual result of an NG (ADR 0005).
+      ref: v4(opt(str('T6', 8, REF))),
+      verdict: v4(opt({ type: 'enum', row: 'T6', values: ['ok', 'ng'] })),
+      actual: v4(opt(runs('T1', LIMITS.actual)))
     }
   };
 
   const SHAPE = {
     type: 'object',
     fields: {
-      schema: { type: 'const', row: 'M1', value: SCHEMA },
+      schema: { type: 'enum', row: 'M1', values: SCHEMAS },
       privacy: {
         type: 'object',
         fields: {
@@ -166,7 +177,12 @@
                 tools: { type: 'array', max: LIMITS.toolList, of: runs('W6', LIMITS.tool) }
               }
             }
-          }
+          },
+          // What the tester writes at start and stop, and whether a limit dropped steps (ADR 0005).
+          scope: v4(opt(runs('T1', LIMITS.scope))),
+          targetVersion: v4(opt(runs('T1', LIMITS.targetVersion))),
+          notTested: v4(opt(runs('T1', LIMITS.notTested))),
+          trimmed: v4(opt({ type: 'enum', row: 'M5', values: ['user', 'other'] }))
         }
       },
       reproduction: {
@@ -180,6 +196,20 @@
       sentAt: str('M2', 24, ISO)
     }
   };
+
+  /**
+   * The shape of one version: SHAPE without the fields a later version added. The
+   * one way each version's fields are known, so no list of them lives outside SHAPE.
+   */
+  function shapeFor(version, node = SHAPE) {
+    if (node.type === 'object') {
+      const fields = {};
+      for (const [k, child] of Object.entries(node.fields)) if (!(child.since > version)) fields[k] = shapeFor(version, child);
+      return { ...node, fields };
+    }
+    if (node.type === 'array') return { ...node, of: shapeFor(version, node.of) };
+    return node;
+  }
 
   /** Every leaf of SHAPE as { path, row }, for the test that ties SHAPE to ADR 0003. */
   function shapeRows(node = SHAPE, path = '') {
@@ -195,6 +225,8 @@
   const STEP_FIELDS = Object.keys(STEP.fields).filter((f) => f !== 'n' && f !== 'target');
   const TARGET_FIELDS = Object.keys(TARGET.fields);
   const ENV_FIELDS = Object.keys(SHAPE.fields.recording.fields.environment.fields);
+  // The recording's own fields since v4 (scope, targetVersion, notTested, trimmed), copied as they are.
+  const RECORDING_V4 = Object.entries(SHAPE.fields.recording.fields).filter(([, n]) => n.since === 4).map(([k]) => k);
 
   const pick = (obj, fields) => {
     const out = {};
@@ -207,8 +239,10 @@
    * so local-only state (tab id, real-origin alias map, granted origins, host
    * lists) can never ride along by accident. The Gherkin is always rebuilt
    * from the recording, whatever the panel shows (ADR 0003, row E3).
+   * sentAt: the time of a payload previewed earlier, so the same recording builds
+   * the same payload again before it is sent (ADR 0005); now when not given.
    */
-  function buildPayload(rec, reproduction, environment) {
+  function buildPayload(rec, reproduction, environment, sentAt) {
     const recording = {
       id: rec.id,
       startedAt: new Date(rec.startedAt).toISOString(),
@@ -224,7 +258,8 @@
         if (step.target) out.target = pick(step.target, TARGET_FIELDS);
         return out;
       }),
-      webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site: [site], tools }))
+      webmcpTools: Object.entries(rec.webmcpTools || {}).map(([site, tools]) => ({ site: [site], tools })),
+      ...pick(rec, RECORDING_V4)
     };
     return {
       schema: SCHEMA,
@@ -240,7 +275,7 @@
         markdown: reproduction?.markdown || '',
         gherkin: D.toGherkin(recording)
       },
-      sentAt: new Date().toISOString()
+      sentAt: sentAt || new Date().toISOString()
     };
   }
 
@@ -480,13 +515,48 @@
     return undefined;
   }
 
+  /** The tester's expectation (ADR 0005): a note without a kind, written in the side panel. */
+  const isExpectation = (step) => step.type === 'note' && step.kind === undefined && step.source === 'user';
+
+  /**
+   * What v4 adds beyond the shape (ADR 0005, rows T6, T1, M2): every expectation of the
+   * tester has its own ref and nothing else has one; a verdict only on one, and an actual
+   * result exactly on an NG, with text in it once rendered; the end not before the start.
+   */
+  function checkV4(recording, problems) {
+    const refs = new Set();
+    recording.steps.forEach((step, i) => {
+      const path = `recording.steps[${i}]`;
+      if (!isExpectation(step)) {
+        for (const f of ['ref', 'verdict', 'actual']) if (step[f] !== undefined) problems.push({ path: `${path}.${f}`, problem: 'only on an expectation of the tester' });
+        return;
+      }
+      if (step.ref === undefined) problems.push({ path: `${path}.ref`, problem: 'missing for an expectation' });
+      else if (refs.has(step.ref)) problems.push({ path: `${path}.ref`, problem: 'ref twice' });
+      else refs.add(step.ref);
+      if (step.verdict !== 'ng' && step.actual !== undefined) problems.push({ path: `${path}.actual`, problem: 'actual result without an NG' });
+      // An actual result that renders to nothing is no actual result (ADR 0005).
+      if (step.verdict === 'ng' && !(step.actual !== undefined && renderRuns(step.actual).trim())) problems.push({ path: `${path}.actual`, problem: 'missing for an NG' });
+    });
+    // The recording's own texts are kept only with text in them (T1): the worker drops an empty one.
+    for (const f of ['scope', 'targetVersion', 'notTested']) {
+      if (recording[f] !== undefined && !renderRuns(recording[f]).trim()) problems.push({ path: `recording.${f}`, problem: 'empty' });
+    }
+    const { startedAt, endedAt } = recording;
+    if (endedAt !== null && new Date(endedAt) < new Date(startedAt)) problems.push({ path: 'recording.endedAt', problem: 'before the start' });
+  }
+
   /**
    * Problems with a payload as [{ path, problem }]; empty means it may leave.
    * Run on the exact object about to be sent, copied or saved, and on receipt.
+   * The schema is read first, then the whole payload is checked against that
+   * version's shape only (ADR 0005): a v3 payload with a v4 field has an unknown field.
    */
   function checkPayload(payload) {
     const problems = [];
-    checkNode(SHAPE, payload, '', problems);
+    if (!isObject(payload) || !SCHEMAS.includes(payload.schema)) return [{ path: 'schema', problem: 'unknown schema' }];
+    const version = versionOf(payload.schema);
+    checkNode(shapeFor(version), payload, '', problems);
     if (problems.length) return problems;
 
     const steps = payload.recording.steps;
@@ -513,6 +583,7 @@
         if (countValues(step.args) > LIMITS.argLeaves) problems.push({ path: `${path}.args`, problem: 'too many values' });
       }
     });
+    if (version >= 4) checkV4(payload.recording, problems);
     // Rendering a payload that already failed (an over-deep argument tree, say) proves nothing and may not finish.
     if (problems.length) return problems;
     checkLines(payload.recording, 'recording', problems);
@@ -580,7 +651,7 @@
     return problems;
   }
 
-  const api = { SCHEMA, SHAPE, shapeRows, buildPayload, checkPayload, checkCanonical };
+  const api = { SCHEMA, SCHEMAS, SHAPE, shapeFor, shapeRows, buildPayload, checkPayload, checkCanonical };
   root.OpScribePayload = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
