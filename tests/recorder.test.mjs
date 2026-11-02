@@ -21,6 +21,7 @@ function recorder() {
   field.contains = (node) => node === field;
   Object.defineProperty(field, 'type', { get: () => attrs.type || 'text' });
   const pageEvents = {};
+  const listenerOptions = {};
   let onMessage;
   const sent = [];
   const control = { recording: 'first', fail: () => false };
@@ -44,7 +45,7 @@ function recorder() {
     chrome, Element, setTimeout, clearTimeout, console,
     MutationObserver: class { observe() {} disconnect() {} },
     location: { href: 'https://example.com/', origin: 'https://example.com' },
-    window: { addEventListener: (type, fn) => { pageEvents[type] = fn; }, postMessage: () => {} },
+    window: { addEventListener: (type, fn, options) => { pageEvents[type] = fn; listenerOptions[type] = options; }, postMessage: () => {} },
     document: { activeElement: field, body: {}, querySelectorAll: () => [] },
     OpScribeTarget: { isTextField, implicitRole: () => 'textbox', operated: () => null, isOperated: () => false, accessibleName: () => 'q', inSearch: () => false },
     // A stand-in for the masking: a password field's value is redacted, any other kept.
@@ -69,7 +70,7 @@ function recorder() {
     if (onMessage({ from: 'op-scribe/worker', ...message }, {}, resolve) !== true) resolve();
   });
   const inputs = () => sent.filter((m) => m.type === 'STEP' && m.detail.type === 'input');
-  return { field, type, change, click, blur, steps, worker, inputs, control, again: () => context.__opScribeRecorder.hello() };
+  return { field, type, change, click, blur, steps, worker, inputs, control, listenerOptions, again: () => context.__opScribeRecorder.hello() };
 }
 
 test('the value a person is still typing is committed when the recording stops (#9)', async () => {
@@ -186,4 +187,13 @@ test('a late answer to an earlier HELLO does not undo the latest one (#9)', asyn
   await earlier;
   await r.worker({ type: 'OPS_FLUSH' });
   assert.deepEqual(r.inputs().map((m) => m.recording), ['new']);
+});
+
+test('every page event the recorder listens to is passive and in the capture phase (#42)', () => {
+  const { listenerOptions } = recorder();
+  const types = Object.keys(listenerOptions).filter((type) => type !== 'message');
+  for (const type of ['click', 'input', 'change', 'keydown', 'focusout']) assert.ok(types.includes(type), type);
+  // The relay from the MAIN world is a message, not a person's operation, and cannot be cancelled.
+  // Compared as JSON: the options object is made in the vm's realm.
+  for (const type of types) assert.equal(JSON.stringify(listenerOptions[type]), '{"capture":true,"passive":true}', type);
 });
