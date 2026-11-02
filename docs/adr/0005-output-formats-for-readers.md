@@ -144,7 +144,7 @@ NG と判定した期待結果 1 つにつき 1 枚。記録の中に NG が 2 �
 
 ## 実装の順（案）
 
-1. ADR 0003 に `ref`・`verdict`・`actual`・`scope`・`version`・`notTested`・`trimmed` の行と、上の組み合わせの制約を足し、送信データの版を `v4` に上げる（`SHAPE`・`STEP_RULES` の `note` に `ref`・`verdict`・`actual`・受信サーバ・FORMAT・版のテスト）。
+1. ADR 0003 に `ref`・`verdict`・`actual`・`scope`・`version`・`notTested`・`trimmed` の行と、上の組み合わせの制約を足し、W7 の行に `trimmed` の既知の限界（遷移・ツール呼び出し・申告が欠けても付かない）を書き、送信データの版を `v4` に上げる（`SHAPE`・`STEP_RULES` の `note` に `ref`・`verdict`・`actual`・受信サーバ・FORMAT・版のテスト）。
    - worker が、サイドパネルから届いた値をほかの欄と同じように作り直す: `ref` は worker が振る（届いた値は使わない。サイドパネルからの判定の更新では、指す先としてだけ使う）、`verdict` は列挙値だけ、`actual`・`scope`・`notTested` は `cleanLine`（メモと同じ伏せ方、300 字）、`version` は `cleanLine`（同じ伏せ方、80 字）。保存容量の上限（`fitRecord`）に新しい欄も入る。
    - 版ごとの形は 1 か所から導く: `shared/payload.js` の `SHAPE` の新しい欄に `since: 4` を書く（無ければ v3 から）。受け付ける版は `['v3', 'v4']` の一覧で持ち、v3 の形は `SHAPE` から `since: 4` の欄を除いたもの、v4 の形は `SHAPE` 全体。`checkPayload` と受信サーバは、まず `schema` を読んで一覧に無ければ拒否し、次にその版の形だけで全体を検査する（v3 の送信データに v4 の欄があれば、知らない欄として拒否する。版と欄の組み合わせを別の規則で検査しない）（除く欄の一覧を `SHAPE` の外に持たない。`checkPayload` に版ごとの許可欄を手で書かない。AGENTS.md の「送信データの形は `SHAPE` だけで定義する」を保つ）。`buildPayload` は常に v4 を作る。
    - `shared/limits.js` の `VOCAB` に `ref`（形 `^E-[0-9a-z]{6}$`）と `verdict`（`ok` / `ng`）を足す。最終検査が、登録語と同じ値（例えば登録語 `ok`）を漏れとして止めないため。
