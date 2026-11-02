@@ -31,28 +31,46 @@
    */
   let config = null;
   let lastStep = null;
-  const committed = new WeakMap();
+  // Per recording: what the last one saw does not carry over to the next (#9).
+  let committed = new WeakMap();
+  // Field -> what a person's last input left in it, classified and masked then, until committed (#9).
+  let pending = new Map();
 
-  async function send(type, detail, attempt = 0) {
+  // The recording is the one this message was sent for, on every try: a retry never moves it to the next (#9).
+  async function send(type, detail, attempt = 0, recording = config?.recording) {
     try {
-      return await chrome.runtime.sendMessage({ from: FROM, type, detail });
+      return await chrome.runtime.sendMessage({ from: FROM, type, detail, recording });
     } catch (error) {
       const text = String(error?.message || error);
       // Not a notice: sent again, it would land after the next operation and read as that one's (T7).
       if (TRANSIENT.test(text) && attempt < 3 && detail?.type !== 'notice') {
         await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-        return send(type, detail, attempt + 1);
+        return send(type, detail, attempt + 1, recording);
       }
       if (/Extension context invalidated/i.test(text)) config = null;
       return null;
     }
   }
 
+  /** What the recorder holds for a recording: nothing of it carries over to the next (#9). */
+  function forget() {
+    stopNotices();
+    committed = new WeakMap();
+    pending = new Map();
+  }
+
+  let asked = 0;
   async function hello() {
     // What the last recording's operation caused stays out of the next one.
     stopNotices();
+    const ask = ++asked;
     const response = await send('HELLO');
+    // Only the latest answer: an earlier one arriving late is about a recording that is over.
+    if (ask !== asked) return;
+    const previous = config?.recording;
     config = response?.active ? response.config : null;
+    // Another recording, or none: the stop of the last one may never have reached this page.
+    if (config?.recording !== previous) forget();
     if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
   }
 
@@ -141,9 +159,10 @@
     lastStep = { type, at: Date.now() };
     // What the last operation caused so far goes first, or it would land after this one.
     readNotices();
-    send('STEP', { type, pageUrl: location.href, ...extra });
+    const sent = send('STEP', { type, pageUrl: location.href, ...extra });
     // A person's operation only: what a page reports does not open the window (T7).
     if (type !== 'tool') watchNotices();
+    return sent;
   }
 
   // ---------------------------------------------------------------- notices
@@ -221,21 +240,45 @@
     return el.value;
   }
 
-  function recordValue(el) {
-    if (!config) return;
+  const fieldOf = (el) => (el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el);
+
+  /**
+   * The field as a person's operation leaves it, classified and masked at that moment: the page
+   * may change the field's value or names before it is committed, and neither is taken (I1-I8, W7; #9).
+   */
+  function snapshot(el) {
     const value = currentValue(el);
-    if (committed.get(el) === value) return;
-    committed.set(el, value);
     const meta = fieldMeta(el);
     const masked = S.maskFieldValue(value, meta, maskOptions());
-    if (!masked) return;
-    emit(el.tagName === 'SELECT' ? 'select' : 'input', {
-      target: describe(el),
-      // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
-      field: { ...meta, contentEditable: undefined },
-      value: masked.value,
-      valueKinds: masked.kinds
-    });
+    return {
+      value,
+      step: masked && {
+        target: describe(el),
+        // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
+        field: { ...meta, contentEditable: undefined },
+        value: masked.value,
+        valueKinds: masked.kinds
+      }
+    };
+  }
+
+  /** Records what a person's last input left in the field; `now`: a trusted change with no input before it. */
+  function commit(el, now = false) {
+    if (!config) return;
+    const taken = pending.get(el) || (now ? snapshot(el) : null);
+    pending.delete(el);
+    if (!taken || committed.get(el) === taken.value) return;
+    committed.set(el, taken.value);
+    if (!taken.step) return;
+    return emit(el.tagName === 'SELECT' ? 'select' : 'input', taken.step);
+  }
+
+  /** The field a person's pending input belongs to, whatever the page has made of it since. */
+  const pendingFor = (el) => [...pending.keys()].find((field) => field === el || field.contains(el));
+
+  /** A value is committed on change or blur; what is still being typed when the recording stops is committed here (#9). */
+  async function flush() {
+    await Promise.all([...pending.keys()].map((el) => commit(el)));
   }
 
   const handlers = {
@@ -248,12 +291,21 @@
     },
 
     click(event) {
+      // A checkbox or radio is recorded from the person's click (Space and arrow keys click it too), as
+      // it is at that click; its change is not, since a page's click() makes a trusted change too (W7).
+      const hit = asElement(event.composedPath()[0]);
+      if (hit && isToggle(hit)) {
+        const owner = pendingFor(hit);
+        if (owner) commit(owner);
+        emit('check', { target: describe(hit), checked: hit.checked });
+        return;
+      }
       // Enter in a field makes the browser "click" the submit button (detail 0, still
       // trusted). The key step already explains it; recording the click invents an action.
       if (event.detail === 0 && lastStep?.type === 'key' && Date.now() - lastStep.at < 800) return;
       const el = resolveTarget(event.composedPath()[0]);
       if (!el) return;
-      // Fields and toggles are recorded by their change, not by the focusing click.
+      // Fields are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
       // A label with a control: the browser forwards the click to the control, which records itself.
       if (!T.isOperated(el) && el.closest('label')?.control) return;
@@ -263,18 +315,31 @@
     change(event) {
       const el = asElement(event.composedPath()[0]);
       if (!el) return;
-      if (isToggle(el)) {
-        emit('check', { target: describe(el), checked: el.checked });
-      } else if (el.tagName === 'INPUT' && el.type === 'file') {
+      // What was typed first, by the field it was typed into, not by what the field is now.
+      const owner = pendingFor(el);
+      if (owner) commit(owner);
+      if (isToggle(el)) return; // Recorded from the click.
+      if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
-      } else if (el.matches('input, select, textarea')) {
-        recordValue(el);
+      } else if (!owner && el.matches('input, select, textarea')) {
+        commit(el, true);
+      }
+    },
+
+    input(event) {
+      const el = asElement(event.composedPath()[0]);
+      if (!el) return;
+      const field = fieldOf(el);
+      // Every field whose change records a value: toggles and files record the change itself.
+      if (isTextField(field) || (field.matches('input, select, textarea') && !isToggle(field) && field.type !== 'file')) {
+        pending.set(field, snapshot(field));
       }
     },
 
     focusout(event) {
       const el = asElement(event.composedPath()[0]);
-      if (el?.isContentEditable) recordValue(el.closest('[contenteditable=""],[contenteditable="true"]') || el);
+      const owner = el && pendingFor(el);
+      if (owner) commit(owner);
     },
 
     keydown(event) {
@@ -283,19 +348,17 @@
       const modifiers = ['ctrlKey', 'metaKey', 'altKey'].filter((m) => event[m]).map((m) => m.replace('Key', ''));
       if (event.key === 'Enter' && !event.shiftKey) {
         if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable) && !modifiers.length) return;
-        if (el && isTextField(el)) recordValue(el);
+        const owner = el && pendingFor(el);
+        if (owner) commit(owner);
         emit('key', { key: [...modifiers, 'Enter'].join('+'), target: el ? describe(resolveTarget(el)) : undefined });
       } else if (event.key === 'Escape' && !event.shiftKey && !modifiers.length) {
         // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
         emit('key', { key: 'Escape' });
       }
-    },
-
-    submit(event) {
-      // Usually already explained by the click or Enter that caused it.
-      if (lastStep && Date.now() - lastStep.at < 800 && ['click', 'key'].includes(lastStep.type)) return;
-      emit('submit', { target: describe(asElement(event.target)) });
     }
+
+    // No submit: a person's is explained by the click or Enter that caused it, and a submit
+    // with neither is a page's own requestSubmit(), not the person's (W7, #37 R15).
   };
 
   for (const [type, handler] of Object.entries(handlers)) {
@@ -338,9 +401,13 @@
       if (!config) hello();
       return;
     }
+    if (message.type === 'OPS_FLUSH') {
+      flush().catch(() => {}).finally(() => sendResponse({ ok: true }));
+      return true;
+    }
     if (message.type === 'OPS_STOP') {
-      stopNotices();
       config = null;
+      forget();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
   });

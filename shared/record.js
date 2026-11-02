@@ -17,7 +17,7 @@
   const { scrubText, scrubRuns, runKinds, cleanLine, oneLine, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
   const NOTE_KINDS = new Set(['bug', 'question', 'idea', 'next']);
-  const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note', 'notice']);
+  const STEP_TYPES = new Set(Object.keys(STEP_RULES));
   const NOTICE_LEVELS = new Set(['status', 'alert']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = LIMITS.kept;
@@ -131,8 +131,7 @@
   function countArgs(node, kinds) {
     if (!node || typeof node !== 'object') return;
     if (typeof node.treatment === 'string') {
-      if (node.treatment === 'redacted') kinds.push(node.kind);
-      if (node.treatment === 'length') kinds.push(node.kind);
+      if (node.treatment === 'redacted' || node.treatment === 'length') kinds.push(node.kind);
       return;
     }
     Object.values(node).forEach((child) => countArgs(child, kinds));
@@ -359,11 +358,6 @@
 
   const bytesOf = (value) => new TextEncoder().encode(JSON.stringify(value)).length;
 
-  /**
-   * Adds a cleaned step. Past the step limit, or past the size the session
-   * storage holds, the oldest steps go first, so the newest step is always
-   * kept and the recording can always be saved (review R40).
-   */
   /** The step that goes first when a recording is past a limit: the oldest the page reported, else the oldest (W7, #17). */
   const reported = (s) => s.source !== 'user';
   const nextToDrop = (rec) => Math.max(rec.steps.findIndex(reported), 0);
@@ -371,6 +365,11 @@
   // tells it nothing about the other sites (W7, W8; owner decision on #37).
   const reportedOn = (rec, site) => rec.steps.filter((s) => reported(s) && s.site === site);
 
+  /**
+   * Adds a cleaned step. Past the step limit, or past the size the session
+   * storage holds, the oldest steps go first, so the newest step is always
+   * kept and the recording can always be saved (review R40).
+   */
   function appendStep(rec, step) {
     if (!step) return false;
     // What a site reports is kept up to agentSteps; past it the new one is not recorded (W7, #17).

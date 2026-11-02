@@ -639,11 +639,6 @@
   // -------------------------------------------------------------- final gate
 
   /**
-   * Walks every string in an object and reports anything the filters would
-   * still mask. Run on the exact payload right before it leaves the browser;
-   * a non-empty result blocks sending.
-   */
-  /**
    * Real host names (row K5), apart from keywords: any length, matched only
    * as a whole host label sequence, so a one-letter host "x" is found but the
    * x in "box" is not.
@@ -704,6 +699,11 @@
   // "invalid" is not looked for in it (E6). Only there: the same form anywhere else is scanned.
   const ALIAS = /^site-\d+\.invalid$/;
 
+  /**
+   * Walks every string in an object and reports anything the filters would
+   * still mask. Run on the exact payload right before it leaves the browser;
+   * a non-empty result blocks sending.
+   */
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
@@ -767,12 +767,10 @@
   }
 
   const api = {
-    DEFAULT_SETTINGS,
     defaults,
     scrubText,
     scrubRuns,
     cutRuns,
-    joinRuns,
     renderRuns,
     runKinds,
     oneLine,

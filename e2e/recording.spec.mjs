@@ -24,10 +24,15 @@ test('records the page open at the start, then what the person does on it (#23, 
 test('the tests reach no host but the made-up ones', async ({ context }) => {
   const site = await context.newPage();
   await site.goto('http://a.test/');
+  const failed = [];
+  site.on('requestfailed', (request) => failed.push([request.url(), request.failure()?.errorText]));
   const reached = await site.evaluate(async () => {
     try { await fetch('https://example.com/', { mode: 'no-cors' }); return true; } catch { return false; }
   });
   expect(reached).toBe(false);
+  // Refused by the tests' own route (abort('blockedbyclient')), not failed for some other reason
+  // such as no network or DNS. Chromium adds a suffix (".Inspector") that is not ours to rely on.
+  expect(failed).toContainEqual(['https://example.com/', expect.stringMatching(/^net::ERR_BLOCKED_BY_CLIENT\b/)]);
   // A WebSocket is closed by the tests' own handler, never connected to the host.
   const closed = await site.evaluate(() => new Promise((resolve) => {
     const ws = new WebSocket('wss://example.com/');

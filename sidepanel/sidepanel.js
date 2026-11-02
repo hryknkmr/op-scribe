@@ -16,7 +16,6 @@ const P = globalThis.OpScribePayload;
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const DRAFT_KEY = 'opsDraft';
-const NOTICE_KEY = 'opsNotice';
 
 const el = (id) => document.getElementById(id);
 const ui = {
@@ -26,8 +25,6 @@ const ui = {
   stop: el('rec-stop'),
   clear: el('rec-clear'),
   originGate: el('origin-gate'),
-  policyNotice: el('policy-notice'),
-  policyNoticeOk: el('policy-notice-ok'),
   addOrigin: el('add-origin'),
   stepCount: el('step-count'),
   steps: el('steps'),
@@ -218,7 +215,8 @@ function render() {
     remove.className = 'icon';
     remove.title = 'この操作を削除';
     remove.textContent = '×';
-    remove.addEventListener('click', () => send('DELETE_STEP', { index }));
+    // The recording as shown: a second click before the list is drawn again removes nothing.
+    remove.addEventListener('click', () => send('DELETE_STEP', { index, basis: basisOf(rec) }));
     li.append(text, remove);
     ui.steps.append(li);
   });
@@ -568,13 +566,6 @@ ui.settingsForm.addEventListener('submit', (event) => {
   })();
 });
 
-async function dismissNotice() {
-  await chrome.storage.local.remove(NOTICE_KEY);
-  ui.policyNotice.hidden = true;
-}
-
-ui.policyNoticeOk.addEventListener('click', dismissNotice);
-
 // ------------------------------------------------------------------ wiring
 
 chrome.runtime.onMessage.addListener((message) => {
@@ -608,7 +599,6 @@ window.addEventListener('unhandledrejection', (event) => reportFatal('unhandled 
       generator = draft.generator;
       basis = draft.basis ?? null;
     }
-    ui.policyNotice.hidden = !(await chrome.storage.local.get(NOTICE_KEY))[NOTICE_KEY];
     await refresh();
   } catch (error) {
     reportFatal('init failed', error);

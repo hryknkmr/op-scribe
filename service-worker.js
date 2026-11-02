@@ -20,22 +20,13 @@ const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply } = self.Op
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
-const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 
-chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+chrome.runtime.onInstalled.addListener(async () => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (error) {
     console.warn('[op-scribe] setPanelBehavior failed', error);
-  }
-  // Earlier versions were strict everywhere by default. Free text is now kept
-  // outside the listed production hosts (ADR 0001), so tell those users once.
-  if (reason === 'update') {
-    const stored = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
-    if (!stored?.commercialHosts?.length && stored?.privacyLevel !== 'balanced') {
-      await chrome.storage.local.set({ [NOTICE_KEY]: 'commercial-hosts' });
-    }
   }
 });
 
@@ -196,8 +187,39 @@ async function stopTab(rec) {
   } catch { /* tab gone or never injected */ }
 }
 
-const stop = () => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording') return { reply: { ok: true } };
+// What is typed into a field becomes a step on change or blur; the page commits it before the
+// recording ends (#9). Outside the queue, which its step needs; never longer than FLUSH_MS.
+const FLUSH_MS = 2000;
+// The recording being flushed: a recorder that says hello meanwhile is not given its policy.
+let stopping = null;
+async function flushTab(rec) {
+  let timer;
+  try {
+    await Promise.race([
+      chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' }),
+      new Promise((resolve) => { timer = setTimeout(resolve, FLUSH_MS); })
+    ]);
+  } catch { /* tab gone or never injected */ } finally {
+    clearTimeout(timer);
+  }
+}
+
+const stop = async () => {
+  const rec = await getRecording();
+  // Nothing to stop: a recording started meanwhile is not the one asked to stop.
+  if (rec?.state !== 'recording') return { ok: true };
+  stopping = rec.id;
+  try {
+    await flushTab(rec);
+    // A recording started while this one was flushing is not the one asked to stop.
+    return await stopNow(rec.id);
+  } finally {
+    if (stopping === rec.id) stopping = null;
+  }
+};
+
+const stopNow = (id) => mutate(async (rec) => {
+  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
   await stopTab(rec);
   rec.state = 'stopped';
   rec.endedAt = Date.now();
@@ -271,15 +293,20 @@ async function handle(message, sender) {
         return { remove: true, reply: { ok: true } };
       });
       case 'DELETE_STEP': return mutate(async (rec) => {
-        if (!rec) return { reply: { ok: false } };
-        rec.steps.splice(Number(detail.index), 1);
+        const index = detail?.index;
+        // Only a step of the recording the panel showed (its id and revision, as the panel's basisOf
+        // writes them): after another delete or a new step, the same index is another step.
+        if (!rec || detail?.basis !== `${rec.id}@${rec.revision ?? 0}`) return { reply: { ok: false, error: 'STALE' } };
+        // Only a number the recording has: splice() reads NaN, null, '' or [] as 0, the first step.
+        if (!Number.isInteger(index) || index < 0 || index >= rec.steps.length) return { reply: { ok: false } };
+        rec.steps.splice(index, 1);
         rec.revision = (rec.revision || 0) + 1;
         return { save: rec, reply: { ok: true } };
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
-        addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
-        return { save: rec, reply: { ok: true } };
+        const step = addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
+        return step ? { save: rec, reply: { ok: true } } : { reply: { ok: false, error: 'NOT_RECORDED' } };
       });
       default: return { ok: false, error: 'UNKNOWN' };
     }
@@ -289,16 +316,17 @@ async function handle(message, sender) {
     const tabId = sender.tab?.id;
     // In the queue, so a recorder of the recording that is ending never gets that recording's policy.
     if (type === 'HELLO') return mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId)) return { reply: { active: false } };
+      if (!isRecordingTab(rec, tabId) || rec.id === stopping) return { reply: { active: false } };
       const settings = await getSettings();
       const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      const reply = { active: true, config: { commercial, keywords: settings.keywords } };
+      // Which recording: every later message names it, so one sent for an earlier recording never lands in this one (#9).
+      const reply = { active: true, config: { recording: rec.id, commercial, keywords: settings.keywords } };
       if (rec.attached) return { reply };
       rec.attached = true;
       return { save: rec, reply };
     });
     return mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
+      if (!isRecordingTab(rec, tabId) || message.recording !== rec.id) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
         addStep(rec, detail, settings, fromOf(sender));
@@ -367,7 +395,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const rec = await getRecording();
-  if (isRecordingTab(rec, tabId)) await stop();
+  // Nothing to flush: the page is gone.
+  if (isRecordingTab(rec, tabId)) await stopNow(rec.id);
 });
 
 // The session store is wiped when the browser restarts; so is the badge state.

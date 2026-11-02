@@ -96,12 +96,105 @@ test('a call to the page\'s own tool is recorded as the agent\'s, and its tools 
   expect(sites.map(hostOf)).toEqual(['site-1.invalid']);
 });
 
-test('known limit: a page\'s requestSubmit() is recorded as the person\'s (W7, #37 R15)', async ({ context, panel }) => {
+for (const [name, script] of [
+  ['focus(), a value, blur()', () => { const q = document.querySelector('#q'); q.focus(); q.value = 'ページ'; q.blur(); }],
+  ['requestSubmit()', () => { document.getElementById('search').requestSubmit(); }],
+  ['a button\'s click()', () => { document.querySelector('#go').click(); }],
+]) {
+  test(`a page's ${name} makes no step of the person's (W7, #37 R15)`, async ({ context, panel }) => {
+    const site = await context.newPage();
+    await site.goto('http://a.test/');
+    await panel.start(site);
+    await site.evaluate(script);
+    // Long enough for a step the page caused to arrive.
+    await site.waitForTimeout(1000);
+    await panel.stop();
+    expect((await panel.recording()).steps.filter((s) => s.source === 'user')).toEqual([]);
+  });
+}
+
+// A checkbox, its label and two radios, on the page the tests use.
+const toggles = () => document.body.insertAdjacentHTML('beforeend',
+  '<label id="agree"><input type="checkbox" id="box"> 同意</label><input type="radio" name="r" id="r1"><input type="radio" name="r" id="r2">');
+
+test('a page that clicks a checkbox, its label or a radio makes no step of the person\'s (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await site.evaluate(toggles);
+  await panel.start(site);
+  await site.evaluate(() => {
+    document.getElementById('box').click();
+    document.getElementById('agree').click();
+    document.getElementById('r2').click();
+    document.getElementById('box').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  await site.waitForTimeout(1000);
+  await panel.stop();
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user')).toEqual([]);
+});
+
+for (const [name, setup] of [
+  ['the radio already chosen', () => { document.getElementById('r1').checked = true; }],
+  ['a click the page cancels', () => { document.getElementById('r1').addEventListener('click', (e) => e.preventDefault(), { once: true }); }],
+  ['a click the page answers with its own click(), at once and in a microtask', () => {
+    const r1 = document.getElementById('r1');
+    const r2 = document.getElementById('r2');
+    r1.addEventListener('click', () => { r2.click(); queueMicrotask(() => { r2.click(); r1.click(); }); }, { once: true });
+  }],
+]) {
+  test(`a person's click on ${name} is their one step, and the page's click() none (W7)`, async ({ context, panel }) => {
+    const site = await context.newPage();
+    await site.goto('http://a.test/');
+    await site.evaluate(toggles);
+    await site.evaluate(setup);
+    await panel.start(site);
+    await site.click('#r1');
+    await site.waitForTimeout(300);
+    await site.evaluate(() => { document.getElementById('r2').click(); document.getElementById('r1').click(); });
+    await site.waitForTimeout(1000);
+    await panel.stop();
+    expect((await panel.recording()).steps.filter((s) => s.type === 'check').map((s) => `${s.source}:${s.target.selector}`))
+      .toEqual(['user:#r1']);
+  });
+}
+
+test('a person\'s click, label click, Space and arrow key on toggles are each recorded once (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await site.evaluate(toggles);
+  await panel.start(site);
+  await site.click('#box');
+  await site.click('#agree');
+  await site.focus('#box');
+  await site.keyboard.press('Space');
+  await site.click('#r2');
+  await site.keyboard.press('ArrowLeft');
+  // Long enough for a sixth step, a toggle recorded twice, to arrive before the recording stops.
+  await site.waitForTimeout(1000);
+  await panel.stop();
+  // Each step holds the state the person left: the box on, off, on; then r2, then r1 by the arrow key.
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => `${s.type}:${s.target.selector}:${s.checked}`))
+    .toEqual(['check:#box:true', 'check:#box:false', 'check:#box:true', 'check:#r2:true', 'check:#r1:true']);
+});
+
+test('a person\'s Enter that submits a form is their one key step, with no click or submit of its own (W7)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await site.fill('#q', '天気');
+  await site.press('#q', 'Enter');
+  await expect(site.locator('#result')).toHaveText('結果を表示しました');
+  // Long enough for the click Chrome sends to the submit button to arrive, if it were recorded.
+  await site.waitForTimeout(1000);
+  await panel.stop();
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => s.type)).toEqual(['input', 'key']);
+});
+
+test('known limit: a page\'s execCommand(\'insertText\') is recorded as the person\'s input (W7)', async ({ context, panel }) => {
   // Kept to watch the limit the owner accepted; when it is closed, this test is to say so.
   const site = await context.newPage();
   await site.goto('http://a.test/');
   await panel.start(site);
-  await site.waitForTimeout(1000);
-  await site.evaluate(() => document.getElementById('search').requestSubmit());
-  await expect.poll(async () => (await panel.recording()).steps.map((s) => `${s.type}:${s.source}`)).toContain('submit:user');
+  await site.evaluate(() => { const q = document.querySelector('#q'); q.focus(); document.execCommand('insertText', false, 'ページ'); q.blur(); });
+  await expect.poll(async () => (await panel.recording()).steps.map((s) => `${s.type}:${s.source}`)).toContain('input:user');
 });
