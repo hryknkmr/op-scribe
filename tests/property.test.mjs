@@ -45,7 +45,7 @@ function gen(seed) {
     const host = pick(['shop.example.com', 'beta.example.com', 'other.invalid', 'xn--r8jz45g.invalid', ['name:pw', 'shop.example.com'].join('@')]);
     const path = Array.from({ length: int(r() < 0.05 ? 400 : 5) }, () => encodeURIComponent(text(8))).join('/');
     const query = Array.from({ length: int(4) }, () => `${encodeURIComponent(text(6))}=${encodeURIComponent(text(30))}`).join('&');
-    const hash = r() < 0.5 ? '' : pick(['#/settings', `#${encodeURIComponent(text(10))}`, '#/a/b-c']);
+    const hash = r() < 0.5 ? '' : pick(['#/settings', `#${encodeURIComponent(text(10))}`, '#/a/b-c', '#/orders/123456/x', '#/Acme/x', '#/a//b']);
     return `${scheme}//${host}/${path}${query ? `?${query}` : ''}${hash}`;
   };
   const meta = () => ({
