@@ -114,14 +114,8 @@ function endpointPattern(value) {
 
 const lines = (text) => String(text || '').split('\n').map((s) => s.trim()).filter(Boolean);
 
-/** Every real host that was aliased (row K5): the final scan must not find them, whatever their length. */
-function aliasedHosts(rec) {
-  return Object.keys(rec?.aliases || {}).map((origin) => {
-    try { return new URL(origin).hostname; } catch { return ''; }
-  }).filter(Boolean);
-}
-
-const scanWith = (rec) => (value) => S.finalScan(value, { keywords: settings.keywords, hosts: aliasedHosts(rec) });
+// Every real host that was aliased (row K5): the final scan must not find them, whatever their length.
+const scanWith = (rec) => (value) => S.finalScan(value, { keywords: settings.keywords, hosts: S.aliasedHosts(rec?.aliases) });
 
 /**
  * Every exit runs both checks on the exact payload (ADR 0003, rows E1-E6):

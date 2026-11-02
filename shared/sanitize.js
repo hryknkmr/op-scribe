@@ -530,6 +530,16 @@
     return parsed.replace(/\.+$/, '');
   }
 
+  /**
+   * The real hosts behind a recording's aliases (row K5), read as the masking reads a host: the final
+   * scan looks for each of them, whatever its length. The worker's replies and the panel's exits use this.
+   */
+  function aliasedHosts(aliases) {
+    return Object.keys(aliases || {}).map((origin) => {
+      try { return parsedHost(new URL(origin).hostname); } catch { return ''; }
+    }).filter(Boolean);
+  }
+
   function hostAllowed(host, list) {
     return (list || []).some((raw) => {
       const entry = String(raw).trim().toLowerCase();
@@ -807,6 +817,7 @@
     scrubUrl,
     hostAllowed,
     parsedHost,
+    aliasedHosts,
     finalScan,
     cssUnescape
   };
