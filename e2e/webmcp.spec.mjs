@@ -96,12 +96,28 @@ test('a call to the page\'s own tool is recorded as the agent\'s, and its tools 
   expect(sites.map(hostOf)).toEqual(['site-1.invalid']);
 });
 
-test('known limit: a page\'s requestSubmit() is recorded as the person\'s (W7, #37 R15)', async ({ context, panel }) => {
+for (const [name, script] of [
+  ['focus(), a value, blur()', () => { const q = document.querySelector('#q'); q.focus(); q.value = 'ページ'; q.blur(); }],
+  ['requestSubmit()', () => { document.getElementById('search').requestSubmit(); }],
+  ['a button\'s click()', () => { document.querySelector('#go').click(); }],
+]) {
+  test(`a page's ${name} makes no step of the person's (W7, #37 R15)`, async ({ context, panel }) => {
+    const site = await context.newPage();
+    await site.goto('http://a.test/');
+    await panel.start(site);
+    await site.evaluate(script);
+    // Long enough for a step the page caused to arrive.
+    await site.waitForTimeout(1000);
+    await panel.stop();
+    expect((await panel.recording()).steps.filter((s) => s.source === 'user')).toEqual([]);
+  });
+}
+
+test('known limit: a page\'s execCommand(\'insertText\') is recorded as the person\'s input (W7)', async ({ context, panel }) => {
   // Kept to watch the limit the owner accepted; when it is closed, this test is to say so.
   const site = await context.newPage();
   await site.goto('http://a.test/');
   await panel.start(site);
-  await site.waitForTimeout(1000);
-  await site.evaluate(() => document.getElementById('search').requestSubmit());
-  await expect.poll(async () => (await panel.recording()).steps.map((s) => `${s.type}:${s.source}`)).toContain('submit:user');
+  await site.evaluate(() => { const q = document.querySelector('#q'); q.focus(); document.execCommand('insertText', false, 'ページ'); q.blur(); });
+  await expect.poll(async () => (await panel.recording()).steps.map((s) => `${s.type}:${s.source}`)).toContain('input:user');
 });

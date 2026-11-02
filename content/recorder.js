@@ -347,13 +347,10 @@
         // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
         emit('key', { key: 'Escape' });
       }
-    },
-
-    submit(event) {
-      // Usually already explained by the click or Enter that caused it.
-      if (lastStep && Date.now() - lastStep.at < 800 && ['click', 'key'].includes(lastStep.type)) return;
-      emit('submit', { target: describe(asElement(event.target)) });
     }
+
+    // No submit: a person's is explained by the click or Enter that caused it, and a submit
+    // with neither is a page's own requestSubmit(), not the person's (W7, #37 R15).
   };
 
   for (const [type, handler] of Object.entries(handlers)) {
