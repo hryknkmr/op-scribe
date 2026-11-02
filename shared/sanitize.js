@@ -68,14 +68,17 @@
     return sum % 10 === 0;
   }
 
+  // What a word of letters alone rarely has: a digit, or a capital inside it.
+  const OPAQUE = /\d|[a-z][A-Z]/;
+
   // Order matters: specific shapes first, the generic long-number rule last.
   const RULES = [
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
-    // A token with a digit in it at any length, so "Bearer of the card" is left as it is.
-    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi, accept: (m) => /\d/.test(m) || m.replace(/^Bearer\s+/i, '').length >= 10 },
-    // Basic with what decodes to user:password, or a long token: "Basic auth" is left as it is.
+    // A token by its look, so "Bearer of the card" and "Bearer 2 wins" are left as they are.
+    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi, accept: (m) => { const t = m.replace(/^Bearer\s+/i, ''); return (OPAQUE.test(t) && t.length >= 6) || t.length >= 20; } },
+    // Basic with what decodes to user:password, or a long token: "Basic authentication" is left as it is.
     {
       kind: 'secret',
       re: /\bBasic\s+[A-Za-z0-9+/]+=*/gi,
@@ -83,7 +86,7 @@
         const token = m.replace(/^Basic\s+/i, '');
         let decoded = '';
         try { decoded = atob(token); } catch { /* not base64 */ }
-        return decoded.includes(':') || token.length >= 8;
+        return /^[\x20-\x7e]*:[\x20-\x7e]*$/.test(decoded) || (OPAQUE.test(token) && token.length >= 8);
       }
     },
     // A credential written as key and value (client_secret=abc, "pin": "1234", backup code: ABC, password="hunter 2"):

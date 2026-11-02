@@ -31,7 +31,7 @@ test('Basic and Bearer values are hidden, the words in a sentence are not', () =
   for (const t of [`Authorization: ${BASIC}`, ['Basic ', 'YT', 'pi'].join(''), ['basic ', 'YT', 'pi'].join(''), 'Bearer abc123']) {
     assert.ok(text(t).endsWith('[[secret]]'), t);
   }
-  for (const kept of ['Basic auth を使う', 'Bearer of the card']) assert.equal(text(kept), kept);
+  for (const kept of ['Basic auth を使う', 'Basic authentication', 'Bearer of the card', 'Bearer certificate', 'Bearer 2 wins']) assert.equal(text(kept), kept);
 });
 
 test('cards with any one separator, national ids and phone numbers in common notations', () => {
