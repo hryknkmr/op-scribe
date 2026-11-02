@@ -162,9 +162,9 @@ test('in commercial only short plain path segments stay (U5)', () => {
 });
 
 test('ordinary words are not read as credentials, and never hide one', () => {
-  for (const name of ['compass', 'bypass', 'secretary', 'tokenizer', 'cardinality', 'discard', 'postcard', 'headphone_model']) {
+  for (const name of ['compass', 'bypass', 'secretary', 'tokenizer', 'cardinality', 'discard', 'postcard', 'headphones']) {
     assert.equal(S.classifyField({ name }).kind, 'free', name);
   }
-  for (const name of ['bypass_password', 'compass_token', 'postcard_secret']) assert.equal(S.classifyField({ name }).kind, 'secret', name);
+  for (const name of ['bypass_password', 'bypass_code', 'compass_token', 'postcard_secret']) assert.equal(S.classifyField({ name }).kind, 'secret', name);
   for (const name of ['tokenizer_email', 'discardEmail', 'headphone_phone', 'cardinalPhone']) assert.equal(S.classifyField({ name }).kind, 'pii', name);
 });

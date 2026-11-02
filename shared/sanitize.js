@@ -348,8 +348,9 @@
   const SECRET_HINT = /pass|pwd|secret|token|otp|pin(?![a-z])|cvc|cvv|security.?code|暗証|パスワード|認証コード|確認コード|ワンタイム/i;
   const PII_HINT = /mail|phone|tel|mobile|fax|name|kana|furigana|address|addr|street|city|zip|postal|birth|bday|gender|card|account|iban|ssn|my.?number|氏名|名前|姓|フリガナ|ふりがな|住所|郵便|電話|携帯|メール|生年月日|誕生日|口座|カード|性別|勤務先|会社名|マイナンバー/i;
 
-  // Ordinary words the hints above would hit by a part of them. Taken out first, so bypass_password is still a password.
-  const ORDINARY_WORDS = /compass|bypass|secretar(?:y|ies)|tokenizers?|cardinal(?:ity)?|discard(?:ed|s)?|postcards?|headphones?/gi;
+  // A name that is one ordinary word, which the hints above would hit by a part of it. The whole name only:
+  // bypass_code and tokenizer_email are judged as they were.
+  const ORDINARY_NAME = /^(?:compass|bypass|secretary|tokenizer|cardinality|discard|postcard|headphones?)$/i;
 
   function piiLabel(hints, type) {
     if (type === 'email' || /mail|メール/i.test(hints)) return 'email';
@@ -366,7 +367,7 @@
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
     const names = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel].filter(Boolean);
-    const hints = plain(names.join(' ')).replace(ORDINARY_WORDS, ' ');
+    const hints = plain(names.filter((name) => !ORDINARY_NAME.test(plain(name).trim())).join(' '));
     const found = new Set(names.map((name) => classifyKey(name, { protocol: meta.protocol })));
     const chosen = ['select', 'checkbox', 'radio', 'range', 'color'].includes(type) || meta.tag === 'select';
 
