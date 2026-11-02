@@ -16,7 +16,7 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS, renderRuns } = self.OpScribeLimits;
 const { humanize } = self.OpScribeDescribe;
-const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply, setVerdict, setRecordingText, endAt } = self.OpScribeRecord;
+const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply, setVerdict, setRecordingText, endAt, countKinds } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -137,13 +137,14 @@ const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId =
 // ------------------------------------------------------------------ actions
 
 async function start({ tabId, url, scope, targetVersion }) {
-  const settings = await getSettings();
   const pattern = originPattern(url);
   // Outside mutate, so this is the reply itself, not a { reply } for mutate to unwrap.
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
+    // Keywords added while this start waited apply to what it masks now (K2; ADR 0005).
+    const settings = await getSettings();
     const rec = {
       id: newId(),
       state: 'recording',
@@ -355,8 +356,12 @@ async function handle(message, sender) {
         if (!site) return { reply: { ok: true } };
         // The payload holds tools for at most toolList sites (row W6).
         if (!Object.hasOwn(rec.webmcpTools, site) && Object.keys(rec.webmcpTools).length >= LIMITS.toolList) return { reply: { ok: true } };
-        rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList)
-          .map((n) => cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool }).runs);
+        // What masking the names needed is counted like any other field of the recording (M1).
+        rec.webmcpTools[site] = (Array.isArray(detail.names) ? detail.names : []).slice(0, LIMITS.toolList).map((n) => {
+          const r = cleanLine(n, { keywords: settings.keywords, maxLength: LIMITS.tool });
+          countKinds(rec, r.kinds);
+          return r.runs;
+        });
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_REQUEST') return webmcpRequest(rec, sender, detail);

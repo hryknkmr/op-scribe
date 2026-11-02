@@ -29,7 +29,8 @@ function worker() {
         set: async (items) => { Object.assign(session, structuredClone(items)); },
         remove: async (key) => { delete session[key]; }
       },
-      local: { get: async () => ({}), set: noop }
+      // A test may set the settings (control.settings) at any point; read at the time of each get.
+      local: { get: async (key) => (control.settings && key === 'opsSettings' ? { [key]: structuredClone(control.settings) } : {}), set: noop }
     },
     runtime: { onInstalled: on('installed'), onStartup: on('startup'), onMessage: on('message'), sendMessage: noop },
     permissions: { contains: async () => true },
@@ -353,4 +354,24 @@ test('a note a limit keeps out still saves the recording\'s trimmed mark (ADR 00
   for (let i = 0; i <= 100; i += 1) reply = await send({ from: 'op-scribe/content', type: 'WEBMCP_REQUEST', detail: { op: 'expect', args: { text: `期待 ${i}` } } }, page);
   assert.equal(reply.error, 'NOT_RECORDED');
   assert.equal(session.opsRecording.trimmed, 'other');
+});
+
+test('what masking a tool list needed is counted in privacy.redactions (M1)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/', origin: 'https://example.com' };
+  await send({ from: 'op-scribe/content', type: 'WEBMCP_TOOLS', detail: { names: ['notify_tester@example.com', 'search'] } }, page);
+  const rec = session.opsRecording;
+  assert.equal(rec.redactions.email, 1);
+  assert.ok(!JSON.stringify(rec.webmcpTools).includes('tester@example.com'));
+});
+
+test('a start masks what the tester wrote with the keywords as they are when it runs, not when it was asked (K2; ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  const started = startAt(send, { scope: 'Acme の検索画面' });
+  // Registered in another window while the start waits for its turn.
+  control.settings = { keywords: ['Acme'] };
+  await started;
+  assert.ok(!JSON.stringify(session.opsRecording.scope).includes('Acme'), JSON.stringify(session.opsRecording.scope));
 });

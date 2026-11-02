@@ -538,7 +538,7 @@
 
   const api = {
     policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply,
-    isExpectation, setVerdict, setRecordingText, endAt
+    isExpectation, setVerdict, setRecordingText, endAt, countKinds
   };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
