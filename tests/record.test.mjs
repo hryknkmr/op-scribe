@@ -473,15 +473,18 @@ test('past the step limit the reported steps go first, whoever adds the new step
   assert.equal(rec.steps.length, LIMITS.steps);
 });
 
-test('a host of the alias form is aliased even when allowed by name, so two sites never share one name (rows U4, W8; owner decision on #37)', () => {
-  for (const hostAllowlist of [['site-1.invalid'], ['*.invalid']]) {
-    const aliases = {};
-    const ctx = { aliases, hostAllowlist };
-    const a = new URL(S.renderRuns(S.scrubUrl('https://other.example.com/x', ctx).url)).origin;
-    const b = new URL(S.renderRuns(S.scrubUrl('https://site-1.invalid/y', ctx).url)).origin;
-    assert.notEqual(a, b, JSON.stringify(hostAllowlist));
+test('a page on a host of the alias form is not recorded, whatever the lists say (rows U4, K5)', () => {
+  // site-1.invalid would read as the alias of another site. It never resolves, so no real page is lost.
+  for (const hostAllowlist of [[], ['site-1.invalid'], ['*.invalid']]) {
+    const s = { ...settings, keywords: [], hostAllowlist };
+    const rec = { ...newRec(), policy: R.policyOf(s) };
+    assert.equal(R.addStep(rec, { type: 'click', pageUrl: 'https://site-1.invalid/b', target: { role: 'button', name: 'OK' } }, s, { tabUrl: 'https://site-1.invalid/b' }), null);
+    // A link to one is redacted whole, and takes no alias.
+    const link = R.addStep(rec, { type: 'click', pageUrl: 'https://other.example.com/a', target: { role: 'link', name: 'OK', href: 'https://SITE-2.invalid/c' } }, s, { tabUrl: 'https://other.example.com/a' });
+    assert.deepEqual(link.target.href, [{ redacted: 'url', as: 'invalid' }]);
+    assert.deepEqual(Object.values(rec.aliases), ['site-1.invalid'], JSON.stringify(hostAllowlist));
     // Every other host the list allows is still kept by name.
-    assert.equal(new URL(S.renderRuns(S.scrubUrl('https://shop.invalid/z', ctx).url)).host, hostAllowlist[0] === '*.invalid' ? 'shop.invalid' : 'site-3.invalid');
+    if (hostAllowlist[0] === '*.invalid') assert.equal(new URL(S.renderRuns(S.scrubUrl('https://shop.invalid/z', { aliases: {}, hostAllowlist }).url)).host, 'shop.invalid');
   }
 });
 
@@ -550,26 +553,6 @@ test('the limit is a site\'s own: what one page can add does not depend on the o
 
 test('a note written in the side panel is the person\'s (row W7; owner decision on #37)', () => {
   assert.equal(R.cleanStep({ type: 'note', note: 'メモ' }, newRec(), settings).source, 'user');
-});
-
-test('a host of the alias form never keeps its own name as its alias (rows U4, K5; review of #37 R8)', () => {
-  for (const host of ['site-1.invalid', 'site-2.invalid']) {
-    const aliases = {};
-    if (host === 'site-2.invalid') S.scrubUrl('https://other.example.com/', { aliases });
-    const got = new URL(S.renderRuns(S.scrubUrl(`https://${host}/private`, { aliases }).url)).host;
-    assert.notEqual(got, host);
-  }
-});
-
-test('a real host of the alias form does not stop the exits for another site\'s alias, in either order (rows U4, K5, W8; review of #37 R10)', () => {
-  for (const order of [['https://other.example.com/a', 'https://site-1.invalid/b'], ['https://site-1.invalid/b', 'https://other.example.com/a']]) {
-    const rec = newRec();
-    const s = { ...settings, keywords: [] };
-    for (const pageUrl of order) rec.steps.push(R.cleanStep({ type: 'click', pageUrl, target: { role: 'button', name: 'OK' } }, rec, s, { tabUrl: pageUrl }));
-    const hosts = new Set(Object.values(rec.aliases));
-    assert.equal(hosts.size, 2, JSON.stringify(rec.aliases));
-    for (const step of rec.steps) assert.equal(R.webmcpReply(rec, s, step.site, 'reproduction').ok, true, `${order} ${step.site}`);
-  }
 });
 
 test('WebMCP names the asking site site-1 and its links after it, whatever the recording numbers them (row W8; review of #37 R12)', () => {

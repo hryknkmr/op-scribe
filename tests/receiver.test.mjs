@@ -15,7 +15,8 @@ const P = require('../shared/payload.js');
 const dir = mkdtempSync(join(tmpdir(), 'opscribe-receiver-'));
 const port = 20000 + Math.floor(Math.random() * 20000);
 // Fictional words only; a real list lives outside the repository.
-writeFileSync(join(dir, 'words.txt'), '# local list\nAcme Labs\nintranet.corp.invalid\n');
+// site-1.invalid as well: a list that names the alias form does not refuse the aliases (K5; review of #46 R1).
+writeFileSync(join(dir, 'words.txt'), '# local list\nAcme Labs\nintranet.corp.invalid\nsite-1.invalid\n');
 const server = spawn(process.execPath, [new URL('../tools/receiver.mjs', import.meta.url).pathname], {
   cwd: dir,
   env: { ...process.env, PORT: String(port), OPSCRIBE_TOKEN: '', OPSCRIBE_KEYWORDS_FILE: join(dir, 'words.txt') },

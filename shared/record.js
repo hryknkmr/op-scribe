@@ -289,7 +289,7 @@
     return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
   }
 
-  // The origin of a URL whose host is an alias. A real host of that form is always aliased (U4), so every match is one.
+  // The origin of a URL whose host is an alias. A real host of that form is never recorded (U4), so every match is one.
   const ALIAS_ORIGIN = /^(https?:\/\/)(site-\d+\.invalid)(?=[/?#]|$)/;
 
   /**

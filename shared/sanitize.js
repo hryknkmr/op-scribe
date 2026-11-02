@@ -424,11 +424,9 @@
     // Past the limit a new host gets no alias: the caller redacts its URL whole and the step on it
     // is not recorded, so no host the final scan cannot know is ever in the recording (K5; review R42).
     if (Object.keys(aliases).length >= LIMITS.aliases) return null;
-    // A host of the alias form never gets its own name back ("site-1.invalid" as site-1; review of #37 R8).
-    const host = new URL(origin).hostname;
     const taken = new Set(Object.values(aliases));
     let n = Object.keys(aliases).length + 1;
-    while (taken.has(`site-${n}.invalid`) || host === `site-${n}.invalid`) n += 1;
+    while (taken.has(`site-${n}.invalid`)) n += 1;
     aliases[origin] = `site-${n}.invalid`;
     return aliases[origin];
   }
@@ -467,9 +465,10 @@
     let origin;
     // The origin of the normalized host, so "example.com." and "example.com" are one site (U4; review R24).
     const port = url.port ? `:${url.port}` : '';
-    // A host of the alias form is always aliased, even when allowed by name: kept, it would read as
-    // the alias of another site, and WebMCP would hand that site's steps to it (U4, W8; owner decision on #37).
-    if (!ALIAS.test(host) && hostAllowed(host, ctx.hostAllowlist)) {
+    // A host of the alias form would read as the alias of another site: not recorded, like a host past
+    // the alias limit (U4, K5). It never resolves, so no real page is lost.
+    if (ALIAS.test(host)) return { url: whole('invalid'), kinds: ['url', 'host'], untracked: true };
+    if (hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
       const alias = aliasFor(`${url.protocol}//${host}${port}`, aliases);
@@ -538,8 +537,8 @@
    * x in "box" is not.
    */
   function hostPattern(hosts) {
-    // A real host of the alias form ("site-1.invalid") tells nothing - a made-up name under a TLD that
-    // never resolves - and the same text may be the alias of another site: not looked for (K5; review of #37 R10).
+    // A host of the alias form is never recorded as a real host (U4), and the same text is the alias of a
+    // site: not looked for, even when a receiver's list names it (K5; reviews of #37 R10, #46 R1).
     const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, ''))
       .filter((h) => h && !/^site-\d+\.invalid$/.test(h))
       .sort((a, b) => b.length - a.length);
