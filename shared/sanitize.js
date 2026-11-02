@@ -23,6 +23,19 @@
   const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
   const redaction = (kind) => ({ redacted: kind });
 
+  /** A digit of any script as an ASCII digit: decimal digits come in blocks of ten, so the walk back finds its zero. */
+  const ND = /\p{Nd}/u;
+  function asciiDigit(d) {
+    const code = d.codePointAt(0);
+    let zero = code;
+    while (ND.test(String.fromCodePoint(zero - 1))) zero -= 1;
+    return String((code - zero) % 10);
+  }
+
+  /** The normalization of ADR 0003, once, before any rule looks: NFKC, no hidden characters, ASCII digits and dashes. */
+  const plain = (value) => String(value ?? '').normalize('NFKC').replace(INVISIBLE, '')
+    .replace(/[^\P{Nd}0-9]/gu, asciiDigit).replace(/\p{Pd}/gu, '-');
+
   /** The redaction kind of each masked part of runs, as privacy.redactions counts it (row M1). */
   const runKinds = (runs) => (Array.isArray(runs) ? runs : []).filter((p) => p && typeof p === 'object')
     .map((p) => (p.redacted === 'masked' ? 'keyword' : p.redacted));
@@ -60,23 +73,49 @@
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
-    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]{10,}=*/gi },
+    // A token with a digit in it at any length, so "Bearer of the card" is left as it is.
+    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi, accept: (m) => /\d/.test(m) || m.replace(/^Bearer\s+/i, '').length >= 10 },
+    // Basic with what decodes to user:password, or a long token: "Basic auth" is left as it is.
     {
       kind: 'secret',
-      re: /\b(token|api[_-]?key|secret|password|passwd|pwd)(\s*[:=]\s*)[^\s"'&]{4,}/gi,
-      keep: (match, word, sep) => `${word}${sep}`
+      re: /\bBasic\s+[A-Za-z0-9+/]+=*/gi,
+      accept: (m) => {
+        const token = m.replace(/^Basic\s+/i, '');
+        let decoded = '';
+        try { decoded = atob(token); } catch { /* not base64 */ }
+        return decoded.includes(':') || token.length >= 8;
+      }
     },
-    // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part.
+    // A credential written as key and value (client_secret=abc, "pin": "1234", backup code: ABC, password="hunter 2"):
+    // the key is judged by classifyKey, like every other key. A quoted value is taken whole, an unclosed one to the end.
+    {
+      kind: 'secret',
+      re: /(?<![\p{L}\p{N}_.-])([\p{L}\p{N}][\p{L}\p{N}_.-]*(?:[ _-]\p{L}[\p{L}\p{N}_.-]*){0,2})(["']?\s*[:=]\s*)("(?:[^"\\]|\\.)*"?|'(?:[^'\\]|\\.)*'?|[^\s"'&,}]+)/gu,
+      accept: (m, groups) => ['secret', 'card'].includes(classifyKey(groups[1])),
+      keep: (match, key, sep, value) => `${key}${sep}${/^["']/.test(value) ? value[0] : ''}`,
+      after: (match, key, sep, value) => (value.length > 1 && /^["']/.test(value) && value.endsWith(value[0]) && !value.endsWith(`\\${value[0]}`) ? value[0] : '')
+    },
+    // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part, a domain
+    // literal, and letters of any script (太郎@例え.テスト). The domain holds a letter: react@18 is a package.
     // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
-    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|[\w.!#$%&'*+/=?^`{|}~-]+)@(?:\[[0-9A-Fa-f:.]{2,45}\]|[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g },
-    { kind: 'card', re: /(?<!\d)\d(?:[ .-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|(?<![\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-])[\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-]+)@(?:\[(?:IPv6:)?[0-9A-Fa-f:.]{2,45}\]|(?=[\p{N}.-]*\p{L})[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)/gu },
+    { kind: 'card', re: /(?<!\d)\d(?:[ \t.*_/-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
+    // A US social security number by its form.
+    { kind: 'secret', re: /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
+    // With dots: 415.555.2671, +1.415.555.2671, 03.1234.5678.
+    { kind: 'phone', re: /(?<![\d.])(?:\+\d{1,3}\.)?\d{2,4}\.\d{3,4}\.\d{4}(?![\d.])/g },
+    // With an area code in brackets or spaces: (03) 1234-5678, 03 1234 5678, 090 1234 5678.
+    { kind: 'phone', re: /(?<![\d(-])(?:\(\d{2,4}\)\s?|\d{2,4}[ -])\d{3,4}[ -]\d{4}(?![\d-])/g },
     // North American numbers: 212-555-0123, (212) 555-0123 (review R41).
     { kind: 'phone', re: /(?<![\d-])\d{3}-\d{3}-\d{4}(?![\d-])|\(\d{3}\) ?\d{3}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<!\d)0\d{9,10}(?!\d)/g },
     { kind: 'postal', re: /〒\s*\d{3}-?\d{4}|(?<![\d-])\d{3}-\d{4}(?![\d-])/g },
     { kind: 'id', re: /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi },
+    // IPv6, ending in an IPv4 address or not, before that address is taken out of it. "::" alone is not an address.
+    { kind: 'ip', re: /(?<![\w:.])(?:[0-9a-f]{0,4}:){2,6}(?:\d{1,3}\.){3}\d{1,3}(?![\w.])/gi, accept: (m) => m.includes('::') || m.split(':').length === 7 },
+    { kind: 'ip', re: /(?<![\w:.])(?=[0-9a-f:]*::|(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4})(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi, accept: (m) => /[0-9a-f]/i.test(m) },
     { kind: 'ip', re: /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])/g },
     { kind: 'id', re: /\b[0-9a-f]{24,}\b/gi },
     // Long opaque tokens (session ids, signed parameters): letters and digits mixed.
@@ -155,9 +194,8 @@
   function scrubText(input, opts = {}) {
     const kinds = [];
     if (input == null) return { runs: [], kinds };
-    let text = String(input).normalize('NFKC');
     // Zero-width and bidi controls can hide content from the human reviewer.
-    text = text.replace(INVISIBLE, '');
+    let text = plain(input);
     // After the invisible characters are gone, so a zero-width space between two "[" cannot slip through.
     text = text.replace(/\[(?=\[)/g, '[ ');
 
@@ -169,10 +207,10 @@
         const out = [];
         let last = 0;
         for (const m of part.matchAll(rule.re)) {
-          if (rule.accept && !rule.accept(m[0])) continue;
+          if (rule.accept && !rule.accept(m[0], m)) continue;
           kinds.push(rule.kind);
           // A rule may keep the words before the value ("token=" in "token=abcd").
-          out.push(part.slice(last, m.index), rule.keep ? rule.keep(...m) : '', redaction(rule.kind));
+          out.push(part.slice(last, m.index), rule.keep ? rule.keep(...m) : '', redaction(rule.kind), rule.after ? rule.after(...m) : '');
           last = m.index + m[0].length;
         }
         out.push(part.slice(last));
@@ -225,6 +263,63 @@
    */
   const cleanLine = (value, opts = {}) => scrubText(oneLine(value), opts);
 
+  // ------------------------------------------------------------- key meaning
+
+  /** A key as lowercase words: orderID -> order id, verification_code -> verification code, cvv2 -> cvv (2fa stays). */
+  const wordsOf = (key) => plain(key)
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    // Latin and other letters written together are separate words: PINコード -> pin コード.
+    .replace(/([A-Za-z0-9])([^\x00-\x7f])/g, '$1 $2').replace(/([^\x00-\x7f])([A-Za-z0-9])/g, '$1 $2')
+    .toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+    .map((w) => JA_WORDS.get(w) || w)
+    .map((w) => (/^\d/.test(w) ? w : w.replace(/\d+$/, ''))).filter(Boolean);
+
+  // Japanese words that name the same thing as an English one, so the pairs below apply: PINコード, APIキー.
+  const JA_WORDS = new Map([['コード', 'code'], ['キー', 'key']]);
+  const CREDENTIAL_WORDS = new Set(['csrf', 'xsrf', 'pwd', 'pin', 'session', 'sessionid', 'sid', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'passcode', 'bearer', 'cookie']);
+  // Ends a word written without separators (newpassword, accesstoken, clientsecret), or starts one for passwords.
+  const CREDENTIAL_PARTS = /(?:password|passwd|passphrase|secret|token|tokens|credential|credentials|authorization|apikey|accesskey|privatekey)$|^(?:password|passwd|passphrase)|^pass$|^(?:user|login|admin|account|new|old|current|confirm|db)pass$|^(?:verification|verify|confirm|confirmation|auth|access|login|sms|backup|recovery|onetime|otp|mfa|pin)code$/;
+  const KEY_OWNERS = ['api', 'access', 'private', 'signing', 'client', 'license', 'secret', 'session', 'auth', 'recovery', 'backup',
+    'master', 'encryption', 'shared', 'product', 'activation'];
+  // National ids are hidden whole, like credentials: ssn, social security number, マイナンバー.
+  const NATIONAL_IDS = /^(?:ssn|sin|nin|itin|mynumber)$/;
+  const CODE_OWNERS = ['verification', 'verify', 'confirm', 'confirmation', 'auth', 'authentication', 'access', 'login',
+    'sms', 'backup', 'recovery', 'time', 'otp', 'totp', 'hotp', 'mfa', '2fa', 'pin', 'ログイン', '確認', '認証', 'セキュリティ'];
+  // Only in URLs and protocol arguments: OAuth and signed-URL parameters. A form field named "state" or "code" is a
+  // place or a promotion code, and is kept.
+  const PROTOCOL_WORDS = new Set(['auth', 'key', 'code', 'state', 'session', 'sid', 'sig', 'signature', 'nonce', 'ticket', 'pass', 'saml', 'assertion']);
+  const JA_CARD = /有効期限|カード番号|セキュリティコード/;
+  const JA_SECRET = /暗証|パスワード|(?:認証|確認|ログイン|セキュリティ|バックアップ|リカバリー?|SMS)コード|二段階|2段階|ワンタイム|トークン|秘密鍵|シークレット|(?:API|アクセス|プライベート)キー/i;
+  // ユーザーID, ログインID, 会員番号: an id named in Japanese (after NFKC, ＩＤ is ID).
+  const JA_ID = /[^\x00-\x7f]ID$|(?:会員|顧客|注文|ユーザー|アカウント|管理)番号$/i;
+  const ID_WORDS = new Set(['id', 'ids', 'uid', 'uuid', 'guid', 'username', 'userid', 'loginid', 'login', 'account', 'handle', 'nickname']);
+
+  /**
+   * card | secret | id | null: what a name says its value is, by whole words (row I3). It adds to the
+   * lists in classifyField and never narrows them. protocol: the key is a URL parameter or a WebMCP
+   * argument, where a few more words (code, state, session, ...) name credentials.
+   */
+  function classifyKey(key, { protocol = false } = {}) {
+    const text = plain(key);
+    const words = wordsOf(text);
+    if (!words.length) return null;
+    const has = (list) => words.some((w) => list.includes(w));
+    const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
+    if (JA_CARD.test(text) || has(['cc', 'credit', 'cvc', 'cvv', 'csc', 'cv', 'cid', 'cvn', 'cav', 'cvd', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
+        || pair(['card'], 'holder') || pair(['verification'], 'value') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
+        || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
+        || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
+    if (JA_SECRET.test(text) || /マイナンバー|個人番号/.test(text) || words.some((w) => NATIONAL_IDS.test(w))
+        || words.join(' ').includes('social security') || pair(['my'], 'number')
+        || words.some((w) => CREDENTIAL_WORDS.has(w) || CREDENTIAL_PARTS.test(w))
+        || pair(KEY_OWNERS, 'key') || pair(CODE_OWNERS, 'code')
+        || (protocol && words.some((w) => PROTOCOL_WORDS.has(w)))) return 'secret';
+    if (has(['iban', 'bic', 'swift', 'passport']) || pair(['account', 'bank', 'routing', 'passport', 'member', 'customer', 'order', 'tax'], 'number')
+        || /(?:口座|会員|顧客|注文|旅券)番号/.test(text)) return 'id';
+    if (JA_ID.test(text.trim()) || ID_WORDS.has(words[words.length - 1]) || pair(['user', 'login', 'screen', 'display', 'account'], 'name')) return 'id';
+    return null;
+  }
+
   // ------------------------------------------------------------------ fields
 
   const SECRET_AUTOCOMPLETE = /\b(?:cc-[a-z-]+|one-time-code|current-password|new-password)\b/;
@@ -246,24 +341,27 @@
     const type = String(meta.type || '').toLowerCase();
     const autocomplete = String(meta.autocomplete || '').toLowerCase();
     // Normalized like any text first: "pa\u200Bssword" is a password field (review R24).
-    const hints = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel]
-      .filter(Boolean).join(' ').normalize('NFKC').replace(INVISIBLE, '');
+    const names = [meta.name, meta.id, meta.label, meta.labelText, meta.placeholder, meta.ariaLabel].filter(Boolean);
+    const hints = plain(names.join(' '));
+    const found = new Set(names.map((name) => classifyKey(name, { protocol: meta.protocol })));
+    const chosen = ['select', 'checkbox', 'radio', 'range', 'color'].includes(type) || meta.tag === 'select';
+    // A list named only "session" is a meeting's morning session; session_id, session_key and sid are credentials.
+    const namedSecret = found.has('secret') && (!chosen || names.some((name) => classifyKey(name) === 'secret' && wordsOf(name).join(' ') !== 'session'));
 
     if (type === 'hidden') return { kind: 'ignore' };
-    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints)) {
+    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints) || namedSecret) {
       return { kind: 'secret', label: 'secret' };
     }
-    if (/card|カード/i.test(hints)) return { kind: 'secret', label: 'card' };
+    if (/card|カード/i.test(hints) || found.has('card')) return { kind: 'secret', label: 'card' };
     if (type === 'email' || type === 'tel' || PII_AUTOCOMPLETE.test(autocomplete) || PII_HINT.test(hints)) {
       return { kind: 'pii', label: piiLabel(hints, type) };
     }
-    if (['select', 'checkbox', 'radio', 'range', 'color'].includes(type) || meta.tag === 'select') {
-      return { kind: 'choice' };
-    }
+    if (chosen) return { kind: 'choice' };
     // Markup only: a field that merely looks like a search box is free text.
     // role is a list of tokens; the element takes the first real role in it.
     const role = primaryRole(meta.role);
     if (type === 'search' || role === 'searchbox' || meta.inSearch) return { kind: 'search' };
+    if (found.has('id')) return { kind: 'pii', label: 'personal' };
     return { kind: 'free' };
   }
 
@@ -353,7 +451,7 @@
     for (const [k, v] of Object.entries(node).slice(0, LIMITS.argKeys)) {
       // A key is rendered like a name: one line, masked, then cut (cleanLine; E7, review R27).
       const name = cleanLine(k, { keywords, maxLength: LIMITS.argKey });
-      const cls = classifyField({ name: k });
+      const cls = classifyField({ name: k, protocol: true });
       // A key of the masked form from the page is masked too, so every masked-N is ours (#28).
       const masks = name.kinds.length || /^masked-\d/i.test(renderRuns(name.runs));
       const value = cls.kind === 'secret' || cls.kind === 'pii' ? (spend() ? typed.redacted('arg', cls.label) : DROP) : walk(v);
@@ -432,6 +530,9 @@
   }
 
   const ID_SEGMENT = /^(?:\d{3,}|[0-9a-f]{12,}|[0-9a-f-]{32,36}|(?=.*\d)(?=.*[a-z])[a-z0-9_-]{16,})$/i;
+  // An id inside a segment: 123456.json, order-123456, 123456;view=full.
+  const ID_IN_SEGMENT = /\d{5,}/;
+  const NESTED_URL = /[a-z][a-z0-9+.-]*:\/\//i;
   const SENSITIVE_PARAM = /token|code|key|secret|sig|session|auth|pass|mail|phone|tel|name|user|state|nonce|ticket|^id$|_id$|Id$/i;
 
   /**
@@ -479,30 +580,33 @@
 
     // A masked path segment, query key or query value is a part of its own (#28), never a word in the URL.
     const parts = [origin];
-    url.pathname.split('/').forEach((seg, i) => {
+    const pushSegments = (segments) => segments.forEach((seg, i) => {
       if (i > 0) parts.push('/');
       if (!seg) return;
-      let decoded = seg;
       // Every escape that makes a character, even after one that does not ("%FF%41cme"; review of #34 R6).
-      decoded = percentDecode(seg);
+      const { text: decoded, deep } = decodeDeep(seg);
       if (decoded.startsWith('@')) { kinds.push('user'); parts.push(redaction('user')); return; }
-      if (ID_SEGMENT.test(decoded)) { kinds.push('id'); parts.push(redaction('id')); return; }
+      // A URL inside a URL, written out or as //host, and what is still encoded after three rounds.
+      if (deep || NESTED_URL.test(decoded) || (i > 1 && !segments[i - 1])) { kinds.push('url'); parts.push(redaction('masked')); return; }
+      if (ID_SEGMENT.test(decoded) || ID_IN_SEGMENT.test(decoded)) { kinds.push('id'); parts.push(redaction('id')); return; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
       if (r.kinds.length) { kinds.push(...r.kinds); parts.push(redaction('masked')); return; }
       // The parser leaves [ and ] as they are; encoded, a page's "[[secret]]" never reads as ours (K1).
       parts.push(seg.replace(/\[/g, '%5B').replace(/\]/g, '%5D'));
     });
+    pushSegments(url.pathname.split('/'));
 
     let first = true;
     for (const [k, v] of url.searchParams) {
       parts.push(first ? '?' : '&');
       first = false;
-      parts.push(scrubText(k, { keywords: ctx.keywords }).kinds.length ? redaction('masked') : encodeURIComponent(k), '=');
+      const key = decodeDeep(k).text;
+      parts.push(scrubText(key, { keywords: ctx.keywords }).kinds.length ? redaction('masked') : encodeURIComponent(k), '=');
       if (v) {
         const harmless = !commercial
-          && !SENSITIVE_PARAM.test(k)
+          && !SENSITIVE_PARAM.test(key)
           // The same vocabulary as form fields (rows I3, I4, U7): address, card, postal ...
-          && !['secret', 'pii'].includes(classifyField({ name: k }).kind)
+          && !['secret', 'pii'].includes(classifyField({ name: key, protocol: true }).kind)
           && /^[\w.-]{1,24}$/.test(v)
           && !scrubText(v, { keywords: ctx.keywords }).kinds.length;
         parts.push(harmless ? encodeURIComponent(v) : redaction('v'));
@@ -510,9 +614,10 @@
       }
     }
 
-    // SPA routes such as #/settings are kept outside production; anything else is dropped.
+    // SPA routes such as #/settings are kept outside production, each segment judged like a path's; anything else is dropped.
     if (url.hash && !commercial && /^#\/[\w/-]{0,60}$/.test(url.hash)) {
-      parts.push(url.hash);
+      parts.push('#');
+      pushSegments(url.hash.slice(1).split('/'));
     } else if (url.hash) {
       kinds.push('hash');
     }
@@ -565,6 +670,17 @@
   const UTF8 = new TextDecoder();
   function percentDecode(text) {
     return String(text).replace(/(?:%[0-9A-Fa-f]{2})+/g, (m) => UTF8.decode(Uint8Array.from(m.match(/%(..)/g), (h) => parseInt(h.slice(1), 16))));
+  }
+
+  /** A text with its escapes undone, up to three rounds (ADR 0003); deep says more were left. */
+  function decodeDeep(raw) {
+    let text = String(raw);
+    for (let round = 0; round < 3; round += 1) {
+      const decoded = percentDecode(text);
+      if (decoded === text) return { text, deep: false };
+      text = decoded;
+    }
+    return { text, deep: percentDecode(text) !== text };
   }
 
   // scheme://host[:port], never with user info: "https://user:pass@host" stays in the patterns.
@@ -656,6 +772,7 @@
     cleanLine,
     usableKeyword,
     typed,
+    classifyKey,
     classifyField,
     fieldTreatment,
     walkArgs,
