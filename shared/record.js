@@ -218,7 +218,7 @@
     const ctx = { ...policy, aliases: rec.aliases, keywords: settings.keywords, env };
     const kinds = [];
     // The real hosts this recording knows: page text that names one cannot leave (T3, T7, K5).
-    const knownHosts = () => [...Object.keys(rec.aliases || {}).map(hostOf), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))].filter(Boolean);
+    const knownHosts = () => [...S.aliasedHosts(rec.aliases), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))].filter(Boolean);
     const text = (value, maxLength) => {
       const r = cleanLine(value, { keywords: settings.keywords, maxLength });
       kinds.push(...r.kinds);
@@ -320,8 +320,7 @@
    * does not read a Gherkin as text, so they are scanned in its place (E3, #28).
    */
   function guardReply(reply, rec, settings, steps = []) {
-    const hosts = Object.keys(rec.aliases || {}).map(hostOf).filter(Boolean);
-    return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
+    return S.finalScan({ reply, steps }, { keywords: settings.keywords, hosts: S.aliasedHosts(rec.aliases) }).length ? { ok: false, error: 'BLOCKED_SUSPECTED_LEAK' } : reply;
   }
 
   // The origin of a URL whose host is an alias. A real host of that form is never recorded (U4), so every match is one.

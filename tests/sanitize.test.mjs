@@ -505,3 +505,9 @@ test('past the alias limit a new host is redacted whole and marked untracked; th
 test('a card number with dots is found (K3; review R43)', () => {
   assert.equal(scrub(['4111', '1111', '1111', '1111'].join('.')).text, '[[card]]');
 });
+
+test('aliasedHosts reads each aliased origin\'s host as the masking does (K5, #56)', () => {
+  const aliases = { 'https://Shop.Example.com.': 'site-1.invalid', 'https://例え.test': 'site-2.invalid', 'not a url': 'site-3.invalid' };
+  assert.deepEqual(S.aliasedHosts(aliases), ['shop.example.com', 'xn--r8jz45g.test']);
+  assert.deepEqual(S.aliasedHosts(undefined), []);
+});
