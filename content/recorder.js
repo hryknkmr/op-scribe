@@ -318,9 +318,8 @@
       // What was typed first, by the field it was typed into, not by what the field is now.
       const owner = pendingFor(el);
       if (owner) commit(owner);
-      if (isToggle(el)) {
-        // Recorded from the click.
-      } else if (el.tagName === 'INPUT' && el.type === 'file') {
+      if (isToggle(el)) return; // Recorded from the click.
+      if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
       } else if (!owner && el.matches('input, select, textarea')) {
         commit(el, true);

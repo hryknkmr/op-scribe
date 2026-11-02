@@ -108,7 +108,7 @@
     type: 'object',
     fields: {
       n: { type: 'int', row: 'T6', min: 1 },
-      type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note', 'notice'] },
+      type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'tool', 'note', 'notice'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
       source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
@@ -579,7 +579,7 @@
     return problems;
   }
 
-  const api = { SCHEMA, POLICY, SHAPE, shapeRows, buildPayload, checkPayload, checkCanonical };
+  const api = { SCHEMA, SHAPE, shapeRows, buildPayload, checkPayload, checkCanonical };
   root.OpScribePayload = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

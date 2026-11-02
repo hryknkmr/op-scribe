@@ -138,7 +138,6 @@
     check: { required: ['checked'], allowed: ['url', 'target', 'checked'] },
     upload: { required: ['value'], allowed: ['url', 'target', 'value'] },
     key: { required: ['key'], allowed: ['url', 'target', 'key'] },
-    submit: { required: [], allowed: ['url', 'target'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
     note: { required: ['note'], allowed: ['url', 'note', 'kind'] },
     notice: { required: ['url', 'notice', 'level'], allowed: ['url', 'notice', 'level'] }
@@ -224,7 +223,7 @@
   const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 
   const api = {
-    LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, ARIA_ROLES, primaryRole,
+    LIMITS, TOTALS, cut, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, primaryRole,
     RUN_KINDS, URL_MARKERS, SCHEME, renderRuns, isVocab
   };
   root.OpScribeLimits = api;

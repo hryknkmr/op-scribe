@@ -482,9 +482,8 @@
     url.pathname.split('/').forEach((seg, i) => {
       if (i > 0) parts.push('/');
       if (!seg) return;
-      let decoded = seg;
       // Every escape that makes a character, even after one that does not ("%FF%41cme"; review of #34 R6).
-      decoded = percentDecode(seg);
+      const decoded = percentDecode(seg);
       if (decoded.startsWith('@')) { kinds.push('user'); parts.push(redaction('user')); return; }
       if (ID_SEGMENT.test(decoded)) { kinds.push('id'); parts.push(redaction('id')); return; }
       const r = scrubText(decoded, { keywords: ctx.keywords });
@@ -526,11 +525,6 @@
 
   // -------------------------------------------------------------- final gate
 
-  /**
-   * Walks every string in an object and reports anything the filters would
-   * still mask. Run on the exact payload right before it leaves the browser;
-   * a non-empty result blocks sending.
-   */
   /**
    * Real host names (row K5), apart from keywords: any length, matched only
    * as a whole host label sequence, so a one-letter host "x" is found but the
@@ -581,6 +575,11 @@
   // "invalid" is not looked for in it (E6). Only there: the same form anywhere else is scanned.
   const ALIAS = /^site-\d+\.invalid$/;
 
+  /**
+   * Walks every string in an object and reports anything the filters would
+   * still mask. Run on the exact payload right before it leaves the browser;
+   * a non-empty result blocks sending.
+   */
   function finalScan(value, opts = {}) {
     const findings = [];
     const hosts = hostPattern(opts.hosts);
@@ -644,12 +643,10 @@
   }
 
   const api = {
-    DEFAULT_SETTINGS,
     defaults,
     scrubText,
     scrubRuns,
     cutRuns,
-    joinRuns,
     renderRuns,
     runKinds,
     oneLine,
