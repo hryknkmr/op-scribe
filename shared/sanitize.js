@@ -640,13 +640,17 @@
       }
     }
 
-    // SPA routes such as #/settings are kept outside production, each segment judged like a path's; anything else is dropped.
-    if (url.hash && !commercial && /^#\/[\w/-]{0,60}$/.test(url.hash)) {
+    // SPA routes such as #/settings are kept outside production; a route with anything to hide is dropped whole, like
+    // anything else (U8: a fragment holds no masked part).
+    const pathEnd = parts.length;
+    const route = url.hash && !commercial && /^#\/[\w/-]{0,60}$/.test(url.hash);
+    if (route) {
       parts.push('#');
       pushSegments(url.hash.slice(1).split('/'));
-    } else if (url.hash) {
-      kinds.push('hash');
     }
+    const masked = parts.slice(pathEnd).some((p) => typeof p !== 'string');
+    if (masked) parts.length = pathEnd;
+    if (url.hash && (!route || masked)) kinds.push('hash');
 
     const runs = joinRuns(parts);
     // A URL too long to send is redacted as a whole rather than cut (row U1).
