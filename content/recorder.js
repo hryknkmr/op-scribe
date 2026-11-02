@@ -52,11 +52,21 @@
     }
   }
 
+  /** What the recorder holds for a recording: nothing of it carries over to the next (#9). */
+  function forget() {
+    stopNotices();
+    committed = new WeakMap();
+    pending = new Map();
+  }
+
   async function hello() {
     // What the last recording's operation caused stays out of the next one.
     stopNotices();
     const response = await send('HELLO');
+    const previous = config?.recording;
     config = response?.active ? response.config : null;
+    // Another recording, or none: the stop of the last one may never have reached this page.
+    if (config?.recording !== previous) forget();
     if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
   }
 
@@ -308,7 +318,10 @@
       const el = asElement(event.composedPath()[0]);
       if (!el) return;
       const field = fieldOf(el);
-      if (isTextField(field) || field.tagName === 'SELECT') pending.set(field, snapshot(field));
+      // Every field whose change records a value: toggles and files record the change itself.
+      if (isTextField(field) || (field.matches('input, select, textarea') && !isToggle(field) && field.type !== 'file')) {
+        pending.set(field, snapshot(field));
+      }
     },
 
     focusout(event) {
@@ -384,10 +397,8 @@
       return true;
     }
     if (message.type === 'OPS_STOP') {
-      stopNotices();
       config = null;
-      committed = new WeakMap();
-      pending = new Map();
+      forget();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
   });

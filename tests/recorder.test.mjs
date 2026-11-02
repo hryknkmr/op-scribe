@@ -3,6 +3,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
+
+// Which fields count as typed into is the real rule, not a stand-in.
+const { isTextField } = createRequire(import.meta.url)('../shared/target.js');
 
 const source = readFileSync(new URL('../content/recorder.js', import.meta.url), 'utf8');
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -37,7 +41,7 @@ function recorder() {
     location: { href: 'https://example.com/', origin: 'https://example.com' },
     window: { addEventListener: (type, fn) => { pageEvents[type] = fn; }, postMessage: () => {} },
     document: { activeElement: field, body: {}, querySelectorAll: () => [] },
-    OpScribeTarget: { isTextField: (el) => el.tagName === 'INPUT', implicitRole: () => 'textbox', operated: () => null, isOperated: () => false, accessibleName: () => 'q', inSearch: () => false },
+    OpScribeTarget: { isTextField, implicitRole: () => 'textbox', operated: () => null, isOperated: () => false, accessibleName: () => 'q', inSearch: () => false },
     // A stand-in for the masking: a password field's value is redacted, any other kept.
     OpScribeSanitize: {
       maskFieldValue: (value, meta) => (meta.type === 'password'
@@ -137,4 +141,25 @@ test('a pending input is committed by the field it was typed into, whatever the 
   r.field.isContentEditable = false;
   r.blur();
   assert.deepEqual(r.inputs().map((m) => m.detail.value.text), [['メモ']]);
+});
+
+test('a field the person only slides or picks from is taken at their input too, not at the change (#9, I5)', async () => {
+  const r = recorder();
+  await tick();
+  r.field.attrs.type = 'range';
+  r.type('30');
+  r.field.value = '90';
+  r.change();
+  assert.deepEqual(r.inputs().map((m) => m.detail.value.text), [['30']]);
+});
+
+test('what was pending for a recording whose stop never reached the page stays out of the next (#9)', async () => {
+  const r = recorder();
+  await tick();
+  r.type('いぬ');
+  // No OPS_STOP: the next recording starts, and the page is asked again.
+  r.control.recording = 'second';
+  await r.again();
+  await r.worker({ type: 'OPS_FLUSH' });
+  assert.deepEqual(r.inputs(), []);
 });
