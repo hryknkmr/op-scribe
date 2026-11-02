@@ -25,8 +25,9 @@
   const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'tel', 'url', 'password', 'number',
     'date', 'datetime-local', 'month', 'week', 'time']);
 
-  const oneLine = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
-  const textOf = (el) => oneLine(el.innerText ?? el.textContent ?? '');
+  // Whitespace runs as one space, trimmed: a name as a reader sees it (not limits.js's oneLine).
+  const squash = (text) => String(text ?? '').replace(/\s+/g, ' ').trim();
+  const textOf = (el) => squash(el.innerText ?? el.textContent ?? '');
 
   const isTextField = (el) => (el.tagName === 'INPUT' && TEXT_INPUT_TYPES.has(el.type))
     || el.tagName === 'TEXTAREA' || el.isContentEditable
@@ -89,7 +90,7 @@
    */
   function accessibleName(el, doc) {
     const aria = el.getAttribute('aria-label');
-    if (aria?.trim()) return oneLine(aria);
+    if (aria?.trim()) return squash(aria);
     const labelledBy = el.getAttribute('aria-labelledby');
     if (labelledBy && doc) {
       const text = labelledBy.split(/\s+/).map((id) => doc.getElementById(id))
@@ -97,20 +98,20 @@
       if (text) return text;
     }
     // An image, or a link of an image map, is named by its alt text (T2; review R34).
-    if (el.tagName === 'IMG' || el.tagName === 'AREA') return oneLine(el.alt);
-    const declared = oneLine(el.getAttribute('title'));
+    if (el.tagName === 'IMG' || el.tagName === 'AREA') return squash(el.alt);
+    const declared = squash(el.getAttribute('title'));
     if (!isOperated(el)) return declared;
     if (el.labels?.length) {
       const text = [...el.labels].map(textOf).join(' ');
       if (text) return text;
     }
-    if (el.tagName === 'INPUT' && el.type === 'image') return oneLine(el.alt) || declared;
-    if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return oneLine(el.value || el.type);
+    if (el.tagName === 'INPUT' && el.type === 'image') return squash(el.alt) || declared;
+    if (el.tagName === 'INPUT' && ['button', 'submit', 'reset'].includes(el.type)) return squash(el.value || el.type);
     if (el.matches('input, textarea, select') || isTextField(el) || implicitRole(el) === 'combobox') {
       // Never the name attribute: an identifier of the page, not something shown to a person (T2; review R44).
-      return oneLine(el.getAttribute('placeholder') || declared);
+      return squash(el.getAttribute('placeholder') || declared);
     }
-    return textOf(el) || oneLine(el.querySelector('img[alt]')?.alt) || declared;
+    return textOf(el) || squash(el.querySelector('img[alt]')?.alt) || declared;
   }
 
   const api = { isOperated, inSearch, isTextField, operated, implicitRole, accessibleName };

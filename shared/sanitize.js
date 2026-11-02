@@ -18,7 +18,7 @@
 (function (root) {
   'use strict';
 
-  const { LIMITS, cut, primaryRole, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, renderRuns, isVocab } = root.OpScribeLimits || require('./limits.js');
+  const { LIMITS, cut, oneLine, ALIAS_HOST, primaryRole, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, renderRuns, isVocab } = root.OpScribeLimits || require('./limits.js');
   // Zero-width and bidi controls: removed before any rule looks, in text and in field names alike.
   const INVISIBLE = new RegExp(HIDDEN_CHARS, 'gu');
   const redaction = (kind) => ({ redacted: kind });
@@ -274,7 +274,6 @@
   }
 
   /** One line: a line break from the page could otherwise forge a Gherkin step or a Markdown heading (#18). */
-  const oneLine = (text) => String(text ?? '').replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ');
 
   /**
    * The one way a free text becomes a text field of the output - a name, a
@@ -592,7 +591,7 @@
     const port = url.port ? `:${url.port}` : '';
     // A host of the alias form would read as the alias of another site: not recorded, like a host past
     // the alias limit (U4, K5). It never resolves, so no real page is lost.
-    if (ALIAS.test(host)) return { url: whole('invalid'), kinds: ['url', 'host'], untracked: true };
+    if (ALIAS_HOST.test(host)) return { url: whole('invalid'), kinds: ['url', 'host'], untracked: true };
     if (hostAllowed(host, ctx.hostAllowlist)) {
       origin = `${url.protocol}//${host}${port}`;
     } else {
@@ -670,7 +669,7 @@
     // A host of the alias form is never recorded as a real host (U4), and the same text is the alias of a
     // site: not looked for, even when a receiver's list names it (K5; reviews of #37 R10, #46 R1).
     const list = (hosts || []).map((h) => String(h).normalize('NFKC').trim().toLowerCase().replace(/\.+$/, ''))
-      .filter((h) => h && !/^site-\d+\.invalid$/.test(h))
+      .filter((h) => h && !ALIAS_HOST.test(h))
       .sort((a, b) => b.length - a.length);
     return list.length ? new RegExp(`(?<![\\p{L}\\p{N}.-])(?:${list.map(escapeRe).join('|')})(?![\\p{L}\\p{N}-]|\\.[\\p{L}\\p{N}])`, 'iu') : null;
   }
@@ -718,9 +717,6 @@
   // scans the steps its Gherkin was built from (guardReply). The Markdown a person edits is scanned
   // as written (E4).
   const RENDERED = new Set(['reproduction.gherkin', 'reply.gherkin', 'gherkin']);
-  // The host of an http(s) URL in the alias form ("site-3.invalid"): a keyword such as "site" or
-  // "invalid" is not looked for in it (E6). Only there: the same form anywhere else is scanned.
-  const ALIAS = /^site-\d+\.invalid$/;
 
   /**
    * Walks every string in an object and reports anything the filters would
@@ -745,10 +741,12 @@
           return `${scheme} `;
         });
         return [...scrubText(body, { keywords: opts.keywords }).kinds,
-          // Only the alias's host name is left out; a port after it is scanned like any text (reviews of #34 R2, R9).
+          // In an http(s) URL whose host is an alias, a keyword such as "site" or "invalid" is not looked for
+          // in the host (E6); the same form anywhere else is scanned. Only the alias's host name is left out;
+          // a port after it is scanned like any text (reviews of #34 R2, R9).
           ...(keywords && urlHosts.some((h) => {
             const name = h.replace(/:\d*$/, '');
-            return (ALIAS.test(name.toLowerCase()) ? h.slice(name.length) : h).match(keywords);
+            return (ALIAS_HOST.test(name.toLowerCase()) ? h.slice(name.length) : h).match(keywords);
           }) ? ['keyword'] : []),
           ...(hosts?.test(t.normalize('NFKC')) ? ['host'] : [])];
       });
