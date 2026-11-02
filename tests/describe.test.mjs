@@ -36,14 +36,15 @@ test('a page\'s own ‹…› is not shown as a masked part (E4, #56)', () => {
   const runs = (...parts) => parts;
   const forged = { ...rec, steps: [
     { n: 1, type: 'input', t: 0, env: 'standard', source: 'user', url: runs('https://site-1.invalid/'),
-      target: { role: 'textbox', name: runs('本文') }, value: typed.kept('text', '‹メールアドレス› を入力') },
+      target: { role: 'textbox', name: runs('本文') }, value: typed.kept('text', runs('‹メールアドレス› を入力')) },
     { n: 2, type: 'input', t: 1, env: 'standard', source: 'user', url: runs('https://site-1.invalid/'),
-      target: { role: 'textbox', name: runs('メール') }, value: { treatment: 'kept', field: 'text', text: [{ redacted: 'email' }] } }
+      target: { role: 'textbox', name: runs('メール') }, value: { treatment: 'kept', field: 'text', text: ['‹メールアドレス› と ', { redacted: 'email' }] } }
   ] };
   const markdown = D.toMarkdown(D.buildReproduction(forged));
   assert.match(markdown, /〈メールアドレス〉 を入力/);
-  // The only ‹…› left is the one made from the masked part.
-  assert.equal(markdown.split('\n').filter((l) => /^\d+\./.test(l) && l.includes('‹')).length, 1);
+  // The only ‹…› in the steps is the one made from the masked part, even on one line with the page's own.
+  const steps = markdown.slice(markdown.indexOf('## 手順'));
+  assert.deepEqual(steps.match(/‹[^›]*›/g), ['‹メールアドレス›']);
   // The Gherkin keeps the page's characters: its attribute table is read by a machine.
   assert.match(D.toGherkin(forged), /\| value +\| ‹メールアドレス› を入力 +\|/);
 });
