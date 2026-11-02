@@ -18,7 +18,14 @@ function worker() {
   const chrome = {
     storage: {
       session: {
-        get: async (key) => ({ [key]: session[key] === undefined ? undefined : structuredClone(session[key]) }),
+        get: async (key) => {
+          const value = { [key]: session[key] === undefined ? undefined : structuredClone(session[key]) };
+          // A test may hold one read: what it read arrives after what happens meanwhile.
+          const held = control.holdRead;
+          control.holdRead = null;
+          await held;
+          return value;
+        },
         set: async (items) => { Object.assign(session, structuredClone(items)); },
         remove: async (key) => { delete session[key]; }
       },
@@ -41,7 +48,11 @@ function worker() {
     tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async (id, message) => { if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
-  const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
+  // A recorder names the recording it was told about (HELLO); a test may name another.
+  const send = (message, sender = {}) => new Promise((resolve) => {
+    const named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
+    listeners.message(named, sender, resolve);
+  });
   const hello = () => send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' });
   // What a service worker has as globals and the worker uses (TextDecoder: the masking's percent decoding).
   const context = vm.createContext({ chrome, console, URL, crypto, setTimeout, clearTimeout, TextDecoder, TextEncoder });
@@ -49,7 +60,8 @@ function worker() {
   context.importScripts = (...files) => { for (const f of files) vm.runInContext(read(f), context, { filename: f }); };
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });
   const pageLoaded = () => Promise.all(updated.map((fn) => fn(7, { status: 'complete' })));
-  return { send, hello, pageLoaded, seen, control, session };
+  const removeTab = (id) => listeners.removed(id);
+  return { send, hello, pageLoaded, removeTab, seen, control, session };
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
@@ -122,6 +134,35 @@ test('a recording started while the earlier one commits its last value is not th
   await control.hello;
   control.flush = () => { control.flush = null; return send(start); };
   await send({ from: 'op-scribe/panel', type: 'STOP' });
+  assert.equal(session.opsRecording.state, 'recording');
+});
+
+test('a step sent for an earlier recording is not added to the one that follows it in the tab (#9)', async () => {
+  const { send, control, session } = worker();
+  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
+  await send(start);
+  await control.hello;
+  const earlier = session.opsRecording.id;
+  await send(start);
+  await control.hello;
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
+  const reply = await send({ from: 'op-scribe/content', type: 'STEP', recording: earlier, detail: { type: 'click', pageUrl: 'https://example.com/', target: { tag: 'button' } } }, page);
+  assert.equal(reply.error, 'NOT_RECORDING');
+  assert.deepEqual(session.opsRecording.steps.map((s) => s.type), ['navigate']);
+});
+
+test('a closed tab stops its own recording, not one started in another tab meanwhile (#9)', async () => {
+  const { send, removeTab, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  let release;
+  control.holdRead = new Promise((resolve) => { release = resolve; });
+  // The closed tab's recording is read, and another starts before the stop is queued.
+  const removed = removeTab(7);
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 8, url: 'https://example.com/' } });
+  release();
+  await removed;
+  assert.equal(session.opsRecording.tabId, 8);
   assert.equal(session.opsRecording.state, 'recording');
 });
 

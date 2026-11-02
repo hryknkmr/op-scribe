@@ -322,13 +322,14 @@ async function handle(message, sender) {
       if (!isRecordingTab(rec, tabId) || rec.id === stopping) return { reply: { active: false } };
       const settings = await getSettings();
       const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      const reply = { active: true, config: { commercial, keywords: settings.keywords } };
+      // Which recording: every later message names it, so one sent for an earlier recording never lands in this one (#9).
+      const reply = { active: true, config: { recording: rec.id, commercial, keywords: settings.keywords } };
       if (rec.attached) return { reply };
       rec.attached = true;
       return { save: rec, reply };
     });
     return mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId)) return { reply: { ok: false, error: 'NOT_RECORDING' } };
+      if (!isRecordingTab(rec, tabId) || message.recording !== rec.id) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
         addStep(rec, detail, settings, fromOf(sender));
@@ -398,7 +399,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const rec = await getRecording();
   // Nothing to flush: the page is gone.
-  if (isRecordingTab(rec, tabId)) await stopNow();
+  if (isRecordingTab(rec, tabId)) await stopNow(rec.id);
 });
 
 // The session store is wiped when the browser restarts; so is the badge state.

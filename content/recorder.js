@@ -31,13 +31,14 @@
    */
   let config = null;
   let lastStep = null;
-  const committed = new WeakMap();
-  // Fields a person typed into: only these are committed when the recording stops (#9, W7).
-  const typed = new WeakSet();
+  // Per recording: what the last one saw does not carry over to the next (#9).
+  let committed = new WeakMap();
+  // Fields a person typed into since their value was last committed: only these are committed at stop (#9, W7).
+  let typed = new WeakSet();
 
   async function send(type, detail, attempt = 0) {
     try {
-      return await chrome.runtime.sendMessage({ from: FROM, type, detail });
+      return await chrome.runtime.sendMessage({ from: FROM, type, detail, recording: config?.recording });
     } catch (error) {
       const text = String(error?.message || error);
       // Not a notice: sent again, it would land after the next operation and read as that one's (T7).
@@ -245,6 +246,7 @@
   function recordValue(el) {
     if (!config) return;
     const value = currentValue(el);
+    typed.delete(el);
     if (committed.get(el) === value) return;
     committed.set(el, value);
     const meta = fieldMeta(el);
@@ -372,6 +374,8 @@
     if (message.type === 'OPS_STOP') {
       stopNotices();
       config = null;
+      committed = new WeakMap();
+      typed = new WeakSet();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
   });
