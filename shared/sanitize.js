@@ -349,7 +349,7 @@
   const PII_HINT = /mail|phone|tel|mobile|fax|name|kana|furigana|address|addr|street|city|zip|postal|birth|bday|gender|card|account|iban|ssn|my.?number|氏名|名前|姓|フリガナ|ふりがな|住所|郵便|電話|携帯|メール|生年月日|誕生日|口座|カード|性別|勤務先|会社名|マイナンバー/i;
 
   // Ordinary words the hints above would hit by a part of them. Taken out first, so bypass_password is still a password.
-  const ORDINARY_WORDS = /compass|bypass|secretar(?:y|ies)|tokeniz\w*|cardinal\w*|discard\w*|postcard\w*|headphone\w*/gi;
+  const ORDINARY_WORDS = /compass|bypass|secretar(?:y|ies)|tokenizers?|cardinal(?:ity)?|discard(?:ed|s)?|postcards?|headphones?/gi;
 
   function piiLabel(hints, type) {
     if (type === 'email' || /mail|メール/i.test(hints)) return 'email';

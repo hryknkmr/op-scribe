@@ -166,4 +166,5 @@ test('ordinary words are not read as credentials, and never hide one', () => {
     assert.equal(S.classifyField({ name }).kind, 'free', name);
   }
   for (const name of ['bypass_password', 'compass_token', 'postcard_secret']) assert.equal(S.classifyField({ name }).kind, 'secret', name);
+  for (const name of ['tokenizer_email', 'discardEmail', 'headphone_phone', 'cardinalPhone']) assert.equal(S.classifyField({ name }).kind, 'pii', name);
 });
