@@ -133,23 +133,28 @@ test('a page that clicks a checkbox, its label or a radio makes no step of the p
   expect((await panel.recording()).steps.filter((s) => s.source === 'user')).toEqual([]);
 });
 
-for (const [name, setup, act] of [
-  ['a person clicks the radio already chosen', () => { document.getElementById('r1').checked = true; }, async (site) => { await site.click('#r1'); }],
-  ['the page cancels the person\'s click', () => { document.getElementById('r1').addEventListener('click', (e) => e.preventDefault(), { once: true }); }, async (site) => { await site.click('#r1'); }],
+for (const [name, setup] of [
+  ['the radio already chosen', () => { document.getElementById('r1').checked = true; }],
+  ['a click the page cancels', () => { document.getElementById('r1').addEventListener('click', (e) => e.preventDefault(), { once: true }); }],
+  ['a click the page answers with its own click(), at once and in a microtask', () => {
+    const r1 = document.getElementById('r1');
+    const r2 = document.getElementById('r2');
+    r1.addEventListener('click', () => { r2.click(); queueMicrotask(() => { r2.click(); r1.click(); }); }, { once: true });
+  }],
 ]) {
-  test(`${name}: a later click() of the page is still not the person's (W7)`, async ({ context, panel }) => {
+  test(`a person's click on ${name} is their one step, and the page's click() none (W7)`, async ({ context, panel }) => {
     const site = await context.newPage();
     await site.goto('http://a.test/');
     await site.evaluate(toggles);
     await site.evaluate(setup);
     await panel.start(site);
-    await act(site);
+    await site.click('#r1');
     await site.waitForTimeout(300);
-    // A click with no change: nothing of the person's to record, and nothing left for the page.
     await site.evaluate(() => { document.getElementById('r2').click(); document.getElementById('r1').click(); });
     await site.waitForTimeout(1000);
     await panel.stop();
-    expect((await panel.recording()).steps.filter((s) => s.type === 'check')).toEqual([]);
+    expect((await panel.recording()).steps.filter((s) => s.type === 'check').map((s) => `${s.source}:${s.target.selector}`))
+      .toEqual(['user:#r1']);
   });
 }
 

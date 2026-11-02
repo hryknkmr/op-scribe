@@ -35,9 +35,6 @@
   let committed = new WeakMap();
   // Field -> what a person's last input left in it, classified and masked then, until committed (#9).
   let pending = new Map();
-  // Toggles a person's click (or Space) reached, for that task only: the browser changes a toggle
-  // in the same task as the click, so a later change, such as a page's click(), is not theirs (W7).
-  let activated = new WeakSet();
 
   // The recording is the one this message was sent for, on every try: a retry never moves it to the next (#9).
   async function send(type, detail, attempt = 0, recording = config?.recording) {
@@ -60,7 +57,6 @@
     stopNotices();
     committed = new WeakMap();
     pending = new Map();
-    activated = new WeakSet();
   }
 
   let asked = 0;
@@ -295,18 +291,21 @@
     },
 
     click(event) {
+      // A checkbox or radio is recorded from the person's click (Space and arrow keys click it too), as
+      // it is at that click; its change is not, since a page's click() makes a trusted change too (W7).
       const hit = asElement(event.composedPath()[0]);
       if (hit && isToggle(hit)) {
-        activated.add(hit);
-        // Not a microtask: those run between the listeners of the same click, before its change.
-        setTimeout(() => activated.delete(hit), 0);
+        const owner = pendingFor(hit);
+        if (owner) commit(owner);
+        emit('check', { target: describe(hit), checked: hit.checked });
+        return;
       }
       // Enter in a field makes the browser "click" the submit button (detail 0, still
       // trusted). The key step already explains it; recording the click invents an action.
       if (event.detail === 0 && lastStep?.type === 'key' && Date.now() - lastStep.at < 800) return;
       const el = resolveTarget(event.composedPath()[0]);
       if (!el) return;
-      // Fields and toggles are recorded by their change, not by the focusing click.
+      // Fields are recorded by their change, not by the focusing click.
       if (isTextField(el) || isToggle(el) || el.tagName === 'SELECT' || el.tagName === 'OPTION') return;
       // A label with a control: the browser forwards the click to the control, which records itself.
       if (!T.isOperated(el) && el.closest('label')?.control) return;
@@ -320,8 +319,7 @@
       const owner = pendingFor(el);
       if (owner) commit(owner);
       if (isToggle(el)) {
-        // A page's click() or label.click() changes it too, with a trusted change but an untrusted click.
-        if (activated.delete(el)) emit('check', { target: describe(el), checked: el.checked });
+        // Recorded from the click.
       } else if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
       } else if (!owner && el.matches('input, select, textarea')) {
