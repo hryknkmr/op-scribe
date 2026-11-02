@@ -32,6 +32,8 @@
   let config = null;
   let lastStep = null;
   const committed = new WeakMap();
+  // Fields a person typed into: only these are committed when the recording stops (#9, W7).
+  const typed = new WeakSet();
 
   async function send(type, detail, attempt = 0) {
     try {
@@ -141,9 +143,10 @@
     lastStep = { type, at: Date.now() };
     // What the last operation caused so far goes first, or it would land after this one.
     readNotices();
-    send('STEP', { type, pageUrl: location.href, ...extra });
+    const sent = send('STEP', { type, pageUrl: location.href, ...extra });
     // A person's operation only: what a page reports does not open the window (T7).
     if (type !== 'tool') watchNotices();
+    return sent;
   }
 
   // ---------------------------------------------------------------- notices
@@ -221,6 +224,24 @@
     return el.value;
   }
 
+  /** The field that has the focus, inside open shadow roots too, or null. */
+  function focusedField() {
+    let el = document.activeElement;
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (!el) return null;
+    if (el.isContentEditable) return el.closest('[contenteditable=""],[contenteditable="true"]') || el;
+    return isTextField(el) ? el : null;
+  }
+
+  /**
+   * A value is recorded on change or blur, so what is still being typed when the recording
+   * stops would be lost (#9). Committed here, once the worker has it; only if a person typed it.
+   */
+  async function flush() {
+    const el = focusedField();
+    if (el && typed.has(el)) await recordValue(el);
+  }
+
   function recordValue(el) {
     if (!config) return;
     const value = currentValue(el);
@@ -229,7 +250,7 @@
     const meta = fieldMeta(el);
     const masked = S.maskFieldValue(value, meta, maskOptions());
     if (!masked) return;
-    emit(el.tagName === 'SELECT' ? 'select' : 'input', {
+    return emit(el.tagName === 'SELECT' ? 'select' : 'input', {
       target: describe(el),
       // The field's names, not its value: the worker classifies them again (ADR 0003, I3/I4).
       field: { ...meta, contentEditable: undefined },
@@ -270,6 +291,12 @@
       } else if (el.matches('input, select, textarea')) {
         recordValue(el);
       }
+    },
+
+    input(event) {
+      const el = asElement(event.composedPath()[0]);
+      if (!el) return;
+      typed.add(el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el);
     },
 
     focusout(event) {
@@ -337,6 +364,10 @@
       sendResponse({ ok: true });
       if (!config) hello();
       return;
+    }
+    if (message.type === 'OPS_FLUSH') {
+      flush().catch(() => {}).finally(() => sendResponse({ ok: true }));
+      return true;
     }
     if (message.type === 'OPS_STOP') {
       stopNotices();

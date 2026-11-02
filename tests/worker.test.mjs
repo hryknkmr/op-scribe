@@ -38,7 +38,7 @@ function worker() {
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
-    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async (id, message) => { if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; } },
+    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async (id, message) => { if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
   const send = (message, sender = {}) => new Promise((resolve) => { listeners.message(message, sender, resolve); });
@@ -102,6 +102,27 @@ test('a HELLO queued behind the stop gets no configuration', async () => {
   const stopping = send({ from: 'op-scribe/panel', type: 'STOP' });
   assert.equal((await hello()).active, false);
   await stopping;
+});
+
+test('a value the page commits when asked before the stop is in the recording (#9)', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
+  control.flush = () => send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'click', pageUrl: 'https://example.com/', target: { tag: 'button' } } }, page);
+  await send({ from: 'op-scribe/panel', type: 'STOP' });
+  assert.equal(session.opsRecording.state, 'stopped');
+  assert.equal(session.opsRecording.steps.at(-1).type, 'click');
+});
+
+test('a recording started while the earlier one commits its last value is not the one stopped (#9)', async () => {
+  const { send, control, session } = worker();
+  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
+  await send(start);
+  await control.hello;
+  control.flush = () => { control.flush = null; return send(start); };
+  await send({ from: 'op-scribe/panel', type: 'STOP' });
+  assert.equal(session.opsRecording.state, 'recording');
 });
 
 test('a restart that fails does not leave the earlier recording saved as recording', async () => {
