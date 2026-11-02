@@ -76,7 +76,7 @@
   const RULES = [
     // A URL written in a text is hidden whole (K4), first, so no rule below takes a piece of it. No alias: a text
     // reaches the worker from every side, and a recording-wide number in it would show a site the others (W8).
-    { kind: 'keyword', mark: 'masked', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]+|\bhttps?:[\\/]*(?=[\p{L}\p{N}])[^\s<>"'「」『』（）()、。]+|\bjavascript:[^\s]+|\bdata:[\w/+.-]*[;,][^\s]*/giu },
+    { kind: 'keyword', mark: 'masked', re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"'「」『』（）()、。]*[^\s<>"'「」『』（）()、。,.;:!?]|\bhttps?:[\\/]*(?=[\p{L}\p{N}])[^\s<>"'「」『』（）()、。]*[^\s<>"'「」『』（）()、。,.;:!?]|\bjavascript:[^\s]+|\bdata:[\w/+.-]*[;,][^\s]*/giu },
     { kind: 'keyword', mark: 'masked', re: /(?<![\p{L}\p{N}:/\\.-])\/\/(?=[\p{N}._-]*\p{L})[\p{L}\p{N}_.-]+(?::\d+)?(?:[/?#][^\s<>"'「」『』（）()、。]*)?/gu },
     // A relative URL with an id in its path, or a parameter that names a credential or an id.
     { kind: 'keyword', mark: 'masked', re: /(?<![\p{L}\p{N}:/.-])\.{0,2}\/[\w.~%/-]*\d{5,}[\w.~%/-]*/gu },

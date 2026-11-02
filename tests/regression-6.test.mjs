@@ -140,6 +140,7 @@ test('a URL written in a text is hidden whole, in any form (K4)', () => {
     assert.equal(text(t), '[[masked]]', t);
   }
   assert.equal(text('詳しくは https://docs.internal.test/a を見る。'), '詳しくは [[masked]] を見る。');
+  assert.equal(text('See https://example.com, then continue.'), 'See [[masked]], then continue.');
   for (const kept of ['a/b//c と 1//2', '/search?q=shoes', '東京/大阪', '10/31', 'v1.2', 'file.txt', 'メモ: 確認済み', 'data: 123']) assert.equal(text(kept), kept);
 });
 
