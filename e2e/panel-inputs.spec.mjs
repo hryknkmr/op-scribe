@@ -187,3 +187,24 @@ test('what was not tested stays in its field when the stop came too late to save
   await expect(ui.locator('#tab-status')).toContainText('やっていないことは保存しませんでした');
   await expect(ui.locator('#not-tested')).toHaveValue('決済と返品');
 });
+
+test('what was not tested for one recording is not saved into the next another panel started (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  const first = (await panel.recording()).id;
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('前の記録のためのメモ');
+  // Another panel stops this recording and starts the next.
+  await panel.send('STOP', { recordingId: first });
+  await panel.start(site);
+  const next = (await panel.recording()).id;
+  expect(next).not.toBe(first);
+  await expect(ui.locator('#rec-stop')).toBeEnabled();
+  await expect(ui.locator('#not-tested')).toHaveValue('');
+  await ui.locator('#rec-stop').click();
+  await expect.poll(async () => (await panel.recording()).state).toBe('stopped');
+  expect((await panel.recording()).notTested).toBeUndefined();
+});

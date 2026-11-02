@@ -320,8 +320,20 @@ function verdictForm(rec, step) {
   return form;
 }
 
+/**
+ * The recording the panel showed last. What is written for a recording (what was not tested) is
+ * for that recording only: when another one is shown - discarded, a new start, another panel's
+ * stop and start - the field is emptied, whichever way it changed (ADR 0005).
+ */
+let shownRecordingId;
+
 function render() {
   const rec = recording;
+  if ((rec?.id ?? null) !== shownRecordingId) {
+    shownRecordingId = rec?.id ?? null;
+    ui.notTested.value = '';
+    stopError = '';
+  }
   const isRecording = rec?.state === 'recording';
   ui.recState.textContent = isRecording ? '記録中' : rec ? '停止（記録あり）' : '停止中';
   ui.recState.classList.toggle('live', isRecording);
@@ -407,10 +419,8 @@ ui.start.addEventListener('click', () => {
     const result = await send('START', { tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value });
     startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
     if (result?.ok) {
-      stopError = '';
       ui.scope.value = '';
       ui.targetVersion.value = '';
-      ui.notTested.value = '';
       verdictDrafts.clear();
     }
     ui.repro.value = '';
@@ -447,8 +457,6 @@ ui.stop.addEventListener('click', async () => {
 ui.clear.addEventListener('click', async () => {
   if (!confirm('記録を破棄します。元に戻せません。')) return;
   await send('CLEAR');
-  // Nothing written for the discarded recording is carried into the next one.
-  ui.notTested.value = '';
   verdictDrafts.clear();
   ui.repro.value = '';
   basis = null;
