@@ -24,7 +24,7 @@ test('credentials written as key and value are hidden, at any length and quoted 
     assert.equal(text(input), output, input);
     assert.equal(S.finalScan({ t: input }).length, 1, input);
   }
-  for (const kept of ['note: hello world', 'state=open', '注意: これは例です', '時間: 10:30']) assert.equal(text(kept), kept);
+  for (const kept of ['note: hello world', 'state=open', 'credit: available', '注意: これは例です', '時間: 10:30']) assert.equal(text(kept), kept);
 });
 
 test('Basic and Bearer values are hidden, the words in a sentence are not', () => {
@@ -85,18 +85,17 @@ test('fields named as credentials and card data are secret, in any spelling', ()
   assert.equal(S.classifyField({ label: 'セキュリティコード' }).kind, 'secret');
 });
 
-test('fields named as ids are personal, unless the page wrote the choices', () => {
+test('fields named as ids are personal, before the choices and the search box (I4 first)', () => {
   for (const name of ['user_id', 'orderID', 'order_number', 'iban', 'account_number']) assert.equal(S.classifyField({ name }).kind, 'pii', name);
   // The stricter list wins: pass in a name is secret.
   assert.equal(S.classifyField({ name: 'passport' }).kind, 'secret');
   for (const label of ['ユーザーID', 'ログインID', '会員番号']) assert.equal(S.classifyField({ label }).kind, 'pii', label);
-  assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'country_id' }).kind, 'choice');
+  assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'user_id' }).kind, 'pii');
   assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'session' }).kind, 'choice');
   // A credential or card name beats the chosen option.
   for (const name of ['otp', 'session_id', 'sid']) assert.equal(S.classifyField({ tag: 'select', type: 'select', name }).kind, 'secret', name);
   assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'exp_month' }).kind, 'secret');
-  // A search box stays a search box (row I6).
-  assert.equal(S.classifyField({ type: 'search', name: 'user_id' }).kind, 'search');
+  assert.equal(S.classifyField({ type: 'search', name: 'user_id' }).kind, 'pii');
 });
 
 test('WebMCP arguments use the same names, and the protocol words of a key', () => {

@@ -308,8 +308,8 @@
     if (!words.length) return null;
     const has = (list) => words.some((w) => list.includes(w));
     const pair = (owners, second) => words.some((w, i) => owners.includes(w) && words[i + 1] === second);
-    if (JA_CARD.test(text) || has(['cc', 'credit', 'cvc', 'cvv', 'csc', 'cv', 'cid', 'cvn', 'cav', 'cvd', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
-        || pair(['card'], 'holder') || pair(['verification'], 'value') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
+    if (JA_CARD.test(text) || has(['cc', 'cvc', 'cvv', 'csc', 'cv', 'cid', 'cvn', 'cav', 'cvd', 'ccnumber', 'cardnumber', 'creditcard', 'cardholder', 'securitycode', 'cardcode'])
+        || pair(['credit'], 'card') || pair(['credit'], 'number') || pair(['card'], 'holder') || pair(['verification'], 'value') || pair(['card'], 'name') || pair(['card'], 'code') || pair(['card', 'cc'], 'number')
         || pair(['card', 'cc'], 'no') || pair(['card', 'cc'], 'num') || pair(['security'], 'code')
         || words.some((w) => w.startsWith('expir')) || (has(['exp']) && has(['month', 'year', 'date', 'mm', 'yy', 'card', 'cc']))) return 'card';
     if (JA_SECRET.test(text) || /マイナンバー|個人番号/.test(text) || words.some((w) => NATIONAL_IDS.test(w))
@@ -359,12 +359,13 @@
     if (type === 'email' || type === 'tel' || PII_AUTOCOMPLETE.test(autocomplete) || PII_HINT.test(hints)) {
       return { kind: 'pii', label: piiLabel(hints, type) };
     }
+    // Before the choices and the search box, like the personal names above (I4 comes first).
+    if (found.has('id')) return { kind: 'pii', label: 'personal' };
     if (chosen) return { kind: 'choice' };
     // Markup only: a field that merely looks like a search box is free text.
     // role is a list of tokens; the element takes the first real role in it.
     const role = primaryRole(meta.role);
     if (type === 'search' || role === 'searchbox' || meta.inSearch) return { kind: 'search' };
-    if (found.has('id')) return { kind: 'pii', label: 'personal' };
     return { kind: 'free' };
   }
 
