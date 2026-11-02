@@ -293,8 +293,8 @@ async function handle(message, sender) {
         return { remove: true, reply: { ok: true } };
       });
       case 'DELETE_STEP': return mutate(async (rec) => {
-        const index = Number(detail?.index);
-        // splice(NaN, 1) would remove the first step.
+        const index = detail?.index;
+        // Only a number the recording has: splice() reads NaN, null, '' or [] as 0, the first step.
         if (!rec || !Number.isInteger(index) || index < 0 || index >= rec.steps.length) return { reply: { ok: false } };
         rec.steps.splice(index, 1);
         rec.revision = (rec.revision || 0) + 1;

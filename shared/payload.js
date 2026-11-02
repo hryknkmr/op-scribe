@@ -108,7 +108,7 @@
     type: 'object',
     fields: {
       n: { type: 'int', row: 'T6', min: 1 },
-      type: { type: 'enum', row: 'T6', values: Object.keys(STEP_RULES) },
+      type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'tool', 'note', 'notice'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
       source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },

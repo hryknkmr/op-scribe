@@ -202,7 +202,7 @@ test('a step is deleted only by an index it has, and a note not recorded is not 
   await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } });
   const before = structuredClone(session.opsRecording);
-  for (const detail of [{}, { index: 'x' }, { index: -1 }, { index: 1.5 }, { index: before.steps.length }]) {
+  for (const detail of [{}, { index: 'x' }, { index: '0' }, { index: null }, { index: '' }, { index: false }, { index: [] }, { index: -1 }, { index: 1.5 }, { index: before.steps.length }]) {
     assert.equal((await send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail })).ok, false, JSON.stringify(detail));
   }
   assert.equal((await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: '' } })).ok, false);
