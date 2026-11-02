@@ -135,6 +135,16 @@ button:disabled { opacity: 0.5; cursor: default; }
 .step.note { color: var(--muted); }
 .step .icon { float: inline-end; }
 
+/* The verdict of an expectation (ADR 0005): under its step, compact. */
+.verdict { margin-block: 0.2rem 0.35rem; color: CanvasText; }
+.verdict fieldset { grid-template-columns: repeat(3, max-content) 1fr; align-items: center; column-gap: 0.6rem; }
+.verdict legend { grid-column: 1 / -1; }
+.verdict .field, .verdict button { grid-column: 1 / -1; }
+.verdict button { justify-self: start; }
+.verdict input:user-invalid { border-color: var(--danger); }
+.verdict [role="status"] { margin: 0.15rem 0 0; }
+.fields { margin-block-end: 0.5rem; }
+
 .tag {
   margin-inline-end: 0.3rem;
   padding: 0.02rem 0.4rem;

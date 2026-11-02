@@ -23,6 +23,10 @@ const ui = {
   recState: el('rec-state'),
   start: el('rec-start'),
   stop: el('rec-stop'),
+  scope: el('scope'),
+  targetVersion: el('target-version'),
+  notTested: el('not-tested'),
+  recMeta: el('rec-meta'),
   clear: el('rec-clear'),
   originGate: el('origin-gate'),
   addOrigin: el('add-origin'),
@@ -165,8 +169,9 @@ async function refreshActiveTab() {
   }
 }
 
-// Why the last START failed; a plain status line would be rewritten by the next render.
+// Why the last START or STOP failed; a plain status line would be rewritten by the next render.
 let startError = '';
+let stopError = '';
 
 function renderStatus() {
   const url = activeTab?.url || '';
@@ -178,6 +183,108 @@ function renderStatus() {
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
   if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
   if (startError) ui.tabStatus.textContent = startError;
+  if (stopError) ui.tabStatus.textContent = stopError;
+}
+
+/** The tester's expectation (ADR 0005): a note without a kind, written in this panel, with its ref. */
+const isExpectation = (step) => step.type === 'note' && !step.kind && step.source === 'user' && typeof step.ref === 'string';
+
+const VERDICT_LABELS = { ok: 'OK', ng: 'NG', '': '未判定' };
+const VERDICT_REASONS = {
+  OTHER_RECORDING: '別の記録に変わったため保存しませんでした',
+  NO_REF: 'この期待結果は記録から消えています',
+  NO_ACTUAL: 'NG には実際の結果が必要です',
+  BAD_VERDICT: '判定を読み取れませんでした'
+};
+/**
+ * What is being written for each expectation, by ref, until it is saved: the list is drawn
+ * again whenever a step arrives, and a choice or a half-written actual result stays.
+ */
+const verdictDrafts = new Map();
+
+/**
+ * The verdict of one expectation (ADR 0005): not judged, OK or NG, and for an NG the actual
+ * result, which the browser requires before it sends. Saved by the recording id and the ref
+ * only; the panel shows what the worker kept, not what it sent.
+ */
+function verdictForm(rec, step) {
+  const saved = { verdict: step.verdict || '', actual: step.actual ? D.humanize(S.renderRuns(step.actual)) : '' };
+  const draft = verdictDrafts.get(step.ref) || saved;
+  const form = document.createElement('form');
+  form.className = 'verdict';
+  form.dataset.ref = step.ref;
+  const fieldset = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = `判定（${step.ref}）: ${VERDICT_LABELS[saved.verdict]}`;
+  fieldset.append(legend);
+  for (const value of ['', 'ok', 'ng']) {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'verdict';
+    radio.value = value;
+    radio.checked = draft.verdict === value;
+    label.append(radio, ` ${VERDICT_LABELS[value]}`);
+    fieldset.append(label);
+  }
+  const actualLabel = document.createElement('label');
+  actualLabel.className = 'field';
+  const caption = document.createElement('span');
+  caption.textContent = '実際の結果（NG のとき必須）';
+  const actual = document.createElement('input');
+  actual.type = 'text';
+  actual.name = 'actual';
+  actual.maxLength = LIMITS.actual;
+  actual.value = draft.actual;
+  actualLabel.append(caption, actual);
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'secondary';
+  save.textContent = '判定を保存';
+  const status = document.createElement('p');
+  status.className = 'hint';
+  status.id = `verdict-status-${step.ref}`;
+  status.setAttribute('role', 'status');
+  form.setAttribute('aria-describedby', status.id);
+  fieldset.append(actualLabel, save);
+  form.append(fieldset, status);
+
+  const choice = () => form.querySelector('[name="verdict"]:checked')?.value ?? '';
+  const sync = () => {
+    actualLabel.hidden = choice() !== 'ng';
+    actual.required = choice() === 'ng';
+    verdictDrafts.set(step.ref, { verdict: choice(), actual: actual.value });
+  };
+  sync();
+  form.addEventListener('change', sync);
+  actual.addEventListener('input', () => {
+    actual.setCustomValidity('');
+    sync();
+  });
+  actual.addEventListener('invalid', () => actual.setCustomValidity(VERDICT_REASONS.NO_ACTUAL));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const verdict = choice();
+    if (verdict === 'ng' && !actual.value.trim()) {
+      actual.value = '';
+      actual.reportValidity();
+      return;
+    }
+    save.disabled = true;
+    const reply = await send('SET_VERDICT', {
+      recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(verdict === 'ng' && { actual: actual.value })
+    });
+    save.disabled = false;
+    if (reply?.ok) verdictDrafts.delete(step.ref);
+    // What the worker kept is drawn from the recording read again, whatever the reply.
+    await refresh();
+    if (!reply?.ok) {
+      const shown = [...ui.steps.querySelectorAll('.verdict')].find((f) => f.dataset.ref === step.ref);
+      const line = shown?.querySelector('[role="status"]') || ui.outputStatus;
+      line.textContent = VERDICT_REASONS[reply?.reason] || `保存できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
+    }
+  });
+  return form;
 }
 
 function render() {
@@ -188,12 +295,22 @@ function render() {
   ui.start.disabled = isRecording || !pagePattern(activeTab?.url);
   ui.stop.disabled = !isRecording;
   ui.clear.disabled = !rec;
+  // Written at the start and at the stop (ADR 0005): each field only when it can still be sent.
+  ui.scope.disabled = isRecording;
+  ui.targetVersion.disabled = isRecording;
+  ui.notTested.disabled = !isRecording;
+  const meta = [['対象と範囲', rec?.scope], ['対象のバージョン', rec?.targetVersion], ['やっていないこと', rec?.notTested]]
+    .filter(([, runs]) => runs).map(([label, runs]) => `${label}: ${D.humanize(S.renderRuns(runs))}`);
+  ui.recMeta.textContent = meta.join(' / ');
 
   const pattern = pagePattern(activeTab?.url);
   ui.originGate.hidden = !(isRecording && activeTab?.id === rec.tabId && pattern && !rec.grantedPatterns.includes(pattern));
 
   const steps = rec?.steps || [];
   ui.stepCount.textContent = String(steps.length);
+  // The list is drawn again whenever a step arrives: a verdict being written keeps its focus.
+  const focused = document.activeElement?.closest?.('.verdict') ? document.activeElement : null;
+  const refocus = focused && { ref: focused.closest('.verdict').dataset.ref, name: focused.name, value: focused.value, at: focused.selectionStart };
   ui.steps.replaceChildren();
   steps.forEach((step, index) => {
     const li = document.createElement('li');
@@ -214,8 +331,17 @@ function render() {
     // The recording as shown: a second click before the list is drawn again removes nothing.
     remove.addEventListener('click', () => send('DELETE_STEP', { index, basis: basisOf(rec) }));
     li.append(text, remove);
+    if (isExpectation(step)) li.append(verdictForm(rec, step));
     ui.steps.append(li);
   });
+  if (refocus) {
+    const form = [...ui.steps.querySelectorAll('.verdict')].find((f) => f.dataset.ref === refocus.ref);
+    const field = refocus.name && form?.querySelector(refocus.name === 'actual' ? '[name="actual"]' : `[name="${refocus.name}"][value="${refocus.value}"]`);
+    if (field) {
+      field.focus();
+      if (refocus.name === 'actual' && refocus.at !== null) field.setSelectionRange(refocus.at, refocus.at);
+    }
+  }
 
   ui.gherkin.value = rec ? D.toGherkin(rec) : '';
   if (isStale(rec)) ui.genStatus.textContent = STALE;
@@ -245,8 +371,14 @@ ui.start.addEventListener('click', () => {
       ui.tabStatus.textContent = 'サイトへのアクセスが許可されなかったため記録を開始できません';
       return;
     }
-    const result = await send('START', { tabId: tab.id, url: tab.url });
+    const result = await send('START', { tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value });
     startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
+    if (result?.ok) {
+      stopError = '';
+      ui.scope.value = '';
+      ui.targetVersion.value = '';
+      verdictDrafts.clear();
+    }
     ui.repro.value = '';
     generator = 'none';
     basis = null;
@@ -267,7 +399,10 @@ ui.addOrigin.addEventListener('click', () => {
 });
 
 ui.stop.addEventListener('click', async () => {
-  await send('STOP');
+  // The recording this panel shows, with what was not tested (ADR 0005).
+  const reply = await send('STOP', { recordingId: recording?.id, notTested: ui.notTested.value });
+  stopError = reply?.ok ? '' : reply?.reason === 'OTHER_RECORDING' ? '別の記録に変わったため停止しませんでした' : `停止できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
+  if (reply?.ok) ui.notTested.value = '';
   await refresh();
 });
 
