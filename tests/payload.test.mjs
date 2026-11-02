@@ -545,7 +545,8 @@ test('a URL holds a masked part only where the masking puts one, and no bracket 
   for (const [value, ok] of [
     [['https://site-1.invalid/[x]'], false], // a bracket in a text of the URL
     [['https://site-1.invalid/a?q=', v, 'x'], false], // a masked value with text after it
-    [['https://site-1.invalid/', v], false], // a query value's part in the path
+    [['https://site-1.invalid/', v], true], // a commercial path segment (U5)
+    [['https://site-1.invalid/a', v], false], // half a path segment
     [['https://site-1.invalid/a', { redacted: 'id' }], false], // half a path segment
     [['https://site-1.invalid/a?q=', { redacted: 'id' }], false], // a path part in the query
     [['https://site-1.invalid/a#/', { redacted: 'id' }], false], // in the fragment
