@@ -268,3 +268,112 @@ test('a notice in the Gherkin carries what it showed and its source', () => {
   assert.match(feature, /\| notice +\| 失敗 \\\| 再試行 \|/);
   assert.match(feature, /\| source +\| unknown +\|/);
 });
+
+// ------------------------------------------------------------- ADR 0005 formats
+
+// A recording as the payload has it: texts are runs (plain strings are a run each here).
+const T0 = '2026-11-03T01:00:00.000Z';
+const nav = (url, t = 0) => ({ type: 'navigate', t, env: 'standard', source: 'unknown', url: [url] });
+const click = (name, url, t = 0) => ({ type: 'click', t, env: 'standard', source: 'user', url: [url], target: { role: 'button', name: [name] } });
+const notice = (text, url, t = 0) => ({ type: 'notice', t, env: 'standard', source: 'unknown', url: [url], notice: [text], level: 'status' });
+const tool = (name, url, t = 0) => ({ type: 'tool', t, env: 'standard', source: 'agent', url: [url], tool: [name], ok: true });
+const expect = (note, ref, verdict, actual) => ({ type: 'note', t: 0, env: 'standard', source: 'user', note: [note], ref,
+  ...(verdict && { verdict }), ...(actual && { actual: [actual] }) });
+const recording = (steps, extra = {}) => ({ id: 'rec-fmt-1', startedAt: T0, endedAt: '2026-11-03T01:12:30.000Z', environment: { browser: ['Chrome 141'] }, steps, ...extra });
+const A = 'https://site-1.invalid/a';
+const B = 'https://site-1.invalid/b';
+
+test('a bug ticket has the five fields of ADR 0005, one for each NG, and names the recording (format A)', () => {
+  const r = recording([nav(A), click('保存', A, 100), expect('保存できる', 'E-aaaaaa', 'ng', 'エラーが出る'), expect('一覧に戻る', 'E-bbbbbb', 'ok'),
+    expect('件数が増える', 'E-cccccc', 'ng', '増えない')], { targetVersion: ['2.3.0'] });
+  const tickets = D.bugTickets(r);
+  assert.deepEqual(tickets.map((t) => t.ref), ['E-aaaaaa', 'E-cccccc']);
+  const [first] = tickets;
+  assert.equal(first.text.split('\n')[0], `# [E-aaaaaa] 『保存できる』が期待どおりにならない（${A}）`);
+  for (const heading of ['## 再現手順', '## 期待結果', '## 実際の結果', '## 環境・対象バージョン']) assert.ok(first.text.includes(`\n${heading}\n`), heading);
+  assert.ok(first.text.includes(`1. ${A} を開く\n2. 「保存」ボタンをクリックする\n`), first.text);
+  assert.ok(first.text.includes('\nエラーが出る\n'));
+  assert.ok(first.text.includes('- 環境: Chrome 141\n- 対象のバージョン: 2.3.0'));
+  assert.ok(first.text.trimEnd().endsWith('記録 ID: rec-fmt-1'));
+  // The second ticket's steps stop before its own expectation, and leave the earlier notes out.
+  assert.ok(!tickets[1].text.includes('保存できる'), tickets[1].text);
+});
+
+test('the steps of a ticket: an NG at once after the opening is that one line; none before it says so; a gap is warned (format A)', () => {
+  const opened = D.bugTickets(recording([nav(A), expect('表示される', 'E-aaaaaa', 'ng', '真っ白')]))[0].text;
+  const stepsOf = (text) => text.split('\n## 再現手順\n')[1].split('\n\n')[0].split('\n').filter((l) => /^\d+\. /.test(l));
+  assert.deepEqual(stepsOf(opened), [`1. ${A} を開く`], opened);
+  assert.ok(!opened.includes('欠けている'));
+  const nothing = D.bugTickets(recording([expect('表示される', 'E-aaaaaa', 'ng', '真っ白')]))[0].text;
+  assert.ok(nothing.includes('（記録された操作なし）'), nothing);
+  assert.ok(nothing.startsWith('# [E-aaaaaa] 『表示される』が期待どおりにならない（画面不明）'), nothing);
+  // The first step is no navigation (the tester deleted it), or a limit dropped steps: a gap may be there.
+  assert.ok(nothing.includes('（記録の一部が欠けている可能性がある）'));
+  const trimmed = D.bugTickets(recording([nav(A), expect('表示される', 'E-aaaaaa', 'ng', '真っ白')], { trimmed: 'other' }))[0].text;
+  assert.ok(trimmed.includes('（記録の一部が欠けている可能性がある）'));
+});
+
+test('a ticket takes the notices from the last operation, tool call or navigation before its NG (format A)', () => {
+  const noticesOf = (steps) => D.bugTickets(recording(steps))[0].text.split('\n').filter((l) => l.startsWith('- 通知'));
+  // click -> notice(1) -> tool -> notice(2) -> NG: only what came after the tool call.
+  assert.deepEqual(noticesOf([nav(A), click('保存', A), notice('一つ目', A), tool('x', A), notice('二つ目', A), expect('出る', 'E-aaaaaa', 'ng', 'x')]),
+    ['- 通知「二つ目」が表示される']);
+  // No operation before it: from the start.
+  assert.deepEqual(noticesOf([notice('最初から', A), expect('出る', 'E-aaaaaa', 'ng', 'x')]), ['- 通知「最初から」が表示される']);
+  // navigate(A) -> notice -> navigate(B) -> notice -> NG: only B's.
+  assert.deepEqual(noticesOf([nav(A), notice('A の通知', A), nav(B), notice('B の通知', B), expect('出る', 'E-aaaaaa', 'ng', 'x')]),
+    ['- 通知「B の通知」が表示される']);
+  // Notices are no steps to take.
+  const text = D.bugTickets(recording([nav(A), click('保存', A), notice('保存しました', A), expect('出る', 'E-aaaaaa', 'ng', 'x')]))[0].text;
+  assert.ok(!/^\d+\. 通知/m.test(text), text);
+});
+
+test('the conclusion of a session record follows the table of ADR 0005, row by row (format B)', () => {
+  const of = (steps, extra) => D.sessionRecord(recording(steps, extra)).split('\n## 結論\n')[1].split('\n')[0];
+  const ok = expect('出る', 'E-aaaaaa', 'ok');
+  const ng = expect('出る', 'E-bbbbbb', 'ng', 'x');
+  const open = expect('出る', 'E-cccccc');
+  assert.equal(of([nav(A), ng, open]), '問題あり（NG 1 件）（未判定 1 件）');
+  assert.equal(of([nav(A), ng], { trimmed: 'user' }), '問題あり（NG 1 件）（記録の一部が欠けている）');
+  assert.equal(of([nav(A), ok], { trimmed: 'user' }), '判定なし（記録の一部が欠けている）');
+  // other: the warning is at the top, and the verdicts decide.
+  assert.equal(of([nav(A), ok], { trimmed: 'other' }), '確かめた範囲で問題なし（OK 1 件）');
+  assert.ok(D.sessionRecord(recording([nav(A), ok], { trimmed: 'other' })).includes('（記録の一部が上限で消えている。'));
+  assert.equal(of([nav(A)]), '判定なし（期待結果が無い）');
+  assert.equal(of([nav(A)], { trimmed: 'other' }), '判定なし（期待結果が無い）');
+  assert.equal(of([nav(A), ok, open]), '判定なし（未判定 1 件）');
+  assert.equal(of([nav(A), ok]), '確かめた範囲で問題なし（OK 1 件）');
+});
+
+test('a session record is made only once the recording has ended, never with an end before the start (format B)', () => {
+  assert.equal(D.sessionRecord(recording([nav(A)], { endedAt: null })), null);
+  assert.equal(D.sessionRecord(recording([nav(A)], { endedAt: '2026-11-03T00:59:00.000Z' })), null);
+  const text = D.sessionRecord(recording([nav(A)]));
+  assert.ok(text.includes(`${T0} 〜 2026-11-03T01:12:30.000Z（12 分）`), text);
+  assert.ok(text.includes('記録 ID: rec-fmt-1'));
+});
+
+test('the masked URLs as they changed, with the three counts apart, and an appendix of every step (format B)', () => {
+  const agentNote = { type: 'note', t: 0, env: 'standard', source: 'agent', url: [B], note: ['ページの申告'] };
+  const idea = { type: 'note', t: 0, env: 'standard', source: 'user', note: ['気になる'], kind: 'idea' };
+  const steps = [click('先に', A), nav(A), click('次へ', A), nav(B), tool('x', B), agentNote, notice('完了', B), nav(A), idea, expect('出る', 'E-aaaaaa', 'ng', '出ない')];
+  const text = D.sessionRecord(recording(steps));
+  const parts = text.split('\n## 実施した操作\n')[1].split('\n\n')[0].split('\n').slice(1);
+  assert.deepEqual(parts, [
+    `1. ${A}: 記録された操作 2 件 / ツール呼び出し 0 件 / ページからの申告 0 件`,
+    `2. ${B}: 記録された操作 0 件 / ツール呼び出し 1 件 / ページからの申告 1 件`,
+    `3. ${A}: 記録された操作 0 件 / ツール呼び出し 0 件 / ページからの申告 0 件`
+  ], text);
+  // A step before the first URL goes to a first 画面不明 part.
+  const unknown = D.sessionRecord(recording([idea, nav(A)])).split('\n## 実施した操作\n')[1].split('\n')[1];
+  assert.equal(unknown, '1. 画面不明: 記録された操作 0 件 / ツール呼び出し 0 件 / ページからの申告 0 件');
+  const appendix = text.split('\n## 付録: 記録したステップ\n')[1].trimEnd().split('\n');
+  assert.equal(appendix.length, steps.length);
+  assert.equal(appendix[5], '6. ページの申告（ページからの申告）');
+  assert.equal(appendix[8], '9. 気になる（気づき）');
+  assert.equal(appendix[9], '10. 出る（期待結果: NG）');
+  assert.ok(text.includes('- [E-aaaaaa] 出る（画面: https://site-1.invalid/a）: NG\n  - 実際の結果: 出ない\n  - バグチケット [E-aaaaaa]'), text);
+  assert.ok(text.includes('## 見つけたこと\n- 気づき\n  - 気になる'));
+  // The page's note is no expectation of the tester's.
+  assert.ok(!text.split('\n## 確かめたこと\n')[1].split('\n## ')[0].includes('ページの申告'));
+});

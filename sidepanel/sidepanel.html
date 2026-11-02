@@ -99,6 +99,19 @@
           <button id="copy-gherkin" type="button" class="secondary">Gherkin をコピー</button>
           <button id="download" type="button" class="secondary">JSON を保存</button>
         </div>
+        <fieldset class="fields">
+          <legend>読み手ごとの書式（記録から作る。手で編集した簡易手順は使わない）</legend>
+          <div class="row">
+            <select id="ticket-ref" aria-label="バグチケットにする NG の期待結果"></select>
+            <button id="copy-ticket" type="button" class="secondary">バグチケットをコピー</button>
+            <button id="save-ticket" type="button" class="secondary">保存</button>
+          </div>
+          <div class="row">
+            <button id="copy-session" type="button" class="secondary">実施記録をコピー</button>
+            <button id="save-session" type="button" class="secondary">保存</button>
+          </div>
+          <p id="format-hint" class="hint"></p>
+        </fieldset>
         <p id="output-status" class="hint"></p>
       </div>
     </details>
@@ -161,6 +174,7 @@
   <script src="../shared/sanitize.js"></script>
   <script src="../shared/describe.js"></script>
   <script src="../shared/payload.js"></script>
+  <script src="../shared/formats.js"></script>
   <script src="sidepanel.js" type="module"></script>
 </body>
 </html>
