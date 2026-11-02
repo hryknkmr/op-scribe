@@ -20,3 +20,12 @@ test('records the page open at the start, then what the person does on it (#23, 
   // The host is not on the allowlist: the recording names it by its alias.
   expect(JSON.stringify(rec.steps)).not.toContain('a.test');
 });
+
+test('the tests reach no host but the made-up ones', async ({ context }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  const reached = await site.evaluate(async () => {
+    try { await fetch('https://example.com/', { mode: 'no-cors' }); return true; } catch { return false; }
+  });
+  expect(reached).toBe(false);
+});

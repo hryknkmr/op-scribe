@@ -44,6 +44,9 @@ export const test = base.extend({
       headless: !process.env.HEADED,
       args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
     });
+    // Anything but the made-up sites is refused, so no test can reach a real host. Playwright tries the
+    // routes added last first: this one only gets what the *.test route below does not take.
+    await context.route(/^(https?|wss?):\/\//, (route) => route.abort('blockedbyclient'));
     await context.route(/^http:\/\/[a-z0-9-]+\.test\//, (route) => {
       const name = new URL(route.request().url()).pathname.replace(/^\/$/, '/form.html').slice(1);
       const file = path.join(SITE, path.basename(name));

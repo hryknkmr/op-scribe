@@ -113,12 +113,14 @@ AI の出力に、記録に無い URL や伏せ字、伏せるべき値が混ざ
   Scenario: 記録された操作
     When 「ログイン」リンクをクリックする
       | action   | click |
+      | source   | user |
       | url      | https://site-1.invalid/ |
       | role     | link |
       | name     | ログイン |
       | selector | [data-testid="login-link"] |
     Then "https://site-1.invalid/login" に遷移する
-      | url | https://site-1.invalid/login |
+      | source | unknown |
+      | url    | https://site-1.invalid/login |
 ```
 
 ### 4. 持ち出す・送る
