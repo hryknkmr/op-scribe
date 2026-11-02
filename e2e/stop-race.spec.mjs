@@ -34,6 +34,16 @@ test('#9: a value the page set, not typed, is not committed at stop', async ({ c
   expect((await panel.recording()).steps.filter((s) => s.type === 'input')).toEqual([]);
 });
 
+test('#9: a value the page set after the person typed is not committed for them', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await site.fill('#q', 'いぬ');
+  await site.evaluate(() => { document.querySelector('#q').value = 'うそ'; });
+  await panel.stop();
+  expect((await panel.recording()).steps.filter((s) => s.type === 'input')).toEqual([]);
+});
+
 test('#9: what was typed for the last recording does not let the page fill the next one', async ({ context, panel }) => {
   const site = await context.newPage();
   await site.goto('http://a.test/');

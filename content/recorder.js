@@ -33,18 +33,19 @@
   let lastStep = null;
   // Per recording: what the last one saw does not carry over to the next (#9).
   let committed = new WeakMap();
-  // Fields a person typed into since their value was last committed: only these are committed at stop (#9, W7).
-  let typed = new WeakSet();
+  // Field -> its value as a person's typing left it, until committed: only that value is committed at stop (#9, W7).
+  let typed = new WeakMap();
 
-  async function send(type, detail, attempt = 0) {
+  // The recording is the one this message was sent for, on every try: a retry never moves it to the next (#9).
+  async function send(type, detail, attempt = 0, recording = config?.recording) {
     try {
-      return await chrome.runtime.sendMessage({ from: FROM, type, detail, recording: config?.recording });
+      return await chrome.runtime.sendMessage({ from: FROM, type, detail, recording });
     } catch (error) {
       const text = String(error?.message || error);
       // Not a notice: sent again, it would land after the next operation and read as that one's (T7).
       if (TRANSIENT.test(text) && attempt < 3 && detail?.type !== 'notice') {
         await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
-        return send(type, detail, attempt + 1);
+        return send(type, detail, attempt + 1, recording);
       }
       if (/Extension context invalidated/i.test(text)) config = null;
       return null;
@@ -236,11 +237,12 @@
 
   /**
    * A value is recorded on change or blur, so what is still being typed when the recording
-   * stops would be lost (#9). Committed here, once the worker has it; only if a person typed it.
+   * stops would be lost (#9). Committed here, once the worker has it; only if it is still what a
+   * person typed, so a value the page set, before or after, is not taken for theirs.
    */
   async function flush() {
     const el = focusedField();
-    if (el && typed.has(el)) await recordValue(el);
+    if (el && typed.has(el) && typed.get(el) === currentValue(el)) await recordValue(el);
   }
 
   function recordValue(el) {
@@ -298,7 +300,8 @@
     input(event) {
       const el = asElement(event.composedPath()[0]);
       if (!el) return;
-      typed.add(el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el);
+      const field = el.isContentEditable ? el.closest('[contenteditable=""],[contenteditable="true"]') || el : el;
+      typed.set(field, currentValue(field));
     },
 
     focusout(event) {
@@ -375,7 +378,7 @@
       stopNotices();
       config = null;
       committed = new WeakMap();
-      typed = new WeakSet();
+      typed = new WeakMap();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
   });
