@@ -33,20 +33,22 @@ function worker() {
       local: { get: async (key) => (control.settings && key === 'opsSettings' ? { [key]: structuredClone(control.settings) } : {}), set: noop }
     },
     runtime: { onInstalled: on('installed'), onStartup: on('startup'), onMessage: on('message'), sendMessage: noop },
-    permissions: { contains: async () => true },
+    // A test may name origins the extension has no access to (control.denied).
+    permissions: { contains: async ({ origins }) => !origins.some((o) => (control.denied || []).includes(o)) },
     scripting: {
       getRegisteredContentScripts: async () => (control.failUnregister ? [{ id: 'recorder' }] : []),
       unregisterContentScripts: async () => { if (control.failUnregister) throw new Error('unregister failed'); },
       registerContentScripts: async () => { if (control.failRegister) throw new Error('register failed'); },
       // As in a browser, the injection ends without waiting for the HELLO the recorder sends.
-      executeScript: async ({ files }) => {
+      executeScript: async ({ target, files }) => {
+        (control.injected ||= []).push(target.tabId);
         if (control.failInject) throw new Error('inject failed');
         if (!files.includes('content/recorder.js') || control.silentRecorder) return;
         control.hello = hello().then((reply) => seen.push(reply));
       }
     },
     action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
-    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), sendMessage: async (id, message) => { if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
+    tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => (control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }), sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
   // A recorder names the recording it was told about (HELLO); a test may name another.
@@ -62,7 +64,10 @@ function worker() {
   vm.runInContext(read('service-worker.js'), context, { filename: 'service-worker.js' });
   const pageLoaded = () => Promise.all(updated.map((fn) => fn(7, { status: 'complete' })));
   const removeTab = (id) => listeners.removed(id);
-  return { send, hello, pageLoaded, removeTab, seen, control, session };
+  // A tab opened from another (openerTabId), with its URL now or, as Chrome may, only in a later update.
+  const openTab = (tab) => listeners.created(tab);
+  const urlChanged = (id, url) => Promise.all(updated.map((fn) => fn(id, { url })));
+  return { send, hello, pageLoaded, removeTab, openTab, urlChanged, listeners, seen, control, session };
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
@@ -169,11 +174,13 @@ test('a closed tab stops its own recording, not one started in another tab meanw
   await control.hello;
   let release;
   control.holdRead = new Promise((resolve) => { release = resolve; });
-  // The closed tab's recording is read, and another starts before the stop is queued.
+  // The closed tab's recording is read, and another start is asked for meanwhile. The close is
+  // handled in the queue (#40), so the start comes after it and is not the one the close ends.
   const removed = removeTab(7);
-  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 8, url: 'https://example.com/' } });
+  const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 8, url: 'https://example.com/' } });
   release();
   await removed;
+  await started;
   assert.equal(session.opsRecording.tabId, 8);
   assert.equal(session.opsRecording.state, 'recording');
 });
@@ -374,4 +381,107 @@ test('a start masks what the tester wrote with the keywords as they are when it 
   control.settings = { keywords: ['Acme'] };
   await started;
   assert.ok(!JSON.stringify(session.opsRecording.scope).includes('Acme'), JSON.stringify(session.opsRecording.scope));
+});
+
+// ------------------------------------------------------------- tabs opened from the recording (#40)
+
+const startIn7 = async (w) => {
+  await w.send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await w.control.hello;
+};
+const from = (id, url) => ({ tab: { id, url }, url, origin: new URL(url).origin });
+const stepIn = (w, id, url) => w.send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'click', pageUrl: url, target: { role: 'button', name: 'OK' } } }, from(id, url));
+
+test('a tab opened from the recording joins it when the extension has its site, and its steps are recorded (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7, url: 'https://shop.example.com/item' });
+  const rec = w.session.opsRecording;
+  assert.deepEqual(rec.tabIds, [7, 9]);
+  assert.deepEqual(rec.waitingTabIds, []);
+  assert.ok(rec.grantedPatterns.includes('https://shop.example.com/*'));
+  assert.ok(w.control.injected.includes(9), 'the recorder was injected into the new tab');
+  assert.equal(rec.steps.at(-1).type, 'navigate');
+  assert.equal((await stepIn(w, 9, 'https://shop.example.com/item')).ok, true);
+  assert.equal(w.session.opsRecording.steps.at(-1).type, 'click');
+  // A tab opened from that tab joins too.
+  await w.openTab({ id: 10, openerTabId: 9, url: 'https://example.com/help' });
+  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9, 10]);
+});
+
+test('a tab opened any other way never joins, and its steps are refused (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, url: 'https://example.com/other' });
+  await w.openTab({ id: 10, openerTabId: 99, url: 'https://example.com/other' });
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.equal((await stepIn(w, 9, 'https://example.com/other')).ok, false);
+});
+
+test('a tab on a site the extension cannot reach waits until the panel adds it, and a URL given later is used (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  w.control.denied = ['https://login.example.net/*'];
+  // Chrome may give the URL only after the tab is created.
+  await w.openTab({ id: 9, openerTabId: 7 });
+  await w.urlChanged(9, 'https://login.example.net/');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
+  assert.equal((await stepIn(w, 9, 'https://login.example.net/')).ok, false);
+  // Not a page of the web: it does not join, whatever the panel asks.
+  assert.equal((await w.send({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: 'chrome://newtab/', tabId: 9 } })).ok, false);
+  // The person grants the site in the panel.
+  w.control.denied = [];
+  const reply = await w.send({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: 'https://login.example.net/', tabId: 9 } });
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  // The panel cannot add a tab that is neither recorded nor waiting.
+  assert.equal((await w.send({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: 'https://example.com/', tabId: 42 } })).error, 'NOT_RECORDING_TAB');
+});
+
+test('a recording holds at most LIMITS.tabs tabs, waiting ones included (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  w.control.denied = ['https://wait.example.net/*'];
+  for (let id = 100; id < 120; id += 1) await w.openTab({ id, openerTabId: 7, url: id % 2 ? 'https://wait.example.net/' : 'https://example.com/x' });
+  const rec = w.session.opsRecording;
+  assert.equal(rec.tabIds.length + rec.waitingTabIds.length, 10);
+});
+
+test('closing a tab leaves the recording on; closing its last tab ends it, and a waiting tab closed is forgotten (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+  w.control.denied = ['https://wait.example.net/*'];
+  await w.openTab({ id: 11, openerTabId: 9, url: 'https://wait.example.net/' });
+  await w.removeTab(11);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  await w.removeTab(7);
+  assert.equal(w.session.opsRecording.state, 'recording');
+  assert.deepEqual(w.session.opsRecording.tabIds, [9]);
+  assert.equal((await stepIn(w, 9, 'https://example.com/a')).ok, true);
+  await w.removeTab(9);
+  assert.equal(w.session.opsRecording.state, 'stopped');
+});
+
+test('a tab whose URL came before it was waiting is read again, and joins (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  // The update with the URL was missed: the tab says it only when asked.
+  w.control.tabs = { 9: { url: 'https://example.com/late' } };
+  await w.openTab({ id: 9, openerTabId: 7 });
+  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
+});
+
+test('a stop flushes and stops every tab of the recording (#40)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+  w.control.toTabs = [];
+  await w.send({ from: 'op-scribe/panel', type: 'STOP' });
+  const sent = (type) => w.control.toTabs.filter(([, t]) => t === type).map(([id]) => id).sort();
+  assert.deepEqual(sent('OPS_FLUSH'), [7, 9]);
+  assert.deepEqual(sent('OPS_STOP'), [7, 9]);
 });

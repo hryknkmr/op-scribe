@@ -174,9 +174,13 @@ function renderStatus() {
     ui.tabStatus.textContent = 'このタブは記録できません（http / https のページのみ）';
     return;
   }
-  const isRecTab = recording?.state === 'recording' && recording.tabId === activeTab.id;
+  const live = recording?.state === 'recording';
+  // The tabs the recording records, and those opened from them that wait for their site (#40).
+  const isRecTab = live && (recording.tabIds || [recording.tabId]).includes(activeTab.id);
+  const waits = live && (recording.waitingTabIds || []).includes(activeTab.id);
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;
-  if (isRecTab && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
+  if (waits) ui.tabStatus.textContent = `記録中のタブから開いたタブです。このサイトも記録するには、下のボタンで許可してください: ${new URL(url).host}`;
+  if (isRecTab && activeTab.id === recording.tabId && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
   if (startError) ui.tabStatus.textContent = startError;
 }
 
@@ -190,7 +194,8 @@ function render() {
   ui.clear.disabled = !rec;
 
   const pattern = pagePattern(activeTab?.url);
-  ui.originGate.hidden = !(isRecording && activeTab?.id === rec.tabId && pattern && !rec.grantedPatterns.includes(pattern));
+  const ofRecording = isRecording && [...(rec.tabIds || [rec.tabId]), ...(rec.waitingTabIds || [])].includes(activeTab?.id);
+  ui.originGate.hidden = !(ofRecording && pattern && !rec.grantedPatterns.includes(pattern));
 
   const steps = rec?.steps || [];
   ui.stepCount.textContent = String(steps.length);
@@ -261,7 +266,7 @@ ui.addOrigin.addEventListener('click', () => {
   if (!pattern) return;
   const granted = chrome.permissions.request({ origins: [pattern] });
   (async () => {
-    if (await granted) await send('ADD_ORIGIN', { url: tab.url });
+    if (await granted) await send('ADD_ORIGIN', { url: tab.url, tabId: tab.id });
     await refresh();
   })();
 });

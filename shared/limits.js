@@ -53,6 +53,8 @@
     hosts: 100,
     host: 253,
     aliases: 500,
+    // Tabs one recording records, the one it started in and those opened from them, waiting ones included (#40).
+    tabs: 10,
     redactionCount: 1e9
   });
 

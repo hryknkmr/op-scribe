@@ -132,7 +132,13 @@ function newId() {
  * reproduction it generated earlier no longer matches the recording (#16).
  */
 
-const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && rec.tabId === tabId;
+// The tabs a recording records (#40): the one it started in (tabId) and the ones opened from them,
+// and the tabs opened from them that wait for access to their site. Browser-only: never in the payload.
+const tabsOf = (rec) => (Array.isArray(rec?.tabIds) ? rec.tabIds : (Number.isInteger(rec?.tabId) ? [rec.tabId] : []));
+const waitingOf = (rec) => (Array.isArray(rec?.waitingTabIds) ? rec.waitingTabIds : []);
+const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && tabsOf(rec).includes(tabId);
+const isWaitingTab = (rec, tabId) => rec?.state === 'recording' && waitingOf(rec).includes(tabId);
+const httpUrl = (url) => { try { return ['http:', 'https:'].includes(new URL(url).protocol); } catch { return false; } };
 
 // ------------------------------------------------------------------ actions
 
@@ -149,6 +155,8 @@ async function start({ tabId, url, scope, targetVersion }) {
       id: newId(),
       state: 'recording',
       tabId,
+      tabIds: [tabId],
+      waitingTabIds: [],
       startedAt: Date.now(),
       endedAt: null,
       revision: 0,
@@ -186,9 +194,11 @@ async function start({ tabId, url, scope, targetVersion }) {
 async function stopTab(rec) {
   await syncContentScripts([]);
   await setBadge(false);
-  try {
-    await chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_STOP' });
-  } catch { /* tab gone or never injected */ }
+  await Promise.all(tabsOf(rec).map(async (tabId) => {
+    try {
+      await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_STOP' });
+    } catch { /* tab gone or never injected */ }
+  }));
 }
 
 // What is typed into a field becomes a step on change or blur; the page commits it before the
@@ -199,8 +209,9 @@ let stopping = null;
 async function flushTab(rec) {
   let timer;
   try {
+    // Every tab of the recording at once, all within the one FLUSH_MS.
     await Promise.race([
-      chrome.tabs.sendMessage(rec.tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' }),
+      Promise.all(tabsOf(rec).map((tabId) => chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_FLUSH' }).catch(() => {}))),
       new Promise((resolve) => { timer = setTimeout(resolve, FLUSH_MS); })
     ]);
   } catch { /* tab gone or never injected */ } finally {
@@ -227,17 +238,30 @@ const stop = async ({ recordingId, notTested } = {}) => {
   }
 };
 
-const stopNow = (id, notTested) => mutate(async (rec) => {
-  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
+async function end(rec, notTested) {
   await stopTab(rec);
   rec.state = 'stopped';
   rec.endedAt = endAt(rec);
   setRecordingText(rec, 'notTested', notTested, await getSettings());
+}
+
+const stopNow = (id, notTested) => mutate(async (rec) => {
+  if (!rec || rec.state !== 'recording' || rec.id !== id) return { reply: { ok: true } };
+  await end(rec, notTested);
   return { save: rec, reply: { ok: true } };
 });
 
-const addPattern = (url) => mutate(async (rec) => {
+/**
+ * Lets the recording reach the site of url, in the tab tabId (the tab it started in when none
+ * is named). A tab waiting for access to its site joins the recording here, with its page as
+ * a navigation (#40).
+ */
+const addPattern = (url, tabId) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
+  const target = Number.isInteger(tabId) ? tabId : rec.tabId;
+  const waiting = isWaitingTab(rec, target);
+  if (!waiting && !isRecordingTab(rec, target)) return { reply: { ok: false, error: 'NOT_RECORDING_TAB' } };
+  if (!httpUrl(url)) return { reply: { ok: false, error: 'NOT_HTTP' } };
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { reply: { ok: false, error: 'PERMISSION_DENIED' } };
@@ -247,10 +271,41 @@ const addPattern = (url) => mutate(async (rec) => {
     if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
     rec.grantedPatterns.push(pattern);
   }
+  if (waiting) {
+    rec.waitingTabIds = waitingOf(rec).filter((id) => id !== target);
+    rec.tabIds = [...tabsOf(rec), target];
+    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, await getSettings(), { tabUrl: url });
+  }
   await syncContentScripts(rec.grantedPatterns);
-  await injectNow(rec.tabId);
+  await injectNow(target);
   return { save: rec, reply: { ok: true } };
 });
+
+/** A waiting tab joins at once when the extension already has its site (#40); otherwise it waits for the panel. */
+async function joinIfAllowed(tabId, url) {
+  if (!httpUrl(url) || !(await chrome.permissions.contains({ origins: [originPattern(url)] }))) return;
+  await addPattern(url, tabId);
+}
+
+/**
+ * A tab opened from a tab of the recording (a link with target="_blank", window.open) waits to
+ * join it; a tab opened any other way never does. Up to LIMITS.tabs tabs, waiting ones included (#40).
+ */
+async function noticeOpenedTab(tab) {
+  if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
+  const waits = await mutate(async (rec) => {
+    if (!isRecordingTab(rec, tab.openerTabId) || isRecordingTab(rec, tab.id) || isWaitingTab(rec, tab.id)) return { reply: false };
+    if (tabsOf(rec).length + waitingOf(rec).length >= LIMITS.tabs) return { reply: false };
+    rec.waitingTabIds = [...waitingOf(rec), tab.id];
+    return { save: rec, reply: true };
+  });
+  if (!waits) return;
+  // Chrome may give the URL only later, and an update that came before the tab was waiting is
+  // missed: its URL is read again now. A URL that comes later still is handled by onUpdated.
+  const now = await chrome.tabs.get(tab.id).catch(() => null);
+  const url = now?.url || now?.pendingUrl || tab.url || tab.pendingUrl;
+  if (url) await joinIfAllowed(tab.id, url);
+}
 
 /**
  * Origin as it appears in the recording (real if allowlisted, otherwise its alias), or null
@@ -290,6 +345,22 @@ async function webmcpRequest(rec, sender, { op, args }) {
 /** Where a content script message came from, as Chrome reports it (not as the page claims). */
 const fromOf = (sender) => ({ tabUrl: sender.tab?.url, frameUrl: sender.url });
 
+/**
+ * The answer to a recorder that says hello: whether its tab is recorded, and how. In the queue, so a
+ * recorder of the recording that is ending never gets that recording's policy. attached is about the
+ * tab the recording started in, which the panel reports on.
+ */
+const hello = (tabId, sender) => mutate(async (rec) => {
+  if (!isRecordingTab(rec, tabId) || rec.id === stopping) return { reply: { active: false } };
+  const settings = await getSettings();
+  const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
+  // Which recording: every later message names it, so one sent for an earlier recording never lands in this one (#9).
+  const reply = { active: true, config: { recording: rec.id, commercial, keywords: settings.keywords } };
+  if (tabId !== rec.tabId || rec.attached) return { reply };
+  rec.attached = true;
+  return { save: rec, reply };
+});
+
 async function handle(message, sender) {
   const { type, detail = {} } = message;
 
@@ -302,7 +373,7 @@ async function handle(message, sender) {
         const reply = setVerdict(rec, detail, await getSettings());
         return reply.ok ? { save: rec, reply } : { reply };
       });
-      case 'ADD_ORIGIN': return addPattern(detail.url);
+      case 'ADD_ORIGIN': return addPattern(detail.url, detail.tabId);
       case 'CLEAR': return mutate(async (rec) => {
         if (rec?.state === 'recording') await stopTab(rec);
         return { remove: true, reply: { ok: true } };
@@ -331,17 +402,9 @@ async function handle(message, sender) {
 
   if (message.from === 'op-scribe/content') {
     const tabId = sender.tab?.id;
-    // In the queue, so a recorder of the recording that is ending never gets that recording's policy.
-    if (type === 'HELLO') return mutate(async (rec) => {
-      if (!isRecordingTab(rec, tabId) || rec.id === stopping) return { reply: { active: false } };
-      const settings = await getSettings();
-      const commercial = envOf([sender.tab?.url, sender.url], rec.policy) === 'commercial';
-      // Which recording: every later message names it, so one sent for an earlier recording never lands in this one (#9).
-      const reply = { active: true, config: { recording: rec.id, commercial, keywords: settings.keywords } };
-      if (rec.attached) return { reply };
-      rec.attached = true;
-      return { save: rec, reply };
-    });
+    // A waiting tab joins when it opens or its URL changes (noticeOpenedTab, onUpdated), not here:
+    // a hello is answered as soon as it can be, before the page's tools are called.
+    if (type === 'HELLO') return hello(tabId, sender);
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId) || message.recording !== rec.id) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
@@ -384,9 +447,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-// Navigations (including SPA history changes) in the recorded tab.
+chrome.tabs.onCreated.addListener(noticeOpenedTab);
+
+// Navigations (including SPA history changes) in the tabs the recording records.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (!changeInfo.url) return;
+  // A waiting tab whose URL Chrome gives only now (#40).
+  if (isWaitingTab(await getRecording(), tabId)) await joinIfAllowed(tabId, changeInfo.url);
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
@@ -403,23 +470,29 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
   const asked = await getRecording();
-  if (!isRecordingTab(asked, tabId)) return;
+  if (!isRecordingTab(asked, tabId) || tabId !== asked.tabId) return;
   try {
     await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
   } catch {
     await mutate(async (rec) => {
-      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || !rec.attached) return null;
+      if (rec?.id !== asked.id || !isRecordingTab(rec, tabId) || tabId !== rec.tabId || !rec.attached) return null;
       rec.attached = false;
       return { save: rec };
     });
   }
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const rec = await getRecording();
-  // Nothing to flush: the page is gone.
-  if (isRecordingTab(rec, tabId)) await stopNow(rec.id);
-});
+// A closed tab leaves the recording; the recording ends with its last tab (#40). Nothing to flush: the page is gone.
+chrome.tabs.onRemoved.addListener((tabId) => mutate(async (rec) => {
+  if (isWaitingTab(rec, tabId)) {
+    rec.waitingTabIds = waitingOf(rec).filter((id) => id !== tabId);
+    return { save: rec };
+  }
+  if (!isRecordingTab(rec, tabId)) return null;
+  rec.tabIds = tabsOf(rec).filter((id) => id !== tabId);
+  if (!rec.tabIds.length) await end(rec);
+  return { save: rec };
+}));
 
 // The session store is wiped when the browser restarts; so is the badge state.
 chrome.runtime.onStartup.addListener(() => setBadge(false));

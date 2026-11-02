@@ -53,6 +53,9 @@ const rec = {
   id: 'rec-test-1',
   state: 'stopped',
   tabId: 7,
+  // The tabs the recording records and those waiting to join it (#40): browser-only, never in the payload.
+  tabIds: [7, 9],
+  waitingTabIds: [11],
   startedAt: Date.UTC(2026, 9, 29, 1, 0, 0),
   endedAt: Date.UTC(2026, 9, 29, 1, 2, 0),
   startUrl: 'https://site-1.invalid/',
@@ -82,7 +85,7 @@ const build = (r = rec, markdown = '') => P.buildPayload(withRuns(clone(r)), { g
 test('buildPayload carries no local-only state and passes both exit checks', () => {
   const payload = build(rec, D.toMarkdown(D.buildReproduction(withRuns(clone(rec)))));
   const json = JSON.stringify(payload);
-  for (const leak of ['tabId', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
+  for (const leak of ['tabId', 'tabIds', 'waitingTabIds', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
     assert.ok(!json.includes(leak), `payload contains ${leak}`);
   }
   assert.equal(payload.schema, 'op-scribe.recording/v4');
