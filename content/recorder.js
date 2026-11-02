@@ -259,6 +259,9 @@
     return emit(el.tagName === 'SELECT' ? 'select' : 'input', taken.step);
   }
 
+  /** The field a person's pending input belongs to, whatever the page has made of it since. */
+  const pendingFor = (el) => [...pending.keys()].find((field) => field === el || field.contains(el));
+
   /** A value is committed on change or blur; what is still being typed when the recording stops is committed here (#9). */
   async function flush() {
     await Promise.all([...pending.keys()].map((el) => commit(el)));
@@ -289,11 +292,14 @@
     change(event) {
       const el = asElement(event.composedPath()[0]);
       if (!el) return;
+      // What was typed first, by the field it was typed into, not by what the field is now.
+      const owner = pendingFor(el);
+      if (owner) commit(owner);
       if (isToggle(el)) {
         emit('check', { target: describe(el), checked: el.checked });
       } else if (el.tagName === 'INPUT' && el.type === 'file') {
         emit('upload', { target: describe(el), value: S.typed.file(el.files?.length || 0) });
-      } else if (el.matches('input, select, textarea')) {
+      } else if (!owner && el.matches('input, select, textarea')) {
         commit(el, true);
       }
     },
@@ -307,7 +313,8 @@
 
     focusout(event) {
       const el = asElement(event.composedPath()[0]);
-      if (el?.isContentEditable) commit(fieldOf(el));
+      const owner = el && pendingFor(el);
+      if (owner) commit(owner);
     },
 
     keydown(event) {
@@ -316,7 +323,8 @@
       const modifiers = ['ctrlKey', 'metaKey', 'altKey'].filter((m) => event[m]).map((m) => m.replace('Key', ''));
       if (event.key === 'Enter' && !event.shiftKey) {
         if (el && (el.tagName === 'TEXTAREA' || el.isContentEditable) && !modifiers.length) return;
-        if (el && isTextField(el)) commit(fieldOf(el));
+        const owner = el && pendingFor(el);
+        if (owner) commit(owner);
         emit('key', { key: [...modifiers, 'Enter'].join('+'), target: el ? describe(resolveTarget(el)) : undefined });
       } else if (event.key === 'Escape' && !event.shiftKey && !modifiers.length) {
         // Only a bare Escape (row T5); Shift+Escape or Ctrl+Escape is another command.
