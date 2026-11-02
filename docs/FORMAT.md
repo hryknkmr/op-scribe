@@ -186,7 +186,7 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
   | `secret` `card` `email` `phone` `postal` `id` `ip` `number` | 残した文 | `[[email]]` など |
   | `masked` | 残した文（登録語）、URL のパスの区切り 1 つ・クエリのキー | `[[masked]]` |
   | `id` `user` | URL のパスの区切り 1 つ | `[[id]]` `[[user]]` |
-  | `v` | URL のクエリの値 | `[[v]]` |
+  | `v` | URL のクエリの値、商用環境のパスの区切り | `[[v]]` |
   | `{ "redacted": "url", "as": … }` | URL 全体（並びの唯一の要素） | `[[url:invalid]]` `[[url:long]]` `[[url:none]]` `[[url:mailto]]` |
 
   `[[…]]` の文字列は、Gherkin に描画するときだけ作ります。Markdown では `‹メールアドレス›` のような和文の表示にします。

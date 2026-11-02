@@ -424,12 +424,13 @@
 
   const SAFE_VALUE = /^[\w.-]{1,24}$/;
   const SPA_ROUTE = /^#\/[\w/-]{0,60}$/;
-  const PATH_PARTS = ['[[id]]', '[[user]]', '[[masked]]'];
+  // v: a segment of a commercial URL (U5), whose host the check does not know, so in any step.
+  const PATH_PARTS = ['[[id]]', '[[user]]', '[[masked]]', '[[v]]'];
 
   /**
    * Rows U1-U4, U7, U8, K1: a URL is either one marker for a URL redacted as a
    * whole, or an http(s) URL without user:pass@ whose masked parts sit where
-   * the masking puts them - id, user and masked as a whole path segment,
+   * the masking puts them - id, user, masked and v as a whole path segment,
    * masked as a query key, v as a query value. Its texts hold no bracket but
    * an IPv6 host's, so every bracket of the rendering is a masked part. In a
    * commercial step every query value is masked and there is no fragment (the
