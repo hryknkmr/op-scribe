@@ -59,10 +59,14 @@
     pending = new Map();
   }
 
+  let asked = 0;
   async function hello() {
     // What the last recording's operation caused stays out of the next one.
     stopNotices();
+    const ask = ++asked;
     const response = await send('HELLO');
+    // Only the latest answer: an earlier one arriving late is about a recording that is over.
+    if (ask !== asked) return;
     const previous = config?.recording;
     config = response?.active ? response.config : null;
     // Another recording, or none: the stop of the last one may never have reached this page.

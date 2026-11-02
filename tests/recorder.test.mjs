@@ -28,6 +28,11 @@ function recorder() {
     runtime: {
       sendMessage: async (message) => {
         if (control.fail(message)) throw new Error('Receiving end does not exist');
+        // A HELLO may be answered late: it is answered for the recording asked about then.
+        const recording = control.recording;
+        if (message.type === 'HELLO' && control.hold) await control.hold;
+        if (message.type === 'HELLO') sent.push(message);
+        if (message.type === 'HELLO') return { active: true, config: { recording, commercial: false, keywords: [] } };
         sent.push(message);
         return message.type === 'HELLO' ? { active: true, config: { recording: control.recording, commercial: false, keywords: [] } } : { ok: true };
       },
@@ -162,4 +167,21 @@ test('what was pending for a recording whose stop never reached the page stays o
   await r.again();
   await r.worker({ type: 'OPS_FLUSH' });
   assert.deepEqual(r.inputs(), []);
+});
+
+test('a late answer to an earlier HELLO does not undo the latest one (#9)', async () => {
+  const r = recorder();
+  await tick();
+  let answerFirst;
+  r.control.hold = new Promise((resolve) => { answerFirst = resolve; });
+  r.control.recording = 'old';
+  const earlier = r.again();
+  r.control.hold = null;
+  r.control.recording = 'new';
+  await r.again();
+  r.type('いぬ');
+  answerFirst();
+  await earlier;
+  await r.worker({ type: 'OPS_FLUSH' });
+  assert.deepEqual(r.inputs().map((m) => m.recording), ['new']);
 });
