@@ -28,4 +28,10 @@ test('the tests reach no host but the made-up ones', async ({ context }) => {
     try { await fetch('https://example.com/', { mode: 'no-cors' }); return true; } catch { return false; }
   });
   expect(reached).toBe(false);
+  // A WebSocket is closed by the tests' own handler, never connected to the host.
+  const closed = await site.evaluate(() => new Promise((resolve) => {
+    const ws = new WebSocket('wss://example.com/');
+    ws.onclose = (event) => resolve({ code: event.code, reason: event.reason });
+  }));
+  expect(closed).toEqual({ code: 4000, reason: 'e2e: no real hosts' });
 });

@@ -42,11 +42,15 @@ export const test = base.extend({
     const context = await chromium.launchPersistentContext(path.join(tmp, 'profile'), {
       channel: 'chromium',
       headless: !process.env.HEADED,
+      // A page's own service worker could fetch past the routes above (Playwright does not see its requests).
+      serviceWorkers: 'block',
       args: [`--disable-extensions-except=${ext}`, `--load-extension=${ext}`],
     });
     // Anything but the made-up sites is refused, so no test can reach a real host. Playwright tries the
     // routes added last first: this one only gets what the *.test route below does not take.
-    await context.route(/^(https?|wss?):\/\//, (route) => route.abort('blockedbyclient'));
+    await context.route(/^https?:\/\//, (route) => route.abort('blockedbyclient'));
+    // WebSockets have their own routes. Without connectToServer none reaches a server; each is closed.
+    await context.routeWebSocket(/./, (ws) => ws.close({ code: 4000, reason: 'e2e: no real hosts' }));
     await context.route(/^http:\/\/[a-z0-9-]+\.test\//, (route) => {
       const name = new URL(route.request().url()).pathname.replace(/^\/$/, '/form.html').slice(1);
       const file = path.join(SITE, path.basename(name));
