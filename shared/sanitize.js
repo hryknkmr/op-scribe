@@ -68,8 +68,6 @@
     return sum % 10 === 0;
   }
 
-  // What a word of letters alone rarely has: a digit, or a capital inside it.
-  const OPAQUE = /\d|[a-z][A-Z]/;
 
   // A mention in a sentence (担当は@tanakaです): letters of other scripts before it, a dotless name that runs into them after.
   const MENTION = /^[^@]*[^\x00-\x7f][^@]*@[A-Za-z0-9-]+[^\x00-\x7f.][^.]*$/;
@@ -79,8 +77,8 @@
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
     { kind: 'secret', re: /\beyJ[\w-]{6,}\.[\w-]{6,}\.[\w-]{6,}/g },
     { kind: 'secret', re: /\b(?:gh[opsur]_[A-Za-z0-9]{20,}|github_pat_\w{20,}|AKIA[0-9A-Z]{16}|xox[abprs]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{30,})/g },
-    // A token by its look, so "Bearer of the card" and "Bearer 2 wins" are left as they are.
-    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi, accept: (m) => { const t = m.replace(/^Bearer\s+/i, ''); return (OPAQUE.test(t) && t.length >= 6) || t.length >= 20; } },
+    // A digit in it, or long: "Bearer of the card", "Bearer 2 wins" and "Bearer McCloud" are left as they are.
+    { kind: 'secret', re: /\bBearer\s+[\w.~+/-]+=*/gi, accept: (m) => { const t = m.replace(/^Bearer\s+/i, ''); return (/\d/.test(t) && t.length >= 6) || t.length >= 20; } },
     // Basic with what decodes to user:password, or a long token: "Basic authentication" is left as it is.
     {
       kind: 'secret',
@@ -89,7 +87,7 @@
         const token = m.replace(/^Basic\s+/i, '');
         let decoded = '';
         try { decoded = atob(token); } catch { /* not base64 */ }
-        return /^[\x20-\x7e]*:[\x20-\x7e]*$/.test(decoded) || (OPAQUE.test(token) && token.length >= 8);
+        return /^[\x20-\x7e]*:[\x20-\x7e]*$/.test(decoded) || (/\d/.test(token) && token.length >= 8) || token.length >= 20;
       }
     },
     // A credential written as key and value (client_secret=abc, "pin": "1234", backup code: ABC, password="hunter 2"):
@@ -351,11 +349,9 @@
     const hints = plain(names.join(' '));
     const found = new Set(names.map((name) => classifyKey(name, { protocol: meta.protocol })));
     const chosen = ['select', 'checkbox', 'radio', 'range', 'color'].includes(type) || meta.tag === 'select';
-    // A list named only "session" is a meeting's morning session; session_id, session_key and sid are credentials.
-    const namedSecret = found.has('secret') && (!chosen || names.some((name) => classifyKey(name) === 'secret' && wordsOf(name).join(' ') !== 'session'));
 
     if (type === 'hidden') return { kind: 'ignore' };
-    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints) || namedSecret) {
+    if (type === 'password' || SECRET_AUTOCOMPLETE.test(autocomplete) || SECRET_HINT.test(hints) || found.has('secret')) {
       return { kind: 'secret', label: 'secret' };
     }
     if (/card|カード/i.test(hints) || found.has('card')) return { kind: 'secret', label: 'card' };

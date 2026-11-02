@@ -31,7 +31,7 @@ test('Basic and Bearer values are hidden, the words in a sentence are not', () =
   for (const t of [`Authorization: ${BASIC}`, ['Basic ', 'YT', 'pi'].join(''), ['basic ', 'YT', 'pi'].join(''), 'Bearer abc123']) {
     assert.ok(text(t).endsWith('[[secret]]'), t);
   }
-  for (const kept of ['Basic auth を使う', 'Basic authentication', 'Bearer of the card', 'Bearer certificate', 'Bearer 2 wins']) assert.equal(text(kept), kept);
+  for (const kept of ['Basic auth を使う', 'Basic authentication', 'Bearer of the card', 'Bearer certificate', 'Bearer 2 wins', 'Bearer McCloud entered', 'Basic JavaScript tutorial']) assert.equal(text(kept), kept);
 });
 
 test('cards with any one separator, national ids and phone numbers in common notations', () => {
@@ -92,9 +92,8 @@ test('fields named as ids are personal, before the choices and the search box (I
   assert.equal(S.classifyField({ name: 'passport' }).kind, 'secret');
   for (const label of ['ユーザーID', 'ログインID', '会員番号']) assert.equal(S.classifyField({ label }).kind, 'pii', label);
   assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'user_id' }).kind, 'pii');
-  assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'session' }).kind, 'choice');
   // A credential or card name beats the chosen option.
-  for (const name of ['otp', 'session_id', 'sid']) assert.equal(S.classifyField({ tag: 'select', type: 'select', name }).kind, 'secret', name);
+  for (const name of ['otp', 'session', 'session_id', 'sid']) assert.equal(S.classifyField({ tag: 'select', type: 'select', name }).kind, 'secret', name);
   assert.equal(S.classifyField({ tag: 'select', type: 'select', name: 'exp_month' }).kind, 'secret');
   assert.equal(S.classifyField({ type: 'search', name: 'user_id' }).kind, 'pii');
 });
