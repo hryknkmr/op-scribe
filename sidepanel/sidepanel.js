@@ -12,6 +12,7 @@ const S = globalThis.OpScribeSanitize;
 const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
 const D = globalThis.OpScribeDescribe;
 const P = globalThis.OpScribePayload;
+const F = globalThis.OpScribeFormats;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -44,6 +45,12 @@ const ui = {
   gherkin: el('gherkin'),
   preview: el('preview'),
   copyMd: el('copy-md'),
+  ticketRef: el('ticket-ref'),
+  copyTicket: el('copy-ticket'),
+  saveTicket: el('save-ticket'),
+  copySession: el('copy-session'),
+  saveSession: el('save-session'),
+  formatHint: el('format-hint'),
   copyGherkin: el('copy-gherkin'),
   download: el('download'),
   outputStatus: el('output-status'),
@@ -388,6 +395,7 @@ function render() {
     }
   }
 
+  renderFormats(rec);
   ui.gherkin.value = rec ? D.toGherkin(rec) : '';
   if (isStale(rec)) ui.genStatus.textContent = STALE;
 
@@ -689,6 +697,79 @@ async function copyFromPayload(label, pick) {
 }
 
 ui.copyMd.addEventListener('click', () => copyFromPayload('Markdown', (p) => p.reproduction.markdown));
+
+// ------------------------------------------------------------ the readers' formats (ADR 0005)
+
+/** The NG expectations to make a ticket of, and whether a session record can be made yet. */
+function renderFormats(rec) {
+  const ngs = (rec?.steps || []).filter((s) => isExpectation(s) && s.verdict === 'ng');
+  const chosen = ui.ticketRef.value;
+  ui.ticketRef.replaceChildren(...ngs.map((s) => {
+    const option = document.createElement('option');
+    option.value = s.ref;
+    option.textContent = `${s.ref} ${D.humanize(S.renderRuns(s.note))}`;
+    return option;
+  }));
+  if (ngs.some((s) => s.ref === chosen)) ui.ticketRef.value = chosen;
+  const noTicket = !ngs.length;
+  ui.ticketRef.disabled = noTicket;
+  ui.copyTicket.disabled = noTicket;
+  ui.saveTicket.disabled = noTicket;
+  const noSession = !rec?.endedAt;
+  ui.copySession.disabled = noSession;
+  ui.saveSession.disabled = noSession;
+  ui.formatHint.textContent = [
+    noTicket ? 'バグチケットは、期待結果を NG にすると作れます。' : '',
+    noSession ? '実施記録は、記録を止めると作れます。' : ''
+  ].filter(Boolean).join(' ');
+}
+
+/**
+ * One format, made now from the recording through the exit (shared/formats.js): the checked
+ * payload, then the whole text scanned with the keywords as they are now. Never the hand-edited
+ * Markdown, so a stale draft does not stop it. Returns { rec, text } or { error }.
+ */
+async function formatNow(which) {
+  await loadSettings();
+  const rec = await loadRecording();
+  if (!rec) return { error: '記録がありません' };
+  const payload = P.buildPayload(rec, { generator: 'none', markdown: '' }, environment());
+  const made = F.checkedFormats(payload, { keywords: settings.keywords, hosts: S.aliasedHosts(rec.aliases) });
+  if (made.problems) return { error: blockedMessage(made.problems.map((p) => ({ path: p.path, kinds: [`形: ${p.problem}`] }))) };
+  const out = which === 'session' ? made.session : made.tickets.find((t) => t.ref === ui.ticketRef.value);
+  if (!out) return { error: which === 'session' ? '実施記録は、記録を止めてから作れます' : 'この NG の期待結果は記録にありません' };
+  if (out.findings.length) return { error: blockedMessage(out.findings) };
+  return { rec, text: out.text, name: which === 'session' ? `${rec.id}-session.md` : `${rec.id}-${out.ref}.md` };
+}
+
+async function copyFormat(which, label) {
+  const made = await formatNow(which);
+  if (made.error) {
+    ui.outputStatus.textContent = made.error;
+    return;
+  }
+  await navigator.clipboard.writeText(made.text);
+  ui.outputStatus.textContent = `${label}をコピーしました`;
+}
+
+async function saveFormat(which) {
+  const made = await formatNow(which);
+  if (made.error) {
+    ui.outputStatus.textContent = made.error;
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([made.text], { type: 'text/markdown' }));
+  link.download = made.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  ui.outputStatus.textContent = `${link.download} を保存しました`;
+}
+
+ui.copyTicket.addEventListener('click', () => copyFormat('ticket', 'バグチケット'));
+ui.saveTicket.addEventListener('click', () => saveFormat('ticket'));
+ui.copySession.addEventListener('click', () => copyFormat('session', '実施記録'));
+ui.saveSession.addEventListener('click', () => saveFormat('session'));
 ui.copyGherkin.addEventListener('click', () => copyFromPayload('Gherkin', (p) => p.reproduction.gherkin));
 
 ui.download.addEventListener('click', async () => {
