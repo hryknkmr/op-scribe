@@ -7,6 +7,7 @@
 | [0001](0001-commercial-environment-policy.md) | 商用環境だけを厳格に扱う伏せ方 | 採用・一部実装（商用の URL 規則は未実装） |
 | [0002](0002-why-review-did-not-converge.md) | 伏せる規則のレビューが収束しなかった真因と対策 | 採用（対策 1〜3・6 は実装済み、4・5 は案） |
 | [0003](0003-privacy-guarantee-matrix.md) | 伏せ方の保証の表（受け入れの表） | 採用（行ごとの実装は表の「実装」欄） |
+| [0005](0005-output-formats-for-readers.md) | 読み手ごとの出力の書式（バグチケットと実施記録） | 採用（未実装） |
 
 書き方:
 
