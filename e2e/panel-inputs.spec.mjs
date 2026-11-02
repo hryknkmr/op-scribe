@@ -104,3 +104,33 @@ test('what was not tested is not carried from a discarded recording into the nex
   await expect.poll(async () => (await panel.recording())?.state).toBe('stopped');
   expect((await panel.recording()).notTested).toBeUndefined();
 });
+
+test('a change made while a verdict is being saved is kept as a draft (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('保存できる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  // The panel's SET_VERDICT is held until the test lets it go.
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__release = null;
+    chrome.runtime.sendMessage = (message) => (message?.type === 'SET_VERDICT'
+      ? new Promise((resolve) => { window.__release = () => resolve(original(message)); })
+      : original(message));
+  });
+  const form = ui.locator('form.verdict');
+  await form.getByLabel('OK', { exact: true }).check();
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await ui.waitForFunction(() => typeof window.__release === 'function');
+  // Changed to NG with an actual result while the OK is on its way.
+  await form.getByLabel('NG', { exact: true }).check();
+  await form.locator('[name="actual"]').fill('エラーが出る');
+  await ui.evaluate(() => window.__release());
+  await expect.poll(async () => (await panel.recording()).steps.find((s) => s.type === 'note').verdict).toBe('ok');
+  await expect(ui.locator('form.verdict').getByLabel('NG', { exact: true })).toBeChecked();
+  await expect(ui.locator('form.verdict [name="actual"]')).toHaveValue('エラーが出る');
+});

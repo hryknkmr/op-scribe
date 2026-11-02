@@ -277,11 +277,13 @@ function verdictForm(rec, step) {
       return;
     }
     save.disabled = true;
+    // What is sent: a change made while the reply is awaited is a draft of its own and stays.
+    const sent = JSON.stringify(verdictDrafts.get(draftKey(rec, step)));
     const reply = await send('SET_VERDICT', {
       recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(verdict === 'ng' && { actual: actual.value })
     });
     save.disabled = false;
-    if (reply?.ok) verdictDrafts.delete(draftKey(rec, step));
+    if (reply?.ok && JSON.stringify(verdictDrafts.get(draftKey(rec, step))) === sent) verdictDrafts.delete(draftKey(rec, step));
     // What the worker kept is drawn from the recording read again, whatever the reply.
     await refresh();
     if (!reply?.ok) {
