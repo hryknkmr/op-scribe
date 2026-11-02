@@ -651,3 +651,9 @@ test('notices count as what a page reports, so they never push out the person\'s
   assert.equal(rec.steps.length, LIMITS.agentSteps);
   assert.ok(R.addStep(rec, { type: 'click', pageUrl: BETA }, settings, { tabUrl: BETA }));
 });
+
+test('a selector with a URL in it is dropped (T3, K4)', () => {
+  const rec = { id: 'rec-s', steps: [], aliases: {}, redactions: {}, policy: R.policyOf({}) };
+  const step = R.cleanStep({ type: 'click', target: { role: 'link', tag: 'a', name: 'x', selector: 'a[href="https://private.internal.test/orders"]' } }, rec, {}, { tabUrl: 'https://example.test/' });
+  assert.equal(step.target.selector, undefined);
+});

@@ -132,3 +132,41 @@ test('a URL inside a URL is hidden, however it is written or encoded', () => {
     assert.ok(!url(raw).includes('private'), raw);
   }
 });
+
+test('a URL written in a text is hidden whole, in any form (K4)', () => {
+  for (const t of ['https://docs.internal.test/orders/1234567', 'HTTPS://docs.internal.test/a', 'ftp://private.internal.test/a', 'file://private.internal.test/share',
+    '//docs.internal.test/a', '//intranet/a', '//localhost:8080/a', 'https:private.internal.test/a', 'https:\\\\private.internal.test\\help',
+    '//internal_host.test/help', 'data:text/plain,x', 'javascript:alert(1)', './callback?code=abc123', '../orders/123456', 'callback?code=abc123', '?code=abc123', '/orders/123456']) {
+    assert.equal(text(t), '[[masked]]', t);
+  }
+  assert.equal(text('詳しくは https://docs.internal.test/a を見る。'), '詳しくは [[masked]] を見る。');
+  assert.equal(text('See https://example.com, then continue.'), 'See [[masked]], then continue.');
+  for (const kept of ['a/b//c と 1//2', '/search?q=shoes', '東京/大阪', '10/31', 'v1.2', 'file.txt', 'メモ: 確認済み', 'data: 123']) assert.equal(text(kept), kept);
+});
+
+test('the exit stops URLs in a text, and passes the URLs of a recording', () => {
+  for (const t of ['ftp://private.internal.test/a', 'file://x.test/a', 'data:text/plain,x', 'javascript:alert(1)', 'see /orders/123456 now', '?code=abc123', './callback?code=abc123',
+    '../orders/123456', 'https:private.internal.test/a', 'see //internal_host.test/help', 'https://example.com/callback?code=abc123', 'https://example.com/?id=abc123', 'https://example.com/?phone=1234']) {
+    assert.equal(S.finalScan({ t }).length, 1, t);
+  }
+  const { url } = S.scrubUrl('https://example.com/orders/123456?q=shoes&token=abc#/settings', { hostAllowlist: ['example.com'] });
+  assert.deepEqual(S.finalScan({ url }), []);
+  assert.deepEqual(S.finalScan({ t: 'https://site-1.invalid/a?tab=x' }), []);
+});
+
+test('in commercial only short plain path segments stay (U5)', () => {
+  const ctx = { hostAllowlist: ['www.example.com'], commercialHosts: ['www.example.com'] };
+  const out = (raw) => S.renderRuns(S.scrubUrl(raw, ctx).url);
+  assert.equal(out('https://www.example.com/items/ランニング/abc'), 'https://www.example.com/items/[[v]]/abc');
+  assert.equal(out(`https://www.example.com/${'z'.repeat(25)}/b`), 'https://www.example.com/[[v]]/b');
+  assert.equal(S.renderRuns(S.scrubUrl('https://other.example.com/ランニング', { hostAllowlist: ['other.example.com'] }).url), 'https://other.example.com/%E3%83%A9%E3%83%B3%E3%83%8B%E3%83%B3%E3%82%B0');
+});
+
+test('ordinary words are not read as credentials, and never hide one', () => {
+  for (const name of ['compass', 'bypass', 'secretary', 'tokenizer', 'cardinality', 'discard', 'postcard', 'headphones']) {
+    assert.equal(S.classifyField({ name }).kind, 'free', name);
+  }
+  for (const name of ['bypass_password', 'bypass_code', 'compass_token', 'postcard_secret']) assert.equal(S.classifyField({ name }).kind, 'secret', name);
+  // A longer name is judged as it always was: never free, whatever word it starts with.
+  for (const name of ['tokenizer_email', 'discardEmail', 'headphone_phone', 'cardinalPhone']) assert.notEqual(S.classifyField({ name }).kind, 'free', name);
+});
