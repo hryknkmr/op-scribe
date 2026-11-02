@@ -543,7 +543,7 @@ ui.settingsForm.addEventListener('submit', (event) => {
   const endpoint = form.endpoint.value.trim();
   const pattern = endpoint ? endpointPattern(endpoint) : null;
   if (endpoint && !pattern) {
-    ui.settingsStatus.textContent = '送信先は https、または http://localhost のみ指定できます';
+    ui.settingsStatus.textContent = '送信先は https、または手元の http://localhost・http://127.0.0.1・http://[::1] のみ指定できます';
     return;
   }
   // Ask for the endpoint now, while we still hold the click.
