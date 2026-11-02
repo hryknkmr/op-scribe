@@ -119,6 +119,13 @@
     return envs.has('commercial') ? 'commercial' : 'standard';
   }
 
+  /**
+   * A text of the reproduction (the Markdown, and what the model reads) with its placeholders shown.
+   * The page's own ‹ and › become 〈 and 〉 first, so every ‹…› in the Markdown is a masked part (E4).
+   * The Gherkin keeps the page's characters as they are.
+   */
+  const shown = (text) => humanize(String(text ?? '').replace(/‹/g, '〈').replace(/›/g, '〉'));
+
   /** [[text:12]] → ‹任意の文字列 12文字›, [[email]] → ‹メールアドレス› */
   function humanize(text) {
     // The argument of [[url:…]] is a scheme ([a-z][a-z0-9+.-]*), so "web+demo" is one too.
@@ -222,12 +229,12 @@
     for (const step of steps) {
       // What the tester noticed is not an expected result: it stays out of the steps.
       if (step.type === 'note' && step.kind) {
-        findings.push({ kind: step.kind, note: humanize(txt(step.note)), afterStep: out.length });
+        findings.push({ kind: step.kind, note: shown(txt(step.note)), afterStep: out.length });
         continue;
       }
       if (step.type === 'note') {
         // Everything in the Markdown is rendered with ‹…› labels, never [[…]] (E4, #28).
-        const note = humanize(txt(step.note));
+        const note = shown(txt(step.note));
         const last = out[out.length - 1];
         if (last && !last.expected) last.expected = note;
         else if (last) last.expected += ` / ${note}`;
@@ -238,29 +245,29 @@
       // What the page showed is an observation, not an expected result. A navigation
       // after it is still caused by the operation, so it does not become previous.
       if (step.type === 'notice') {
-        const shown = humanize(`${noticeLabel(step)}: ${txt(step.notice)}`);
+        const seen = shown(`${noticeLabel(step)}: ${txt(step.notice)}`);
         const last = out[out.length - 1];
-        if (last) (last.observed ||= []).push(shown);
-        else notes.push(shown);
+        if (last) (last.observed ||= []).push(seen);
+        else notes.push(seen);
         continue;
       }
       if (step.type === 'navigate' && previous && NAVIGATION_CAUSES.has(previous.type)
           && step.t - previous.t <= FOLLOW_MS && out.length) {
         const last = out[out.length - 1];
-        const moved = humanize(`${txt(step.url)} に遷移する`);
+        const moved = shown(`${txt(step.url)} に遷移する`);
         last.expected = last.expected ? `${last.expected} / ${moved}` : moved;
         previous = step;
         continue;
       }
       if (step.type === 'navigate' && previous?.type === 'navigate' && txt(previous.url) === txt(step.url)) continue;
-      out.push({ action: humanize(describeStep(step)) });
+      out.push({ action: shown(describeStep(step)) });
       previous = step;
     }
 
     const startUrl = txt(startUrlOf(rec));
     const first = txt(steps.find((s) => s.url)?.url);
     if (startUrl !== NO_URL && (!out.length || !steps[0] || steps[0].type !== 'navigate')) {
-      out.unshift({ action: humanize(`${startUrl} を開く`) });
+      out.unshift({ action: shown(`${startUrl} を開く`) });
       for (const finding of findings) finding.afterStep += 1;
     }
 
