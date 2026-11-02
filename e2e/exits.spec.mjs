@@ -121,3 +121,19 @@ test('a verdict given after the preview stops the send, and a new preview sends 
   expect(sent).toHaveLength(1);
   expect(JSON.parse(sent[0]).recording.steps.find((s) => s.ref === ref).verdict).toBe('ok');
 });
+
+test('a stop after the preview stops the send (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await setKeywords(panel, []);
+  const sent = [];
+  await context.route('https://recv.test/**', (route) => { sent.push(route.request().postData()); return route.fulfill({ status: 204 }); });
+  await press(panel, 'preview');
+  await expect(panel.page.locator('#send')).toBeEnabled();
+  // The stop writes the end and moves no revision: the send still sees the change.
+  await panel.stop();
+  await press(panel, 'send');
+  await expect(panel.page.locator('#send-status')).toContainText('プレビューの後に記録が変わりました');
+  expect(sent).toHaveLength(0);
+});

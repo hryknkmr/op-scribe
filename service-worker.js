@@ -274,10 +274,9 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     // The note belongs to the page it came from, so only that site gets it back (W8, #17).
-    const trimmed = rec.trimmed;
-    const step = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender));
+    const { step, changed } = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender));
     // Past the limit of what the page may report, nothing is added (W7); the recording keeps its trimmed mark (ADR 0005).
-    if (!step) return { ...(rec.trimmed !== trimmed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
+    if (!step) return { ...(changed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
     // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
     const added = humanize(renderRuns(step.note));
     return { save: rec, reply: guardReply({ ok: true, added }, rec, settings) };
@@ -320,10 +319,9 @@ async function handle(message, sender) {
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
-        const trimmed = rec.trimmed;
-        const step = addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
+        const { step, changed } = addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
         // A note a limit kept out still marks the recording trimmed (ADR 0005).
-        if (!step) return { ...(rec.trimmed !== trimmed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
+        if (!step) return { ...(changed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
         return { save: rec, reply: { ok: true } };
       });
       default: return { ok: false, error: 'UNKNOWN' };
@@ -389,12 +387,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     const settings = await getSettings();
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
     const moved = (step) => !(last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last);
-    const trimmed = rec.trimmed;
-    if (!addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved)) {
-      // A navigation a limit kept out still marks the recording trimmed (ADR 0005).
-      return rec.trimmed !== trimmed ? { save: rec } : null;
-    }
-    return { save: rec };
+    // A navigation a limit kept out still marks the recording trimmed (ADR 0005): saved on any change.
+    const { changed } = addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved);
+    return changed ? { save: rec } : null;
   });
 });
 

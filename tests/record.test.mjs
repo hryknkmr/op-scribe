@@ -15,6 +15,8 @@ const runsOf = (text) => String(text).split(/(\[\[[a-z]+\]\])/).filter(Boolean)
   .map((p) => (/^\[\[[a-z]+\]\]$/.test(p) ? { redacted: p.slice(2, -2) } : p));
 const kept = (field, text) => typed.kept(field, runsOf(text));
 const show = (runs) => S.renderRuns(runs);
+// The step addStep recorded, or null; its changed flag has a test of its own.
+const addStep = (...args) => R.addStep(...args).step;
 const settings = { keywords: ['Acme'], commercialHosts: ['shop.example.com'], hostAllowlist: [] };
 const PROD = 'https://shop.example.com/cart';
 const BETA = 'https://beta.example.com/cart';
@@ -479,9 +481,9 @@ test('a page on a host of the alias form is not recorded, whatever the lists say
   for (const hostAllowlist of [[], ['site-1.invalid'], ['*.invalid']]) {
     const s = { ...settings, keywords: [], hostAllowlist };
     const rec = { ...newRec(), policy: R.policyOf(s) };
-    assert.equal(R.addStep(rec, { type: 'click', pageUrl: 'https://site-1.invalid/b', target: { role: 'button', name: 'OK' } }, s, { tabUrl: 'https://site-1.invalid/b' }), null);
+    assert.equal(addStep(rec, { type: 'click', pageUrl: 'https://site-1.invalid/b', target: { role: 'button', name: 'OK' } }, s, { tabUrl: 'https://site-1.invalid/b' }), null);
     // A link to one is redacted whole, and takes no alias.
-    const link = R.addStep(rec, { type: 'click', pageUrl: 'https://other.example.com/a', target: { role: 'link', name: 'OK', href: 'https://SITE-2.invalid/c' } }, s, { tabUrl: 'https://other.example.com/a' });
+    const link = addStep(rec, { type: 'click', pageUrl: 'https://other.example.com/a', target: { role: 'link', name: 'OK', href: 'https://SITE-2.invalid/c' } }, s, { tabUrl: 'https://other.example.com/a' });
     assert.deepEqual(link.target.href, [{ redacted: 'url', as: 'invalid' }]);
     assert.deepEqual(Object.values(rec.aliases), ['site-1.invalid'], JSON.stringify(hostAllowlist));
     // Every other host the list allows is still kept by name.
@@ -596,21 +598,21 @@ test('a step that is not recorded leaves the aliases and the redaction counts as
   const s = { ...settings, keywords: [] };
   // A site at its own limit: one more tool call that redacts an email is not recorded.
   const rec = newRec();
-  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, s, { tabUrl: BETA }));
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.ok(addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, s, { tabUrl: BETA }));
   const before = JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision });
-  assert.equal(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true, args: { to: 'someone@example.com' } }, s, { tabUrl: BETA }), null);
+  assert.equal(addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true, args: { to: 'someone@example.com' } }, s, { tabUrl: BETA }), null);
   assert.equal(JSON.stringify({ aliases: rec.aliases, redactions: rec.redactions, revision: rec.revision }), before);
   // A recording full of the person's steps: a navigation to a new site is not recorded, and names no site.
   const full = newRec();
   for (let i = 0; i < LIMITS.steps; i += 1) full.steps.push({ type: 'click', t: 0, env: 'standard', source: 'user' });
-  const nav = R.addStep(full, { type: 'navigate', pageUrl: 'https://new.example.com/?q=a%20b', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' });
+  const nav = addStep(full, { type: 'navigate', pageUrl: 'https://new.example.com/?q=a%20b', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' });
   // A navigation is not the person's: it does not push theirs out.
   assert.equal(nav, null);
   assert.deepEqual(full.aliases, {});
   assert.deepEqual(full.redactions, {});
   // A step that is recorded keeps what its cleaning added.
   const ok = newRec();
-  assert.ok(R.addStep(ok, { type: 'navigate', pageUrl: 'https://new.example.com/', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' }));
+  assert.ok(addStep(ok, { type: 'navigate', pageUrl: 'https://new.example.com/', source: 'unknown' }, s, { tabUrl: 'https://new.example.com/' }));
   assert.equal(Object.keys(ok.aliases).length, 1);
 });
 
@@ -647,15 +649,15 @@ test('a notice needs a page, a text and a known level, and one naming a real hos
 
 test('notices count as what a page reports, so they never push out the person\'s steps (row W7)', () => {
   const rec = newRec();
-  for (let i = 0; i <= LIMITS.agentSteps; i += 1) R.addStep(rec, notice({ notice: [`通知 ${i}`] }), settings, { tabUrl: BETA });
+  for (let i = 0; i <= LIMITS.agentSteps; i += 1) addStep(rec, notice({ notice: [`通知 ${i}`] }), settings, { tabUrl: BETA });
   assert.equal(rec.steps.length, LIMITS.agentSteps);
-  assert.ok(R.addStep(rec, { type: 'click', pageUrl: BETA }, settings, { tabUrl: BETA }));
+  assert.ok(addStep(rec, { type: 'click', pageUrl: BETA }, settings, { tabUrl: BETA }));
 });
 
 // ------------------------------------------------------------- ADR 0005 (v4)
 
 const REF = /^E-[0-9a-z]{6}$/;
-const panelNote = (rec, note, extra = {}) => R.addStep(rec, { type: 'note', note, ...extra }, settings);
+const panelNote = (rec, note, extra = {}) => addStep(rec, { type: 'note', note, ...extra }, settings);
 
 test('the tester\'s expectation gets a random ref the worker draws, and no other step gets one (ADR 0005, T8)', () => {
   const rec = newRec();
@@ -663,9 +665,9 @@ test('the tester\'s expectation gets a random ref the worker draws, and no other
   assert.match(expectation.ref, REF);
   assert.notEqual(expectation.ref, 'E-aaaaaa', 'a ref that arrived is not used');
   assert.equal(panelNote(rec, '気になる', { kind: 'idea' }).ref, undefined);
-  const page = R.addStep(rec, { type: 'note', note: 'ページの期待結果', source: 'agent', pageUrl: BETA }, settings, { tabUrl: BETA });
+  const page = addStep(rec, { type: 'note', note: 'ページの期待結果', source: 'agent', pageUrl: BETA }, settings, { tabUrl: BETA });
   assert.equal(page.ref, undefined);
-  const click = R.addStep(rec, { type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' }, ref: 'E-bbbbbb' }, settings, { tabUrl: BETA });
+  const click = addStep(rec, { type: 'click', pageUrl: BETA, target: { role: 'button', name: 'OK' }, ref: 'E-bbbbbb' }, settings, { tabUrl: BETA });
   assert.equal(click.ref, undefined);
 });
 
@@ -736,8 +738,8 @@ test('the storage share drops steps with their mark and still fits once marked (
 
 test('a step that is not a step or is not kept does not mark the recording trimmed (ADR 0005, M5)', () => {
   const rec = newRec();
-  assert.equal(R.addStep(rec, { type: 'scroll' }, settings), null);
-  assert.equal(R.addStep(rec, { type: 'navigate', pageUrl: BETA, source: 'unknown' }, settings, { tabUrl: BETA }, () => false), null);
+  assert.equal(addStep(rec, { type: 'scroll' }, settings), null);
+  assert.equal(addStep(rec, { type: 'navigate', pageUrl: BETA, source: 'unknown' }, settings, { tabUrl: BETA }, () => false), null);
   assert.equal(rec.trimmed, undefined);
 });
 
@@ -799,4 +801,12 @@ test('the end of a recording is never before its start, whatever the clock did (
   const rec = { startedAt: 2000 };
   assert.equal(R.endAt(rec, 1000), 2000);
   assert.equal(R.endAt(rec, 3000), 3000);
+});
+
+test('addStep says whether the recording changed: the step, or only its trimmed mark (ADR 0005)', () => {
+  const rec = newRec();
+  for (let i = 0; i < LIMITS.agentSteps; i += 1) assert.equal(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, settings, { tabUrl: BETA }).changed, true);
+  assert.deepEqual(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, settings, { tabUrl: BETA }), { step: null, changed: true }, 'the first refusal marks it');
+  assert.deepEqual(R.addStep(rec, { type: 'tool', pageUrl: BETA, tool: 'x', ok: true }, settings, { tabUrl: BETA }), { step: null, changed: false }, 'already marked');
+  assert.deepEqual(R.addStep(rec, { type: 'scroll' }, settings), { step: null, changed: false });
 });

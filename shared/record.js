@@ -431,18 +431,20 @@
    * Cleans and adds a step in one go. Cleaning names new sites and counts what it
    * redacted; a step that is not recorded - not a step, not kept, or past a limit -
    * leaves both as they were (W7, E4; review of #37 R14). A limit that kept it out
-   * still marks the recording trimmed (ADR 0005): the caller saves when rec.trimmed changed.
+   * still marks the recording trimmed (ADR 0005).
    * keep: whether to add the cleaned step at all (a navigation to where the tab already is).
-   * Returns the step when it is recorded, else null.
+   * Returns { step, changed }: the step when it is recorded (else null), and whether the
+   * recording changed at all - the step, or only its trimmed mark. The caller saves on changed.
    */
   function addStep(rec, raw, settings, from, keep = () => true) {
     const aliases = { ...rec.aliases };
     const redactions = { ...rec.redactions };
+    const trimmed = rec.trimmed;
     const step = cleanStep(raw, rec, settings, from);
-    if (step && keep(step) && appendStep(rec, step)) return step;
+    if (step && keep(step) && appendStep(rec, step)) return { step, changed: true };
     rec.aliases = aliases;
     rec.redactions = redactions;
-    return null;
+    return { step: null, changed: rec.trimmed !== trimmed };
   }
 
   /**

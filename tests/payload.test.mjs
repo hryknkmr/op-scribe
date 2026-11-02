@@ -766,17 +766,31 @@ test('buildPayload copies the recording\'s own texts and builds the same payload
   const again = P.buildPayload(withRuns(clone(r)), { generator: 'none', markdown: '' }, env, first.sentAt);
   assert.equal(JSON.stringify(again, null, 2), JSON.stringify(first, null, 2));
   // A verdict changes the payload: the previewed text and the one built now differ (the send check).
-  const judged = withRuns(clone(r));
-  judged.steps[5].verdict = 'ok';
-  assert.notEqual(JSON.stringify(P.buildPayload(judged, { generator: 'none', markdown: '' }, env, first.sentAt)), JSON.stringify(first));
+  // A verdict, the stop or a tool list changes the payload without a step: the previewed text
+  // and the one built now differ, which is what the send compares.
+  const changes = [
+    (x) => { x.steps[5].verdict = 'ok'; },
+    (x) => { x.endedAt += 60000; },
+    (x) => { x.notTested = ['決済と返品']; },
+    (x) => { x.webmcpTools['https://site-1.invalid'] = [['search_catalog'], ['add_to_cart']]; }
+  ];
+  for (const change of changes) {
+    const changed = withRuns(clone(r));
+    change(changed);
+    assert.notEqual(JSON.stringify(P.buildPayload(changed, { generator: 'none', markdown: '' }, env, first.sentAt), null, 2), JSON.stringify(first, null, 2), String(change));
+  }
 });
 
 test('the final scan does not stop on the words v4 adds when a keyword is the same word (ADR 0005, K2)', () => {
-  const r = withRuns({ ...clone(rec), trimmed: 'user' });
-  r.steps[5].verdict = 'ok';
-  const payload = P.buildPayload(r, { generator: 'none', markdown: '' }, env);
-  assert.deepEqual(P.checkPayload(payload), []);
-  assert.deepEqual(S.finalScan(payload, { keywords: ['ok', 'user', 'E-a1b2c3'] }), []);
+  for (const [verdict, trimmed] of [['ok', 'user'], ['ng', 'other']]) {
+    const r = withRuns({ ...clone(rec), trimmed });
+    r.steps[5].verdict = verdict;
+    if (verdict === 'ng') r.steps[5].actual = ['空のまま'];
+    const payload = P.buildPayload(r, { generator: 'none', markdown: '' }, env);
+    assert.deepEqual(P.checkPayload(payload), []);
+    assert.deepEqual(S.finalScan(payload, { keywords: [verdict, trimmed, 'E-a1b2c3'] }), [], `${verdict} ${trimmed}`);
+  }
+  const payload = P.buildPayload(withRuns(clone(rec)), { generator: 'none', markdown: '' }, env);
   // The same word anywhere else is still found.
   payload.recording.steps[5].note = ['user'];
   assert.ok(S.finalScan(payload, { keywords: ['user'] }).length);
