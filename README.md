@@ -137,14 +137,16 @@ AI の出力に、記録に無い URL や伏せ字、伏せるべき値が混ざ
   Scenario: 記録された操作
     When 「ログイン」リンクをクリックする
       | action   | click |
-      | source   | user |
       | url      | https://site-1.invalid/ |
       | role     | link |
       | name     | ログイン |
+      | tag      | a |
       | selector | [data-testid="login-link"] |
+      | href     | https://site-1.invalid/login |
+      | source   | user |
     Then "https://site-1.invalid/login" に遷移する
-      | source | unknown |
       | url    | https://site-1.invalid/login |
+      | source | unknown |
 ```
 
 ### 4. 持ち出す・送る
@@ -177,7 +179,7 @@ AI の出力に、記録に無い URL や伏せ字、伏せるべき値が混ざ
 
 - 本文: `Content-Type: application/json`。形式は [docs/FORMAT.md](docs/FORMAT.md) の「送信ペイロード」
 - 成功の判定: 2xx を返せば「送信しました」と表示される
-- URL は `https://`、または手元で試す場合の `http://localhost` / `http://127.0.0.1` に限る
+- URL は `https://`、または手元で試す場合の `http://localhost` / `http://127.0.0.1` / `http://[::1]` に限る
 
 ### 手元で試す
 
