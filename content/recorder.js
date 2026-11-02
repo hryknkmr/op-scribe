@@ -35,7 +35,8 @@
   let committed = new WeakMap();
   // Field -> what a person's last input left in it, classified and masked then, until committed (#9).
   let pending = new Map();
-  // Toggles a person's click (or Space) reached: only their change is the person's (W7).
+  // Toggles a person's click (or Space) reached, for that task only: the browser changes a toggle
+  // in the same task as the click, so a later change, such as a page's click(), is not theirs (W7).
   let activated = new WeakSet();
 
   // The recording is the one this message was sent for, on every try: a retry never moves it to the next (#9).
@@ -295,7 +296,11 @@
 
     click(event) {
       const hit = asElement(event.composedPath()[0]);
-      if (hit && isToggle(hit)) activated.add(hit);
+      if (hit && isToggle(hit)) {
+        activated.add(hit);
+        // Not a microtask: those run between the listeners of the same click, before its change.
+        setTimeout(() => activated.delete(hit), 0);
+      }
       // Enter in a field makes the browser "click" the submit button (detail 0, still
       // trusted). The key step already explains it; recording the click invents an action.
       if (event.detail === 0 && lastStep?.type === 'key' && Date.now() - lastStep.at < 800) return;
