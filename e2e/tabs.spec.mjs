@@ -19,9 +19,6 @@ test('a tab opened by a link or window.open joins the recording, and what is don
   await byScript.waitForLoadState();
   await expect.poll(async () => (await panel.recording()).tabIds?.length).toBe(3);
 
-  // The browser-only tab lists are kept with the recording, never in what it sends.
-  const rec = await panel.recording();
-  expect(rec.tabIds).toHaveLength(3);
 });
 
 test('a tab not opened from the recording is not recorded, and the recording ends with its last tab (#40)', async ({ context, panel }) => {

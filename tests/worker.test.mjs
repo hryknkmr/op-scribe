@@ -419,16 +419,19 @@ test('a tab opened any other way never joins, and its steps are refused (#40)', 
   assert.equal((await stepIn(w, 9, 'https://example.com/other')).ok, false);
 });
 
-test('a tab on a site the extension cannot reach waits until the panel adds it, and a URL given later is used (#40)', async () => {
+test('a tab on a site the extension cannot reach waits until the panel adds it, and never joins by a later navigation (#40, #72)', async () => {
   const w = worker();
   await startIn7(w);
   w.control.denied = ['https://login.example.net/*'];
-  // Chrome may give the URL only after the tab is created.
-  await w.openTab({ id: 9, openerTabId: 7 });
-  await w.urlChanged(9, 'https://login.example.net/');
+  // The page to open, as Chrome gives it before the tab has loaded.
+  await w.openTab({ id: 9, openerTabId: 7, pendingUrl: 'https://login.example.net/' });
   assert.deepEqual(w.session.opsRecording.tabIds, [7]);
   assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
   assert.equal((await stepIn(w, 9, 'https://login.example.net/')).ok, false);
+  // Moving on to a site the extension can reach (the address bar, say) does not make it join.
+  await w.urlChanged(9, 'https://example.com/elsewhere');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
   // Not a page of the web: it does not join, whatever the panel asks.
   assert.equal((await w.send({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: 'chrome://newtab/', tabId: 9 } })).ok, false);
   // The person grants the site in the panel.
@@ -466,10 +469,10 @@ test('closing a tab leaves the recording on; closing its last tab ends it, and a
   assert.equal(w.session.opsRecording.state, 'stopped');
 });
 
-test('a tab whose URL came before it was waiting is read again, and joins (#40)', async () => {
+test('a tab whose page Chrome gives only when asked joins (#40)', async () => {
   const w = worker();
   await startIn7(w);
-  // The update with the URL was missed: the tab says it only when asked.
+  // Neither url nor pendingUrl on creation: the tab says it only when asked.
   w.control.tabs = { 9: { url: 'https://example.com/late' } };
   await w.openTab({ id: 9, openerTabId: 7 });
   assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
@@ -484,4 +487,45 @@ test('a stop flushes and stops every tab of the recording (#40)', async () => {
   const sent = (type) => w.control.toTabs.filter(([, t]) => t === type).map(([id]) => id).sort();
   assert.deepEqual(sent('OPS_FLUSH'), [7, 9]);
   assert.deepEqual(sent('OPS_STOP'), [7, 9]);
+});
+
+test('a tab that opens to the new tab page is no candidate, even with an opener and a later site it can reach (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  // Ctrl+T or the new tab button: Chrome may name the active tab as the opener.
+  await w.openTab({ id: 9, openerTabId: 7, pendingUrl: 'chrome://newtab/' });
+  await w.urlChanged(9, 'https://example.com/typed');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.equal((await stepIn(w, 9, 'https://example.com/typed')).ok, false);
+  // Nor is a tab whose page is unknown when it opens and turns out to be the new tab page.
+  await w.openTab({ id: 10, openerTabId: 7 });
+  await w.urlChanged(10, 'chrome://newtab/');
+  await w.urlChanged(10, 'https://example.com/typed');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+});
+
+test('a tab whose page comes only in its first update (window.open) is decided by that page (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7 });
+  assert.deepEqual(w.session.opsRecording.openingTabIds, [9]);
+  await w.urlChanged(9, 'https://example.com/popup');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+  // Closed before its first page, it is forgotten.
+  await w.openTab({ id: 10, openerTabId: 7 });
+  await w.removeTab(10);
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+});
+
+test('a navigation is recorded before the click that follows it (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  const moved = w.urlChanged(7, 'https://example.com/next');
+  const clicked = stepIn(w, 7, 'https://example.com/next');
+  await Promise.all([moved, clicked]);
+  assert.deepEqual(w.session.opsRecording.steps.map((x) => x.type).slice(-2), ['navigate', 'click']);
 });

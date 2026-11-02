@@ -136,6 +136,8 @@ function newId() {
 // and the tabs opened from them that wait for access to their site. Browser-only: never in the payload.
 const tabsOf = (rec) => (Array.isArray(rec?.tabIds) ? rec.tabIds : (Number.isInteger(rec?.tabId) ? [rec.tabId] : []));
 const waitingOf = (rec) => (Array.isArray(rec?.waitingTabIds) ? rec.waitingTabIds : []);
+// Tabs opened from the recording whose first page Chrome has not given yet (window.open): the first one decides.
+const openingOf = (rec) => (Array.isArray(rec?.openingTabIds) ? rec.openingTabIds : []);
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && tabsOf(rec).includes(tabId);
 const isWaitingTab = (rec, tabId) => rec?.state === 'recording' && waitingOf(rec).includes(tabId);
 const httpUrl = (url) => { try { return ['http:', 'https:'].includes(new URL(url).protocol); } catch { return false; } };
@@ -157,6 +159,7 @@ async function start({ tabId, url, scope, targetVersion }) {
       tabId,
       tabIds: [tabId],
       waitingTabIds: [],
+      openingTabIds: [],
       startedAt: Date.now(),
       endedAt: null,
       revision: 0,
@@ -281,30 +284,45 @@ const addPattern = (url, tabId) => mutate(async (rec) => {
   return { save: rec, reply: { ok: true } };
 });
 
-/** A waiting tab joins at once when the extension already has its site (#40); otherwise it waits for the panel. */
+/** A tab joins at once when the extension already has its site (#40); otherwise it waits for the panel. */
 async function joinIfAllowed(tabId, url) {
   if (!httpUrl(url) || !(await chrome.permissions.contains({ origins: [originPattern(url)] }))) return;
   await addPattern(url, tabId);
 }
 
 /**
- * A tab opened from a tab of the recording (a link with target="_blank", window.open) waits to
- * join it; a tab opened any other way never does. Up to LIMITS.tabs tabs, waiting ones included (#40).
+ * A tab opened from a tab of the recording to a page of the web (a link with target="_blank",
+ * window.open) may join it; a tab opened any other way never does. What decides is the page the tab
+ * opens to: one that starts at the browser's new tab page (Ctrl+T), even with an opener, is not a
+ * candidate, and a waiting tab joins only from the panel, never by a later navigation (owner
+ * decision on #72). Up to LIMITS.tabs tabs at a time, waiting ones included.
  */
 async function noticeOpenedTab(tab) {
   if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
+  // Chrome gives the page to open in url or pendingUrl, or only when asked (a link), or only in the
+  // tab's first update (window.open): then the tab is kept as opening until that update decides.
+  const asked = tab.pendingUrl || tab.url ? null : await chrome.tabs.get(tab.id).catch(() => null);
+  const url = tab.pendingUrl || tab.url || asked?.pendingUrl || asked?.url;
+  if (url && !httpUrl(url)) return;
   const waits = await mutate(async (rec) => {
     if (!isRecordingTab(rec, tab.openerTabId) || isRecordingTab(rec, tab.id) || isWaitingTab(rec, tab.id)) return { reply: false };
-    if (tabsOf(rec).length + waitingOf(rec).length >= LIMITS.tabs) return { reply: false };
-    rec.waitingTabIds = [...waitingOf(rec), tab.id];
-    return { save: rec, reply: true };
+    if (tabsOf(rec).length + waitingOf(rec).length + openingOf(rec).length >= LIMITS.tabs) return { reply: false };
+    if (url) rec.waitingTabIds = [...waitingOf(rec), tab.id];
+    else rec.openingTabIds = [...openingOf(rec), tab.id];
+    return { save: rec, reply: Boolean(url) };
   });
-  if (!waits) return;
-  // Chrome may give the URL only later, and an update that came before the tab was waiting is
-  // missed: its URL is read again now. A URL that comes later still is handled by onUpdated.
-  const now = await chrome.tabs.get(tab.id).catch(() => null);
-  const url = now?.url || now?.pendingUrl || tab.url || tab.pendingUrl;
-  if (url) await joinIfAllowed(tab.id, url);
+  if (waits) await joinIfAllowed(tab.id, url);
+}
+
+/** The first page of an opening tab: a page of the web makes it wait to join, anything else drops it (#72). */
+async function firstPage(tabId, url) {
+  const waits = await mutate(async (rec) => {
+    if (rec?.state !== 'recording' || !openingOf(rec).includes(tabId)) return { reply: false };
+    rec.openingTabIds = openingOf(rec).filter((id) => id !== tabId);
+    if (httpUrl(url)) rec.waitingTabIds = [...waitingOf(rec), tabId];
+    return { save: rec, reply: httpUrl(url) };
+  });
+  if (waits) await joinIfAllowed(tabId, url);
 }
 
 /**
@@ -452,8 +470,6 @@ chrome.tabs.onCreated.addListener(noticeOpenedTab);
 // Navigations (including SPA history changes) in the tabs the recording records.
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (!changeInfo.url) return;
-  // A waiting tab whose URL Chrome gives only now (#40).
-  if (isWaitingTab(await getRecording(), tabId)) await joinIfAllowed(tabId, changeInfo.url);
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
@@ -463,6 +479,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
     const { changed } = addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved);
     return changed ? { save: rec } : null;
   });
+  // After the navigations of the recorded tabs, so none of theirs waits on this.
+  await firstPage(tabId, changeInfo.url);
 });
 
 // A URL change cannot tell a new document from a same-document one, so a loaded page is asked.
@@ -484,8 +502,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 
 // A closed tab leaves the recording; the recording ends with its last tab (#40). Nothing to flush: the page is gone.
 chrome.tabs.onRemoved.addListener((tabId) => mutate(async (rec) => {
-  if (isWaitingTab(rec, tabId)) {
+  if (isWaitingTab(rec, tabId) || (rec?.state === 'recording' && openingOf(rec).includes(tabId))) {
     rec.waitingTabIds = waitingOf(rec).filter((id) => id !== tabId);
+    rec.openingTabIds = openingOf(rec).filter((id) => id !== tabId);
     return { save: rec };
   }
   if (!isRecordingTab(rec, tabId)) return null;
