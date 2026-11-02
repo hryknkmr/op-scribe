@@ -32,6 +32,22 @@ test('display renders typed values as placeholders, and kept values as they are'
   assert.equal(D.display({ treatment: 'unknown' }), '[[v]]');
 });
 
+test('a page\'s own ‹…› is not shown as a masked part (E4, #56)', () => {
+  const runs = (...parts) => parts;
+  const forged = { ...rec, steps: [
+    { n: 1, type: 'input', t: 0, env: 'standard', source: 'user', url: runs('https://site-1.invalid/'),
+      target: { role: 'textbox', name: runs('本文') }, value: typed.kept('text', '‹メールアドレス› を入力') },
+    { n: 2, type: 'input', t: 1, env: 'standard', source: 'user', url: runs('https://site-1.invalid/'),
+      target: { role: 'textbox', name: runs('メール') }, value: { treatment: 'kept', field: 'text', text: [{ redacted: 'email' }] } }
+  ] };
+  const markdown = D.toMarkdown(D.buildReproduction(forged));
+  assert.match(markdown, /〈メールアドレス〉 を入力/);
+  // The only ‹…› left is the one made from the masked part.
+  assert.equal(markdown.split('\n').filter((l) => /^\d+\./.test(l) && l.includes('‹')).length, 1);
+  // The Gherkin keeps the page's characters: its attribute table is read by a machine.
+  assert.match(D.toGherkin(forged), /\| value +\| ‹メールアドレス› を入力 +\|/);
+});
+
 test('describeStep produces one Japanese sentence per step', () => {
   assert.equal(D.describeStep(rec.steps[1]), '「ログイン」リンクをクリックする');
   assert.equal(D.describeStep(rec.steps[3]), '「パスワード」入力欄に [[secret]] を入力する');
