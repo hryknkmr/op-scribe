@@ -197,6 +197,20 @@ test('a note keeps a known kind and drops any other', async () => {
   assert.equal(notes[1].kind, undefined);
 });
 
+test('a step is deleted only by an index it has, and a note not recorded is not reported as added', async () => {
+  const { send, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } });
+  const before = structuredClone(session.opsRecording);
+  for (const detail of [{}, { index: 'x' }, { index: -1 }, { index: 1.5 }, { index: before.steps.length }]) {
+    assert.equal((await send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail })).ok, false, JSON.stringify(detail));
+  }
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: '' } })).ok, false);
+  assert.deepEqual(session.opsRecording, before);
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'DELETE_STEP', detail: { index: before.steps.length - 1 } })).ok, true);
+  assert.equal(session.opsRecording.steps.length, before.steps.length - 1);
+});
+
 test('a restart that cannot stop the earlier recording does not leave it saved as recording', async () => {
   const { send, control, session } = worker();
   const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };

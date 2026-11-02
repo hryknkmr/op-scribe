@@ -20,22 +20,13 @@ const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply } = self.Op
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
-const NOTICE_KEY = 'opsNotice';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 
-chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+chrome.runtime.onInstalled.addListener(async () => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   } catch (error) {
     console.warn('[op-scribe] setPanelBehavior failed', error);
-  }
-  // Earlier versions were strict everywhere by default. Free text is now kept
-  // outside the listed production hosts (ADR 0001), so tell those users once.
-  if (reason === 'update') {
-    const stored = (await chrome.storage.local.get(SETTINGS_KEY))[SETTINGS_KEY];
-    if (!stored?.commercialHosts?.length && stored?.privacyLevel !== 'balanced') {
-      await chrome.storage.local.set({ [NOTICE_KEY]: 'commercial-hosts' });
-    }
   }
 });
 
@@ -302,15 +293,17 @@ async function handle(message, sender) {
         return { remove: true, reply: { ok: true } };
       });
       case 'DELETE_STEP': return mutate(async (rec) => {
-        if (!rec) return { reply: { ok: false } };
-        rec.steps.splice(Number(detail.index), 1);
+        const index = Number(detail?.index);
+        // splice(NaN, 1) would remove the first step.
+        if (!rec || !Number.isInteger(index) || index < 0 || index >= rec.steps.length) return { reply: { ok: false } };
+        rec.steps.splice(index, 1);
         rec.revision = (rec.revision || 0) + 1;
         return { save: rec, reply: { ok: true } };
       });
       case 'ADD_NOTE': return mutate(async (rec) => {
         if (!rec) return { reply: { ok: false, error: 'NO_RECORDING' } };
-        addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
-        return { save: rec, reply: { ok: true } };
+        const step = addStep(rec, { type: 'note', note: String(detail.text || ''), kind: detail.kind }, await getSettings());
+        return step ? { save: rec, reply: { ok: true } } : { reply: { ok: false, error: 'NOT_RECORDED' } };
       });
       default: return { ok: false, error: 'UNKNOWN' };
     }

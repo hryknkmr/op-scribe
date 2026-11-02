@@ -190,8 +190,6 @@
         return `${targetText(step.target)}に ${display(step.value)} をアップロードする`;
       case 'key':
         return step.target ? `${targetText(step.target)}で ${step.key} キーを押す` : `${step.key} キーを押す`;
-      case 'submit':
-        return 'フォームを送信する';
       case 'tool': {
         const json = step.args && typeof step.args === 'object' ? JSON.stringify(displayArgs(step.args)) : '';
         // The sentence shows the arguments up to argsInSentence; the Gherkin table keeps them all.
@@ -207,12 +205,12 @@
     }
   }
 
-  const NAVIGATION_CAUSES = new Set(['click', 'submit', 'key', 'tool']);
+  const NAVIGATION_CAUSES = new Set(['click', 'key', 'tool']);
   const FOLLOW_MS = 4000;
 
   /**
    * Builds { title, preconditions, steps: [{ action, expected? }], notes } from a recording.
-   * A navigation right after a click/submit is folded into that step's expected result.
+   * A navigation right after a click, a key or a tool is folded into that step's expected result.
    */
   function buildReproduction(rec) {
     const steps = rec?.steps || [];
@@ -421,7 +419,7 @@
     return `${out.map(line).join('\n')}\n`;
   }
 
-  const api = { rendered: txt, display, displayArgs, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, withPanelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  const api = { rendered: txt, display, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
