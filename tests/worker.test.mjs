@@ -175,3 +175,19 @@ test('tools are held under the site Chrome reports, and sites past the tool limi
   assert.equal(Object.keys(session.opsRecording.webmcpTools).length, 50);
   assert.equal(Object.keys(session.opsRecording.aliases).length, 51);
 });
+
+test('a page on a host of the alias form gets no tools recorded and no answer (rows U4, W8; review of #46)', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const from = { tab: { id: 7, url: 'https://site-1.invalid/' }, url: 'https://site-1.invalid/', origin: 'https://site-1.invalid' };
+  const before = Object.keys(session.opsRecording.aliases).length;
+  await send({ from: 'op-scribe/content', type: 'WEBMCP_TOOLS', detail: { names: ['search'] } }, from);
+  assert.deepEqual(session.opsRecording.webmcpTools, {});
+  // The reply is made in the worker's realm: compared as JSON.
+  const refused = JSON.stringify({ ok: false, error: 'NOT_RECORDING' });
+  for (const detail of [{ op: 'status' }, { op: 'reproduction' }, { op: 'expect', args: { text: '表示される' } }]) {
+    assert.equal(JSON.stringify(await send({ from: 'op-scribe/content', type: 'WEBMCP_REQUEST', detail }, from)), refused, detail.op);
+  }
+  assert.equal(Object.keys(session.opsRecording.aliases).length, before);
+});
