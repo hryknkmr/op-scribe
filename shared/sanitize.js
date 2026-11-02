@@ -71,6 +71,9 @@
   // What a word of letters alone rarely has: a digit, or a capital inside it.
   const OPAQUE = /\d|[a-z][A-Z]/;
 
+  // A mention in a sentence (担当は@tanakaです): letters of other scripts before it, a dotless name that runs into them after.
+  const MENTION = /^[^@]*[^\x00-\x7f][^@]*@[A-Za-z0-9-]+[^\x00-\x7f.][^.]*$/;
+
   // Order matters: specific shapes first, the generic long-number rule last.
   const RULES = [
     { kind: 'secret', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g },
@@ -101,14 +104,14 @@
     // The dot in the domain is optional: alice@localhost is an address too. So is a quoted local part, a domain
     // literal, and letters of any script (太郎@例え.テスト). The domain holds a letter: react@18 is a package.
     // Every ASCII character a local part may hold (RFC 5322 atext), so none is left as a piece.
-    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|(?<![\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-])[\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-]+)@(?:\[(?:IPv6:)?[0-9A-Fa-f:.]{2,45}\]|(?=[\p{N}.-]*\p{L})[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)/gu },
+    { kind: 'email', re: /(?:"(?:[^"\\\r\n]|\\.){1,64}"|(?<![\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-])[\p{L}\p{N}\p{M}_.!#$%&'*+/=?^`{|}~-]+)@(?:\[(?:IPv6:)?[0-9A-Fa-f:.]{2,45}\]|(?=[\p{N}.-]*\p{L})[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)*)/gu, accept: (m) => !MENTION.test(m) },
     { kind: 'card', re: /(?<!\d)\d(?:[ \t.*_/-]?\d){12,18}(?!\d)/g, accept: (m) => luhn(m.replace(/\D/g, '')) },
     // A US social security number by its form.
     { kind: 'secret', re: /(?<![\d-])\d{3}-\d{2}-\d{4}(?![\d-])/g },
     { kind: 'phone', re: /(?<![\d-])0\d{1,4}-\d{1,4}-\d{3,4}(?![\d-])/g },
     { kind: 'phone', re: /\+\d{1,3}[- ]?\d{1,4}[- ]?\d{2,4}[- ]?\d{3,4}(?!\d)/g },
     // With dots: 415.555.2671, +1.415.555.2671, 03.1234.5678.
-    { kind: 'phone', re: /(?<![\d.])(?:\+\d{1,3}\.)?\d{2,4}\.\d{3,4}\.\d{4}(?![\d.])/g },
+    { kind: 'phone', re: /(?<![\d.])(?:\+\d{1,3}\.)?(?:0\d{1,3}|\d{3})\.\d{3,4}\.\d{4}(?![\d.])/g },
     // With an area code in brackets or spaces: (03) 1234-5678, 03 1234 5678, 090 1234 5678.
     { kind: 'phone', re: /(?<![\d(-])(?:\(\d{2,4}\)\s?|\d{2,4}[ -])\d{3,4}[ -]\d{4}(?![\d-])/g },
     // North American numbers: 212-555-0123, (212) 555-0123 (review R41).

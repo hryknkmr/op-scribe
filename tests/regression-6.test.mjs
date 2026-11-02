@@ -44,7 +44,7 @@ test('cards with any one separator, national ids and phone numbers in common not
   for (const t of ['(415) 555-2671', '415-555-2671', '03 1234 5678', '(03) 1234-5678', '415.555.2671', '+1.415.555.2671', '０９０－１２３４－５６７８']) {
     assert.equal(text(t), '[[phone]]', t);
   }
-  for (const kept of ['2026-10-31', '1 000 000 円', 'v1.2.0', '3件']) assert.equal(text(kept), kept);
+  for (const kept of ['2026-10-31', '1 000 000 円', 'v1.2.0', '3件', 'build 2026.1234.5678 completed']) assert.equal(text(kept), kept);
 });
 
 test('digits of any script and every dash are read as ASCII before the rules (ADR 0003, normalization)', () => {
@@ -68,6 +68,7 @@ test('addresses in any letters and domain literals are one address; a package ve
     assert.equal(text(t), '[[email]]', t);
   }
   assert.equal(text('react@18 @handle'), 'react@18 @handle');
+  assert.equal(text('担当は@tanakaです'), '担当は@tanakaです');
 });
 
 test('fields named as credentials and card data are secret, in any spelling', () => {
