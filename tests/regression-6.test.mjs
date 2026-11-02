@@ -116,12 +116,12 @@ test('URL parameters use the same names, with their keys decoded', () => {
   assert.equal(url('https://example.com/?q=shoes&tab=items'), 'https://example.com/?q=shoes&tab=items');
 });
 
-test('an id inside a path segment, and a fragment route is judged like a path', () => {
+test('an id inside a path segment, and a fragment route with anything to hide is dropped (U8)', () => {
   for (const [raw, out] of [['/orders/123456.json', '/orders/[[id]]'], ['/orders/order-123456', '/orders/[[id]]'], ['/orders/123456;view=full', '/orders/[[id]]'],
-    ['/#/orders/123456/x', '/#/orders/[[id]]/x'], ['/#/settings', '/#/settings'], ['/blog/v1.2/intro', '/blog/v1.2/intro']]) {
+    ['/#/orders/123456/x', '/'], ['/#/settings', '/#/settings'], ['/blog/v1.2/intro', '/blog/v1.2/intro']]) {
     assert.equal(url(`https://example.com${raw}`), `https://example.com${out}`, raw);
   }
-  assert.equal(url('https://example.com/app#/projects/AcmeSecret/x', ['AcmeSecret']), 'https://example.com/app#/projects/[[masked]]/x');
+  assert.equal(url('https://example.com/app#/projects/AcmeSecret/x', ['AcmeSecret']), 'https://example.com/app');
 });
 
 test('a URL inside a URL is hidden, however it is written or encoded', () => {
