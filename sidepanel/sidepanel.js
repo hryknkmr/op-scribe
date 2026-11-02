@@ -445,9 +445,13 @@ ui.send.addEventListener('click', () => {
         ui.sendStatus.textContent = '送信先へのアクセスが許可されませんでした';
         return;
       }
-      // Re-check the exact bytes about to leave, not a rebuilt object.
-      const rec = await loadRecording();
+      // Re-check the exact bytes about to leave, not a rebuilt object. The settings first: from
+      // reading the recording to starting the request nothing waits, so a verdict or a stop saved
+      // meanwhile is either in what is compared or comes after the send began (ADR 0005). What is
+      // saved between that read and the request itself is not seen: a known limit, short of
+      // sending from the worker's queue.
       await loadSettings();
+      const rec = await loadRecording();
       // A verdict, the stop or a tool list changes the payload but not the revision (ADR 0005):
       // the recording as it is now, built from what was previewed, must be the previewed text.
       if (basisOf(rec) !== previewedBasis || !inputs
