@@ -14,8 +14,9 @@ test('a site gets only its own steps, and is site-1 to itself whatever the recor
   await site.fill('#q', 'Bで入力');
   await site.click('#go');
 
-  // The click on B has reached the recording.
-  await expect.poll(async () => (await panel.recording()).steps.at(-1)?.type).toBe('click');
+  // The click on B has reached the recording, and so has the notice the page shows after it (T7), which
+  // arrives after the click: counted before it, the steps on B were one short (seen in CI).
+  await expect.poll(async () => (await panel.recording()).steps.slice(-2).map((s) => s.type)).toEqual(['click', 'notice']);
   const rec = await panel.recording();
   const onB = rec.steps.filter((s) => s.site === rec.steps.at(-1).site);
   expect(hostOf(onB[0].site)).toBe('site-2.invalid');
