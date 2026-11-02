@@ -99,9 +99,9 @@ NG と判定した期待結果 1 つにつき 1 枚。記録の中に NG が 2 �
 | --- | --- | --- |
 | 新しい欄（`ref`・`verdict`・`actual`・`scope`・`version`・`notTested`） | 1 つでもあれば拒否 | 下の組み合わせの制約で検査 |
 | テスターが書いた期待結果に `ref` が必須 | 適用しない | 適用する |
-| `endedAt` が `startedAt` 以後 | 適用する（前からある欄の検査） | 適用する |
+| `endedAt` が `startedAt` 以後 | 適用しない（これまでどおり受け付ける。逆転していれば実施記録は作らない） | 適用する（拒否） |
 
-v3 の記録からは、書式 A は作らない（NG が無いため）。書式 B は、ID を出さず、期待結果をすべて未判定として作る（結論は「判定なし」になる）。
+v3 の記録からは、書式 A は作らない（NG が無いため）。書式 B は、ID を出さず、期待結果をすべて未判定として作る（結論は「結論の決め方」の表のとおり「判定なし（未判定 m 件）」か「判定なし（期待結果が無い）」になる）。
 
 | 欄 | どこに | 誰が書くか | 伏せ方（案） |
 | --- | --- | --- | --- |
@@ -119,7 +119,7 @@ v3 の記録からは、書式 A は作らない（NG が無いため）。書�
 - `verdict` は `ref` を持つステップにだけ付く（無ければ未判定）。
 - `actual` は `verdict: ng` のステップに必ず付き、ほかのステップには付かない。worker は `actual` の無い `ng` を判定なしに戻す。
 - `scope`・`version`・`notTested` は記録全体の欄で、無くてもよい。
-- `endedAt` があるときは `startedAt` 以後（v4 で足す検査）。
+- `endedAt` があるときは `startedAt` 以後（v4 だけで拒否する。v3 は上の表のとおり）。
 
 判定を人だけにするのは、「確かめて問題なし」と言えるのはテスターだけだからです（ADR 0003 の W7: ページから届く申告は `agent`）。
 
@@ -139,7 +139,8 @@ v3 の記録からは、書式 A は作らない（NG が無いため）。書�
 ## 実装の順（案）
 
 1. ADR 0003 に `ref`・`verdict`・`actual`・`scope`・`version`・`notTested` の行と、上の組み合わせの制約を足し、送信データの版を `v4` に上げる（`SHAPE`・`STEP_RULES` の `note` に `verdict`・`actual`・受信サーバ・FORMAT・版のテスト）。
-   - worker が、サイドパネルから届いた値をほかの欄と同じように作り直す: `ref` は worker が振る（届いた値は使わない）、`verdict` は列挙値だけ、`actual`・`scope`・`version`・`notTested` は `cleanLine`（メモと同じ伏せ方と長さ）。保存容量の上限（`fitRecord`）に新しい欄も入る。
+   - worker が、サイドパネルから届いた値をほかの欄と同じように作り直す: `ref` は worker が振る（届いた値は使わない）、`verdict` は列挙値だけ、`actual`・`scope`・`notTested` は `cleanLine`（メモと同じ伏せ方、300 字）、`version` は `cleanLine`（同じ伏せ方、80 字）。保存容量の上限（`fitRecord`）に新しい欄も入る。
+   - 版ごとの形は 1 か所から導く: `shared/payload.js` の `SHAPE` を v4 の形とし、v3 の形はそこから新しい欄を除いて作る（`checkPayload` に版ごとの許可欄を手で書かない。AGENTS.md の「送信データの形は `SHAPE` だけで定義する」を保つ）。
    - `shared/limits.js` の `VOCAB` に `ref`（形 `^E-[0-9a-z]{4}$`）と `verdict`（`ok` / `ng`）を足す。最終検査が、登録語と同じ値（例えば登録語 `ok`）を漏れとして止めないため。
    - 新しい自由文の欄（ステップごとの `actual`、記録全体の `scope`・`version`・`notTested`）の分だけ、`shared/limits.js` のステップ・送信データの大きさの上限（`STEP`・`TOTALS`）を広げ、受信サーバの上限もそれに合わせる。最大の大きさのテストに新しい欄を入れる。
    - テスト: `tests/record.test.mjs`（worker の作り直しと組み合わせ）、`tests/payload.test.mjs`（形と拒否、v3 と v4 の両方、最大の大きさ）、`tests/describe.test.mjs`（書式 A・B の全欄・結論の表・番号・区切り）。
