@@ -108,7 +108,7 @@
     type: 'object',
     fields: {
       n: { type: 'int', row: 'T6', min: 1 },
-      type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note'] },
+      type: { type: 'enum', row: 'T6', values: ['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note', 'notice'] },
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
       source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
@@ -121,7 +121,9 @@
       args: opt({ type: 'args', row: 'W1-W5' }),
       ok: opt({ type: 'bool', row: 'T6' }),
       note: opt(runs('T1', LIMITS.note)),
-      kind: opt({ type: 'enum', row: 'T6', values: ['bug', 'question', 'idea', 'next'] })
+      kind: opt({ type: 'enum', row: 'T6', values: ['bug', 'question', 'idea', 'next'] }),
+      notice: opt(runs('T7', LIMITS.notice)),
+      level: opt({ type: 'enum', row: 'T6', values: ['status', 'alert'] })
     }
   };
 
@@ -409,9 +411,11 @@
     if (step.type !== 'upload' && field === 'file') problems.push({ path: `${path}.value`, problem: 'file value outside upload' });
     // Row W7: the source each kind of step has. A note is the page's (agent, with the URL of its page)
     // or the person's in the side panel (user, with none).
-    const source = step.type === 'navigate' ? 'unknown' : step.type === 'tool' ? 'agent'
+    const source = step.type === 'navigate' || step.type === 'notice' ? 'unknown' : step.type === 'tool' ? 'agent'
       : step.type === 'note' ? (step.url === undefined ? 'user' : 'agent') : 'user';
     if (step.source !== source) problems.push({ path: `${path}.source`, problem: `${step.type} step not from ${source}` });
+    // Row T7: page text is not kept in a commercial step.
+    if (step.type === 'notice' && step.env === 'commercial') problems.push({ path, problem: 'notice in a commercial step' });
     // The fields each kind of step can hold (I5): a select is a choice (or secret or personal by its names),
     // never free text with the longer limit; an input is never a file (review R31).
     const allowed = { select: ['choice', 'secret', 'pii'], input: ['text', 'search', 'choice', 'secret', 'pii'] }[step.type];

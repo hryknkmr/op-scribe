@@ -38,7 +38,8 @@
       return await chrome.runtime.sendMessage({ from: FROM, type, detail });
     } catch (error) {
       const text = String(error?.message || error);
-      if (TRANSIENT.test(text) && attempt < 3) {
+      // Not a notice: sent again, it would land after the next operation and read as that one's (T7).
+      if (TRANSIENT.test(text) && attempt < 3 && detail?.type !== 'notice') {
         await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
         return send(type, detail, attempt + 1);
       }
@@ -48,6 +49,8 @@
   }
 
   async function hello() {
+    // What the last recording's operation caused stays out of the next one.
+    stopNotices();
     const response = await send('HELLO');
     config = response?.active ? response.config : null;
     if (config) window.postMessage({ source: ISO, type: 'ANNOUNCE' }, location.origin);
@@ -136,7 +139,80 @@
 
   function emit(type, extra = {}) {
     lastStep = { type, at: Date.now() };
+    // What the last operation caused so far goes first, or it would land after this one.
+    readNotices();
     send('STEP', { type, pageUrl: location.href, ...extra });
+    // A person's operation only: what a page reports does not open the window (T7).
+    if (type !== 'tool') watchNotices();
+  }
+
+  // ---------------------------------------------------------------- notices
+
+  // Only what the author declared as a notice, only for a moment after an operation, and only
+  // what changed since it (ADR 0003, T7). Nothing is read from a commercial page.
+  const NOTICE = '[role~="status"], [role~="alert"], [aria-live="polite"], [aria-live="assertive"]';
+  const FIELDS = 'input, textarea, select, [contenteditable]';
+  const NOTICE_MS = 5000;
+  const NOTICE_SETTLE_MS = 200;
+  const NOTICES_PER_OPERATION = 4;
+  const NOTICE_CHARS = 1000;
+  const SHOWN_BY = ['hidden', 'aria-hidden', 'class', 'style', 'open', 'role', 'aria-live'];
+  let notices = null;
+
+  /** The text a region shows, or '' when it is not a notice: a region with a field is a form, and a long one is content. */
+  function noticeText(el) {
+    if (el.closest('[aria-hidden="true"]') || el.isContentEditable) return '';
+    if (el.matches(FIELDS) || el.querySelector(FIELDS)) return '';
+    if (!el.checkVisibility({ visibilityProperty: true, opacityProperty: true })) return '';
+    const text = String(el.innerText || '').replace(/\s+/g, ' ').trim();
+    return text.length > NOTICE_CHARS ? '' : text;
+  }
+
+  /** Each notice once: a region inside one that is read is part of it, and one inside a form region stands alone. */
+  function noticeRegions() {
+    const read = [...document.querySelectorAll(NOTICE)].map((el) => [el, noticeText(el)]).filter(([, text]) => text).slice(0, 50);
+    return read.filter(([el]) => !read.some(([other]) => other !== el && other.contains(el)));
+  }
+
+  const noticeLevel = (el) => (el.matches('[role~="alert"], [aria-live="assertive"]') ? 'alert' : 'status');
+
+  function readNotices() {
+    const watch = notices;
+    if (!watch || !config || config.commercial) return;
+    for (const [el, text] of noticeRegions()) {
+      if (watch.before.get(el) === text || watch.sent.has(text)) continue;
+      if (watch.sent.size >= NOTICES_PER_OPERATION) return;
+      watch.before.set(el, text);
+      watch.sent.add(text);
+      // Not emit: a notice is not an operation, and lastStep decides what an operation explains.
+      // Masked and cut here, so the worker gets only what may be kept, as runs (T7).
+      send('STEP', { type: 'notice', pageUrl: location.href, notice: S.cleanLine(text, { keywords: config.keywords, maxLength: globalThis.OpScribeLimits.LIMITS.notice }).runs, level: noticeLevel(el) });
+    }
+  }
+
+  function stopNotices() {
+    if (!notices) return;
+    notices.observer.disconnect();
+    clearTimeout(notices.settle);
+    clearTimeout(notices.end);
+    notices = null;
+  }
+
+  function watchNotices() {
+    if (!config || config.commercial) return;
+    stopNotices();
+    const watch = {
+      before: new Map(noticeRegions()),
+      sent: new Set(),
+      settle: 0,
+      end: setTimeout(() => { readNotices(); stopNotices(); }, NOTICE_MS),
+      observer: new MutationObserver(() => {
+        clearTimeout(watch.settle);
+        watch.settle = setTimeout(readNotices, NOTICE_SETTLE_MS);
+      })
+    };
+    notices = watch;
+    watch.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: SHOWN_BY });
   }
 
   function currentValue(el) {
@@ -263,6 +339,7 @@
       return;
     }
     if (message.type === 'OPS_STOP') {
+      stopNotices();
       config = null;
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }

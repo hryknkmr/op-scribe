@@ -17,7 +17,8 @@
   const { scrubText, scrubRuns, runKinds, cleanLine, oneLine, scrubUrl, hostAllowed, parsedHost, typed, classifyField, fieldTreatment, walkArgs } = S;
 
   const NOTE_KINDS = new Set(['bug', 'question', 'idea', 'next']);
-  const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note']);
+  const STEP_TYPES = new Set(['navigate', 'click', 'input', 'select', 'check', 'upload', 'key', 'submit', 'tool', 'note', 'notice']);
+  const NOTICE_LEVELS = new Set(['status', 'alert']);
   const FIELDS = new Set(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']);
   const KEPT_LIMIT = LIMITS.kept;
   // ADR 0003 rows T4 and T5.
@@ -192,8 +193,12 @@
     const env = from.tabUrl || from.frameUrl
       ? envOf([from.tabUrl, from.frameUrl], policy)
       : (hasCommercial(rec) ? 'commercial' : 'standard');
+    // What a page shows is not kept from a commercial page, whatever the content script sent (T7).
+    if (type === 'notice' && env === 'commercial') return null;
     const ctx = { ...policy, aliases: rec.aliases, keywords: settings.keywords, env };
     const kinds = [];
+    // The real hosts this recording knows: page text that names one cannot leave (T3, T7, K5).
+    const knownHosts = () => [...Object.keys(rec.aliases || {}).map(hostOf), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))].filter(Boolean);
     const text = (value, maxLength) => {
       const r = cleanLine(value, { keywords: settings.keywords, maxLength });
       kinds.push(...r.kinds);
@@ -207,10 +212,10 @@
       return r.url;
     };
 
-    // Where a step came from follows from its kind (W7): a navigation is unknown, a tool call and an
+    // Where a step came from follows from its kind (W7): a navigation and a notice are unknown, a tool call and an
     // expectation from the page are agent, everything else - what the content script saw a person do,
     // a note in the side panel - is user. The worker marks the page's expectation (raw.source).
-    const source = type === 'navigate' ? 'unknown' : type === 'tool' || (type === 'note' && raw.source === 'agent') ? 'agent' : 'user';
+    const source = type === 'navigate' || type === 'notice' ? 'unknown' : type === 'tool' || (type === 'note' && raw.source === 'agent') ? 'agent' : 'user';
     // The page's expectation belongs to its page (W8): without one it is not recorded.
     if (type === 'note' && source === 'agent' && !raw.pageUrl) return null;
     const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source };
@@ -231,8 +236,7 @@
         const r = scrubText(oneLine(t.selector), { keywords: settings.keywords });
         const selector = renderRuns(r.runs);
         // CSS escapes undone, and the real hosts this recording knows, too (T3, K5; review R23).
-        const hosts = [...Object.keys(rec.aliases || {}).map(hostOf), ...policy.commercialHosts.map((h) => String(h).replace(/^\*\./, ''))];
-        if (S.finalScan(oneLine(t.selector), { keywords: settings.keywords, hosts: hosts.filter(Boolean) }).length) r.kinds.push('selector');
+        if (S.finalScan(oneLine(t.selector), { keywords: settings.keywords, hosts: knownHosts() }).length) r.kinds.push('selector');
         // Cut like any kept text, with the "…" that says so (T3; review R21).
         const chars = [...selector];
         if (!r.kinds.length) step.target.selector = chars.length > LIMITS.selector ? `${chars.slice(0, LIMITS.selector).join('')}…` : selector;
@@ -260,6 +264,16 @@
     if (type === 'note') {
       step.note = text(raw.note, LIMITS.note);
       if (NOTE_KINDS.has(raw.kind)) step.kind = raw.kind;
+    }
+    if (type === 'notice') {
+      // Runs (#28), masked in the page and again here; anything else is refused.
+      const runs = scrubRuns(raw.notice, { keywords: settings.keywords, maxLength: LIMITS.notice });
+      if (!runs || !renderRuns(runs).trim()) return null;
+      step.notice = runs.map((p) => (typeof p === 'string' ? oneLine(p) : p));
+      if (S.finalScan({ notice: step.notice }, { hosts: knownHosts() }).length) return null;
+      // The content script sends no kinds for a notice: count every masked part it holds (M1).
+      kinds.push(...runKinds(step.notice));
+      if (NOTICE_LEVELS.has(raw.level)) step.level = raw.level;
     }
     // Only what this kind of step may carry, and nothing without what it must (row T6).
     const rule = STEP_RULES[type];

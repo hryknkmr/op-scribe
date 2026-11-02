@@ -88,6 +88,7 @@
   }
 
   const NOTE_KIND_LABELS = { bug: '不具合', question: '疑問', idea: '気づき', next: '次に試す' };
+  const noticeLabel = (step) => (step.level === 'alert' ? '警告' : '通知');
 
   /**
    * A note written in the side panel has no URL and no page to belong to. It is
@@ -199,6 +200,8 @@
       }
       case 'note':
         return `（${NOTE_KIND_LABELS[step.kind] || '確認'}）${txt(step.note)}`;
+      case 'notice':
+        return `${noticeLabel(step)}「${txt(step.notice)}」が表示される`;
       default:
         return `${step.type} 操作`;
     }
@@ -232,6 +235,15 @@
         else if (last) last.expected += ` / ${note}`;
         else notes.push(note);
         previous = step;
+        continue;
+      }
+      // What the page showed is an observation, not an expected result. A navigation
+      // after it is still caused by the operation, so it does not become previous.
+      if (step.type === 'notice') {
+        const shown = humanize(`${noticeLabel(step)}: ${txt(step.notice)}`);
+        const last = out[out.length - 1];
+        if (last) (last.observed ||= []).push(shown);
+        else notes.push(shown);
         continue;
       }
       if (step.type === 'navigate' && previous && NAVIGATION_CAUSES.has(previous.type)
@@ -288,6 +300,7 @@
     (repro.steps || []).forEach((step, i) => {
       lines.push(`${i + 1}. ${line(step.action)}`);
       if (step.expected) lines.push(`   - 期待結果: ${line(step.expected)}`);
+      for (const shown of step.observed || []) lines.push(`   - 画面の表示: ${line(shown)}`);
     });
     if (repro.findings?.length) {
       lines.push('', '## 探索メモ', ...repro.findings.map((f) => {
@@ -329,6 +342,8 @@
     add('checked', step.checked);
     add('key', step.key);
     add('tool', txt(step.tool));
+    add('level', step.level);
+    add('notice', txt(step.notice));
     if (step.args !== undefined) add('args', displayArgs(step.args));
     // Every step says where it came from: the person (user), the page (agent) or either (unknown) (W7).
     add('source', step.source);
@@ -383,6 +398,10 @@
       if (step === start) { previous = step; continue; }
       if (step.type === 'note' && step.kind) {
         out.push(`    # [${NOTE_KIND_LABELS[step.kind]}] ${line(humanize(txt(step.note)))}`);
+        continue;
+      }
+      if (step.type === 'notice') {
+        push('Then', humanize(describeStep(step)), attributesOf(step));
         continue;
       }
       if (step.type === 'note') {

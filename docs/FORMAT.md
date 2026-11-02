@@ -68,7 +68,7 @@ Feature: 記録された操作の再現
 | --- | --- |
 | `Given`（Background） | 記録開始時の画面 |
 | `When` | ユーザー（または agent）の操作 1 つ |
-| `Then` | 操作の直後 4 秒以内に起きた画面遷移、操作ログに追加した期待結果・確認点 |
+| `Then` | 操作の直後 4 秒以内に起きた画面遷移、操作ログに追加した期待結果・確認点、操作の直後 5 秒以内のページの通知（`action` が `notice`。観測した事実で、期待結果ではない） |
 | `And` | 直前と同じ種類が続くとき |
 
 操作に起因しない遷移（アドレスバーへの直接入力など）は `When "…" を開く` になります。
@@ -77,7 +77,7 @@ Feature: 記録された操作の再現
 
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
-| `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` |
+| `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `submit` `tool` `navigate` `notice` |
 | `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/[[id]]` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
 | `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
@@ -88,7 +88,8 @@ Feature: 記録された操作の再現
 | `checked` | チェック操作後の状態 | `true` |
 | `key` | 押したキー | `Enter` `meta+Enter` `Escape` |
 | `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
-| `source` | 人の操作は `user`、WebMCP のツール呼び出し・追記は `agent`、タブの遷移は `unknown`（人かページか見分けられない） | |
+| `level` / `notice` | ページの通知の強さ（`status` / `alert`）と文（伏せ済み・200 字まで） | `alert` / `保存できませんでした` |
+| `source` | 人の操作は `user`、WebMCP のツール呼び出し・追記は `agent`、タブの遷移とページの通知は `unknown`（人かページか見分けられない） | |
 
 再現する側（人・AI）へのルール:
 
@@ -164,6 +165,8 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 ```
 
 - `t` は記録開始からの経過ミリ秒です。
+- `type: "notice"` は、人の操作の直後にページが通知領域に出した文です。`notice`（文）と `level`（`status` / `alert`）を持ち、
+  商用環境のステップにはありません。観測した事実なので、Markdown では期待結果と分けて「画面の表示」と書きます。
 - `env` は、そのステップが「商用環境のホスト」での操作か（`commercial`）、それ以外か（`standard`）です。
   拡張の service worker が、Chrome が伝える送信元から判定します。`privacy.coverage` は全ステップの `env` のまとめです。
 - 入力値（`value`）と WebMCP の引数の文字列・数値は、**型の付いた値**です。

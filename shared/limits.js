@@ -17,6 +17,7 @@
     kept: Object.freeze({ choice: 120, search: 120, text: 200, arg: 200 }),
     name: 80,
     note: 300,
+    notice: 200,
     tool: 80,
     toolList: 50,
     selector: 160,
@@ -34,7 +35,7 @@
     environment: 60,
     steps: 500,
     // Steps not from a trusted event of the person (source 'agent': WebMCP tool calls and expectations;
-    // 'unknown': the tab's navigations, which a page script can cause too): at most this many
+    // 'unknown': the tab's navigations and the page's notices, which a page script can cause too): at most this many
     // together, so they never push the person's steps out (W7, #17).
     agentSteps: 100,
     // chrome.storage.session holds 10 MiB for everything the extension keeps there, shared out
@@ -139,7 +140,8 @@
     key: { required: ['key'], allowed: ['url', 'target', 'key'] },
     submit: { required: [], allowed: ['url', 'target'] },
     tool: { required: ['tool', 'ok'], allowed: ['url', 'tool', 'ok', 'args'] },
-    note: { required: ['note'], allowed: ['url', 'note', 'kind'] }
+    note: { required: ['note'], allowed: ['url', 'note', 'kind'] },
+    notice: { required: ['url', 'notice', 'level'], allowed: ['url', 'notice', 'level'] }
   });
 
   /**
@@ -209,6 +211,7 @@
     field: words(['secret', 'pii', 'choice', 'search', 'text', 'file', 'arg']),
     // A typed value's kind, and a note's kind (#32).
     kind: words(Object.values(TYPED_SCHEMA.length).flat(), Object.values(TYPED_SCHEMA.redacted).flat(), ['bug', 'question', 'idea', 'next']),
+    level: words(['status', 'alert']),
     redacted: words(RUN_KINDS.text, RUN_KINDS.url),
     key: (value) => /^(?:ctrl\+)?(?:meta\+)?(?:alt\+)?Enter$|^Escape$/.test(value),
     role: words([...ARIA_ROLES]),
