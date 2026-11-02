@@ -197,27 +197,31 @@ const VERDICT_REASONS = {
   BAD_VERDICT: '判定を読み取れませんでした'
 };
 /**
- * What is being written for each expectation, by recording and ref, until it is saved: the list
- * is drawn again whenever a step arrives, and a choice or a half-written actual result stays.
- * The recording id is in the key: a ref may come back in another recording (ADR 0005).
+ * What the tester changed in a verdict form and has not saved, by recording and ref: the list is
+ * drawn again whenever a step arrives, and only a change of theirs is carried over. A form with
+ * no change shows what the worker kept, so a verdict saved in another panel is what is seen.
+ * The recording id is in the key, a ref may come back in another recording (ADR 0005); neither
+ * has a space in it.
  */
 const verdictDrafts = new Map();
 const draftKey = (rec, step) => `${rec.id} ${step.ref}`;
 
 /**
  * The verdict of one expectation (ADR 0005): not judged, OK or NG, and for an NG the actual
- * result, which the browser requires before it sends. Saved by the recording id and the ref
- * only; the panel shows what the worker kept, not what it sent.
+ * result. Saved by the recording id and the ref only; the panel shows what the worker kept,
+ * not what it sent. The saved actual result is shown, never put back into the field: its masked
+ * parts would go back as plain text. A new one replaces it; none keeps it.
  */
 function verdictForm(rec, step) {
-  const saved = { verdict: step.verdict || '', actual: step.actual ? D.humanize(S.renderRuns(step.actual)) : '' };
-  const draft = verdictDrafts.get(draftKey(rec, step)) || saved;
+  const key = draftKey(rec, step);
+  const saved = step.verdict || '';
+  const draft = verdictDrafts.get(key);
   const form = document.createElement('form');
   form.className = 'verdict';
   form.dataset.ref = step.ref;
   const fieldset = document.createElement('fieldset');
   const legend = document.createElement('legend');
-  legend.textContent = `判定（${step.ref}）: ${VERDICT_LABELS[saved.verdict]}`;
+  legend.textContent = `判定（${step.ref}）: ${VERDICT_LABELS[saved]}`;
   fieldset.append(legend);
   for (const value of ['', 'ok', 'ng']) {
     const label = document.createElement('label');
@@ -225,20 +229,27 @@ function verdictForm(rec, step) {
     radio.type = 'radio';
     radio.name = 'verdict';
     radio.value = value;
-    radio.checked = draft.verdict === value;
+    radio.checked = (draft ? draft.verdict : saved) === value;
     label.append(radio, ` ${VERDICT_LABELS[value]}`);
     fieldset.append(label);
   }
   const actualLabel = document.createElement('label');
   actualLabel.className = 'field';
   const caption = document.createElement('span');
-  caption.textContent = '実際の結果（NG のとき必須）';
   const actual = document.createElement('input');
   actual.type = 'text';
   actual.name = 'actual';
   actual.maxLength = LIMITS.actual;
-  actual.value = draft.actual;
+  actual.value = draft?.actualEdited ? draft.actual : '';
   actualLabel.append(caption, actual);
+  if (saved === 'ng' && step.actual) {
+    const kept = document.createElement('small');
+    kept.textContent = `保存済み: ${D.humanize(S.renderRuns(step.actual))}`;
+    actualLabel.append(kept);
+    caption.textContent = '実際の結果（書くと保存済みの文を置き換える）';
+  } else {
+    caption.textContent = '実際の結果（NG のとき必須）';
+  }
   const save = document.createElement('button');
   save.type = 'submit';
   save.className = 'secondary';
@@ -252,38 +263,52 @@ function verdictForm(rec, step) {
   form.append(fieldset, status);
 
   const choice = () => form.querySelector('[name="verdict"]:checked')?.value ?? '';
-  const sync = () => {
+  const edited = () => Boolean(verdictDrafts.get(key)?.actualEdited);
+  // An actual result is needed for an NG chosen now, or one whose text was changed; a saved NG keeps its own.
+  const needsActual = () => choice() === 'ng' && (saved !== 'ng' || edited());
+  const show = () => {
     const ng = choice() === 'ng';
     // Hidden and disabled unless NG, so a check it failed as an NG never holds back an OK.
     actualLabel.hidden = !ng;
     actual.disabled = !ng;
-    actual.required = ng;
-    if (!ng) actual.setCustomValidity('');
-    verdictDrafts.set(draftKey(rec, step), { verdict: choice(), actual: actual.value });
+    actual.required = needsActual();
+    if (!actual.required) actual.setCustomValidity('');
   };
-  sync();
-  form.addEventListener('change', sync);
+  show();
+  // Only what the tester does becomes a draft; drawing the form never does.
+  const remember = (actualEdited) => {
+    verdictDrafts.set(key, { verdict: choice(), actual: actual.value, actualEdited });
+    show();
+  };
+  form.addEventListener('change', (event) => { if (event.target.name === 'verdict') remember(edited()); });
   actual.addEventListener('input', () => {
     actual.setCustomValidity('');
-    sync();
+    remember(true);
   });
   actual.addEventListener('invalid', () => actual.setCustomValidity(VERDICT_REASONS.NO_ACTUAL));
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const verdict = choice();
-    if (verdict === 'ng' && !actual.value.trim()) {
+    if (needsActual() && !actual.value.trim()) {
       actual.value = '';
       actual.reportValidity();
       return;
     }
+    // Nothing changed: the same verdict, and for a saved NG no new actual result.
+    if (verdict === saved && !(verdict === 'ng' && edited())) {
+      verdictDrafts.delete(key);
+      status.textContent = '変更はありません';
+      return;
+    }
     save.disabled = true;
     // What is sent: a change made while the reply is awaited is a draft of its own and stays.
-    const sent = JSON.stringify(verdictDrafts.get(draftKey(rec, step)));
+    const sent = JSON.stringify(verdictDrafts.get(key));
+    const replace = verdict === 'ng' && edited();
     const reply = await send('SET_VERDICT', {
-      recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(verdict === 'ng' && { actual: actual.value })
+      recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(replace && { actual: actual.value })
     });
     save.disabled = false;
-    if (reply?.ok && JSON.stringify(verdictDrafts.get(draftKey(rec, step))) === sent) verdictDrafts.delete(draftKey(rec, step));
+    if (reply?.ok && JSON.stringify(verdictDrafts.get(key)) === sent) verdictDrafts.delete(key);
     // What the worker kept is drawn from the recording read again, whatever the reply.
     await refresh();
     if (!reply?.ok) {

@@ -134,3 +134,38 @@ test('a change made while a verdict is being saved is kept as a draft (ADR 0005)
   await expect(ui.locator('form.verdict').getByLabel('NG', { exact: true })).toBeChecked();
   await expect(ui.locator('form.verdict [name="actual"]')).toHaveValue('エラーが出る');
 });
+
+test('an untouched verdict form shows what another panel saved, and a saved actual result is shown, never sent back (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('保存できる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  await expect(ui.locator('form.verdict')).toHaveCount(1);
+  const { id, steps } = await panel.recording();
+  const { ref } = steps.find((s) => s.type === 'note');
+  // Another panel saves an NG whose actual result has a masked part.
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ng', actual: '確認メールが tester@example.com に届かない' })).toEqual({ ok: true });
+  const form = ui.locator('form.verdict');
+  await expect(form.getByLabel('NG', { exact: true })).toBeChecked();
+  await expect(form.locator('small')).toContainText('保存済み: 確認メールが ‹メールアドレス› に届かない');
+  await expect(form.locator('[name="actual"]')).toHaveValue('');
+  const saved = (await panel.recording()).steps.find((s) => s.ref === ref).actual;
+  expect(saved).toContainEqual({ redacted: 'email' });
+  // Saving it unchanged sends nothing: the masked part stays a masked part.
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__verdicts = 0;
+    chrome.runtime.sendMessage = (message) => { if (message?.type === 'SET_VERDICT') window.__verdicts += 1; return original(message); };
+  });
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect(form.locator('[role="status"]')).toHaveText('変更はありません');
+  expect(await ui.evaluate(() => window.__verdicts)).toBe(0);
+  expect((await panel.recording()).steps.find((s) => s.ref === ref).actual).toEqual(saved);
+  // And another panel's OK is what this one shows next.
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toEqual({ ok: true });
+  await expect(ui.locator('form.verdict').getByLabel('OK', { exact: true })).toBeChecked();
+});
