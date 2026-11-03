@@ -175,7 +175,7 @@ function renderStatus() {
     return;
   }
   const live = recording?.state === 'recording';
-  // The tabs the recording records, and those opened from them that wait for their site (#40).
+  // The tabs the recording records, and those opened from them that wait to be added here (#40, #72).
   const isRecTab = live && (recording.tabIds || [recording.tabId]).includes(activeTab.id);
   const waits = live && (recording.waitingTabIds || []).includes(activeTab.id);
   ui.tabStatus.textContent = isRecTab ? `記録中: ${new URL(url).host}` : new URL(url).host;

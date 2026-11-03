@@ -132,8 +132,8 @@ function newId() {
  * reproduction it generated earlier no longer matches the recording (#16).
  */
 
-// The tabs a recording records (#40): the one it started in (tabId) and the ones opened from them,
-// and the tabs opened from them that wait for access to their site. Browser-only: never in the payload.
+// The tabs a recording records (#40): the one it started in (tabId) and the ones the person added from
+// the panel, and the tabs opened from them that wait to be added. Browser-only: never in the payload.
 const tabsOf = (rec) => (Array.isArray(rec?.tabIds) ? rec.tabIds : (Number.isInteger(rec?.tabId) ? [rec.tabId] : []));
 const waitingOf = (rec) => (Array.isArray(rec?.waitingTabIds) ? rec.waitingTabIds : []);
 // Tabs opened from the recording whose first page Chrome has not given yet (window.open): the first one decides.
@@ -259,11 +259,14 @@ const stopNow = (id, notTested) => mutate(async (rec) => {
  * is named). A waiting tab joins the recording here, the person's choice in the panel, with the
  * page it is on (url) as a navigation (#40).
  */
-const addPattern = (url, tabId) => mutate(async (rec) => {
+const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
+  let url = pageUrl;
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
   const target = Number.isInteger(tabId) ? tabId : rec.tabId;
   const waiting = isWaitingTab(rec, target);
   if (!waiting && !isRecordingTab(rec, target)) return { reply: { ok: false, error: 'NOT_RECORDING_TAB' } };
+  // A waiting tab joins at the page it is on now, not one the panel saw earlier (a redirect since).
+  if (waiting) url = (await chrome.tabs.get(target).catch(() => null))?.url || url;
   if (!httpUrl(url)) return { reply: { ok: false, error: 'NOT_HTTP' } };
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
@@ -416,8 +419,7 @@ async function handle(message, sender) {
 
   if (message.from === 'op-scribe/content') {
     const tabId = sender.tab?.id;
-    // A waiting tab joins when it opens or its URL changes (noticeOpenedTab, onUpdated), not here:
-    // a hello is answered as soon as it can be, before the page's tools are called.
+    // A waiting tab joins only from the panel (ADD_ORIGIN), never on a hello (#72).
     if (type === 'HELLO') return hello(tabId, sender);
     return mutate(async (rec) => {
       if (!isRecordingTab(rec, tabId) || message.recording !== rec.id) return { reply: { ok: false, error: 'NOT_RECORDING' } };
@@ -484,7 +486,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status !== 'complete') return;
   const asked = await getRecording();
-  if (!isRecordingTab(asked, tabId) || tabId !== asked.tabId) return;
+  // Every tab of the recording is asked, so a recorder that never got its answer says hello again (#72).
+  if (!isRecordingTab(asked, tabId)) return;
   try {
     await chrome.tabs.sendMessage(tabId, { from: 'op-scribe/worker', type: 'OPS_PING' });
   } catch {
