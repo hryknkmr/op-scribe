@@ -377,3 +377,25 @@ test('the masked URLs as they changed, with the three counts apart, and an appen
   // The page's note is no expectation of the tester's.
   assert.ok(!text.split('\n## 確かめたこと\n')[1].split('\n## ')[0].includes('ページの申告'));
 });
+
+test('a ticket says what to settle before replaying: an element with nothing to find it by, and a masked value (ADR 0005, #42 slice 3)', () => {
+  const cuesOf = (steps) => {
+    const text = D.bugTickets(recording([...steps, expect('出る', 'E-aaaaaa', 'ng', 'x')]))[0].text;
+    const part = text.split('\n再現の前に確かめること:\n')[1];
+    return part ? part.split('\n\n')[0].split('\n') : [];
+  };
+  const bare = { type: 'click', t: 0, env: 'standard', source: 'user', url: [A], target: { tag: 'div' } };
+  const secret = { type: 'input', t: 0, env: 'standard', source: 'user', url: [A], target: { role: 'textbox', name: ['パスワード'] }, value: typed.redacted('secret', 'secret') };
+  const kept = { type: 'input', t: 0, env: 'standard', source: 'user', url: [A], target: { role: 'searchbox', name: ['検索'] }, value: typed.kept('search', ['靴']) };
+  const pageKey = { type: 'key', t: 0, env: 'standard', source: 'user', url: [A], key: 'Escape' };
+  const agentTool = tool('x', A);
+  assert.deepEqual(cuesOf([nav(A), bare, secret, kept, pageKey, agentTool, bare]), [
+    '- 要素をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）',
+    '- 「パスワード」入力欄に ‹秘匿値› を入力する（値を伏せてある。テスト値を用意して使い、伏せた値は推測しない）'
+  ]);
+  // A selector or a name is enough to find it by; nothing to settle, no section.
+  assert.deepEqual(cuesOf([nav(A), { ...bare, target: { tag: 'div', selector: '#save' } }, kept]), []);
+  // Only the steps of the ticket: what comes after its NG is not looked at.
+  const after = D.bugTickets(recording([nav(A), expect('出る', 'E-aaaaaa', 'ng', 'x'), bare]))[0].text;
+  assert.ok(!after.includes('再現の前に確かめること'), after);
+});

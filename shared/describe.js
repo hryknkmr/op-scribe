@@ -482,7 +482,31 @@
       lines.push(`${i + 1}. ${step.action}`);
       if (step.expected) lines.push(`   - その後: ${step.expected}`);
     });
+    const cues = replayCues(before);
+    if (cues.length) lines.push('', '再現の前に確かめること:', ...cues.map((c) => `- ${c}`));
     return lines;
+  }
+
+  // The person's operations that act on an element (a key may be pressed on the page itself).
+  const TARGETED = new Set(['click', 'input', 'select', 'check', 'upload']);
+  const MASKED_VALUES = new Set(['input', 'select', 'upload']);
+
+  /**
+   * What to settle before replaying the steps (ADR 0005, Issue #42 slice 3), by fixed rules:
+   * an operation whose element has no role, name or selector to find it by, and a value that
+   * was masked, which the tester supplies. Each step's sentence once, in the order recorded.
+   */
+  function replayCues(steps) {
+    const cues = [];
+    for (const step of steps) {
+      if (step.source !== 'user') continue;
+      const sentence = shown(describeStep(step));
+      const acts = TARGETED.has(step.type) || (step.type === 'key' && step.target);
+      const t = step.target;
+      if (acts && !(t && (t.role || txt(t.name) || t.selector))) cues.push(`${sentence}（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）`);
+      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept') cues.push(`${sentence}（値を伏せてある。テスト値を用意して使い、伏せた値は推測しない）`);
+    }
+    return [...new Set(cues)];
   }
 
   /**
