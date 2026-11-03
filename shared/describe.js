@@ -493,11 +493,22 @@
 
   /**
    * What to settle before replaying the steps (ADR 0005, Issue #42 slice 3), by fixed rules:
-   * an operation whose element has no role, name or selector to find it by, and a value that
+   * an operation whose sentence gives nothing to find its element by, and a value that
    * was masked, which the tester supplies. Each step's sentence once, in the order recorded.
    */
   const NO_CUE = '対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す';
   const MASKED = '値を伏せてある。テスト値を用意して使い、伏せた値は推測しない';
+  /**
+   * Whether the sentence of targetText() shows something to find the element by (review r45):
+   * a name with the page's own characters (not only masked parts, which read ‹メールアドレス›),
+   * a role the sentence names (ROLE_NOUN; any other role reads 要素), or a selector.
+   */
+  function hasCue(target) {
+    if (!target) return false;
+    const parts = Array.isArray(target.name) ? target.name : [target.name];
+    const named = parts.some((p) => typeof p === 'string' && p.replace(HIDDEN, '').trim());
+    return named || Boolean(ROLE_NOUN[target.role]) || Boolean(target.selector);
+  }
   function replayCues(steps) {
     // By sentence, in the order first recorded; its notes in a fixed order, each once.
     const bySentence = new Map();
@@ -505,9 +516,8 @@
       if (step.source !== 'user') continue;
       const sentence = shown(describeStep(step));
       const acts = TARGETED.has(step.type) || (step.type === 'key' && step.target);
-      const t = step.target;
       const notes = bySentence.get(sentence) || new Set();
-      if (acts && !(t && (t.role || txt(t.name) || t.selector))) notes.add(NO_CUE);
+      if (acts && !hasCue(step.target)) notes.add(NO_CUE);
       // A field emptied (length 0) needs no value: its sentence says to empty it.
       const emptied = step.value?.treatment === 'length' && step.value.length === 0;
       if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept' && !emptied) notes.add(MASKED);

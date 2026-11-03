@@ -403,6 +403,21 @@ test('a ticket says what to settle before replaying: an element with nothing to 
   assert.deepEqual(cuesOf([nav(A), emptied]), []);
   // A selector or a name is enough to find it by; nothing to settle, no section.
   assert.deepEqual(cuesOf([nav(A), { ...bare, target: { tag: 'div', selector: '#save' } }, kept]), []);
+  // A cue is what the sentence shows (review r45): a name of masked parts only, or a role the
+  // sentence does not name (it reads 要素), gives the reader nothing to find the element by.
+  const maskedName = { ...bare, target: { name: [{ redacted: 'email' }] } };
+  const unnamedRole = { ...bare, target: { role: 'slider' } };
+  const blankName = { ...bare, target: { role: 'slider', name: ['​ '] } };
+  assert.deepEqual(cuesOf([nav(A), maskedName, unnamedRole, blankName]), [
+    '- 「‹メールアドレス›」をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）',
+    '- 要素をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）',
+    '- 「 」をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）'
+  ]);
+  // The page's own characters beside a masked part, a role the sentence names, or a selector: a cue.
+  assert.deepEqual(cuesOf([nav(A),
+    { ...bare, target: { role: 'slider', name: ['音量 ', { redacted: 'number' }] } },
+    { ...bare, target: { role: 'button', name: [{ redacted: 'email' }] } },
+    { ...bare, target: { role: 'slider', selector: '#volume' } }]), []);
   // Only the steps of the ticket: what comes after its NG is not looked at.
   const after = D.bugTickets(recording([nav(A), expect('出る', 'E-aaaaaa', 'ng', 'x'), bare]))[0].text;
   assert.ok(!after.includes('再現の前に確かめること'), after);
