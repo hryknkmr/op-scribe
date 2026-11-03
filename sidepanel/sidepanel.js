@@ -12,6 +12,7 @@ const S = globalThis.OpScribeSanitize;
 const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
 const D = globalThis.OpScribeDescribe;
 const P = globalThis.OpScribePayload;
+const F = globalThis.OpScribeFormats;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -23,6 +24,10 @@ const ui = {
   recState: el('rec-state'),
   start: el('rec-start'),
   stop: el('rec-stop'),
+  scope: el('scope'),
+  targetVersion: el('target-version'),
+  notTested: el('not-tested'),
+  recMeta: el('rec-meta'),
   clear: el('rec-clear'),
   originGate: el('origin-gate'),
   addOrigin: el('add-origin'),
@@ -40,6 +45,12 @@ const ui = {
   gherkin: el('gherkin'),
   preview: el('preview'),
   copyMd: el('copy-md'),
+  ticketRef: el('ticket-ref'),
+  copyTicket: el('copy-ticket'),
+  saveTicket: el('save-ticket'),
+  copySession: el('copy-session'),
+  saveSession: el('save-session'),
+  formatHint: el('format-hint'),
   copyGherkin: el('copy-gherkin'),
   download: el('download'),
   outputStatus: el('output-status'),
@@ -165,8 +176,9 @@ async function refreshActiveTab() {
   }
 }
 
-// Why the last START failed; a plain status line would be rewritten by the next render.
+// Why the last START or STOP failed; a plain status line would be rewritten by the next render.
 let startError = '';
+let stopError = '';
 
 function renderStatus() {
   const url = activeTab?.url || '';
@@ -182,16 +194,170 @@ function renderStatus() {
   if (waits) ui.tabStatus.textContent = `記録中のタブから開いたタブです。記録に加えるには、下の「このタブも記録する」を押してください: ${new URL(url).host}`;
   if (isRecTab && activeTab.id === recording.tabId && !recording.attached) ui.tabStatus.textContent = 'このページの記録を確認しています。表示が続くときは、サイトの追加かページの再読み込みをお試しください';
   if (startError) ui.tabStatus.textContent = startError;
+  if (stopError) ui.tabStatus.textContent = stopError;
 }
+
+/** The tester's expectation (ADR 0005): a note without a kind, written in this panel, with its ref. */
+const isExpectation = (step) => step.type === 'note' && !step.kind && step.source === 'user' && typeof step.ref === 'string';
+
+const VERDICT_LABELS = { ok: 'OK', ng: 'NG', '': '未判定' };
+const VERDICT_REASONS = {
+  OTHER_RECORDING: '別の記録に変わったため保存しませんでした',
+  NO_REF: 'この期待結果は記録から消えています',
+  NO_ACTUAL: 'NG には実際の結果が必要です',
+  BAD_VERDICT: '判定を読み取れませんでした'
+};
+/**
+ * What the tester changed in a verdict form and has not saved, by recording and ref: the list is
+ * drawn again whenever a step arrives, and only a change of theirs is carried over. A form with
+ * no change shows what the worker kept, so a verdict saved in another panel is what is seen.
+ * The recording id is in the key, a ref may come back in another recording (ADR 0005); neither
+ * has a space in it.
+ */
+const verdictDrafts = new Map();
+const draftKey = (rec, step) => `${rec.id} ${step.ref}`;
+
+/**
+ * The verdict of one expectation (ADR 0005): not judged, OK or NG, and for an NG the actual
+ * result. Saved by the recording id and the ref only; the panel shows what the worker kept,
+ * not what it sent. The saved actual result is shown, never put back into the field: its masked
+ * parts would go back as plain text. A new one replaces it; none keeps it.
+ */
+function verdictForm(rec, step) {
+  const key = draftKey(rec, step);
+  const saved = step.verdict || '';
+  const draft = verdictDrafts.get(key);
+  const form = document.createElement('form');
+  form.className = 'verdict';
+  form.dataset.ref = step.ref;
+  const fieldset = document.createElement('fieldset');
+  const legend = document.createElement('legend');
+  legend.textContent = `判定（${step.ref}）: ${VERDICT_LABELS[saved]}`;
+  fieldset.append(legend);
+  for (const value of ['', 'ok', 'ng']) {
+    const label = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'verdict';
+    radio.value = value;
+    radio.checked = (draft ? draft.verdict : saved) === value;
+    label.append(radio, ` ${VERDICT_LABELS[value]}`);
+    fieldset.append(label);
+  }
+  const actualLabel = document.createElement('label');
+  actualLabel.className = 'field';
+  const caption = document.createElement('span');
+  const actual = document.createElement('input');
+  actual.type = 'text';
+  actual.name = 'actual';
+  actual.maxLength = LIMITS.actual;
+  actual.value = draft?.actualEdited ? draft.actual : '';
+  actualLabel.append(caption, actual);
+  if (saved === 'ng' && step.actual) {
+    const kept = document.createElement('small');
+    kept.textContent = `保存済み: ${D.humanize(S.renderRuns(step.actual))}`;
+    actualLabel.append(kept);
+    caption.textContent = '実際の結果（書くと保存済みの文を置き換える）';
+  } else {
+    caption.textContent = '実際の結果（NG のとき必須）';
+  }
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'secondary';
+  save.textContent = '判定を保存';
+  const status = document.createElement('p');
+  status.className = 'hint';
+  status.id = `verdict-status-${step.ref}`;
+  status.setAttribute('role', 'status');
+  form.setAttribute('aria-describedby', status.id);
+  fieldset.append(actualLabel, save);
+  form.append(fieldset, status);
+
+  const choice = () => form.querySelector('[name="verdict"]:checked')?.value ?? '';
+  const edited = () => Boolean(verdictDrafts.get(key)?.actualEdited);
+  // An actual result is needed for an NG chosen now, or one whose text was changed; a saved NG keeps its own.
+  const needsActual = () => choice() === 'ng' && (saved !== 'ng' || edited());
+  const show = () => {
+    const ng = choice() === 'ng';
+    // Hidden and disabled unless NG, so a check it failed as an NG never holds back an OK.
+    actualLabel.hidden = !ng;
+    actual.disabled = !ng;
+    actual.required = needsActual();
+    if (!actual.required) actual.setCustomValidity('');
+  };
+  show();
+  // Only what the tester does becomes a draft; drawing the form never does.
+  const remember = (actualEdited) => {
+    verdictDrafts.set(key, { verdict: choice(), actual: actual.value, actualEdited });
+    show();
+  };
+  form.addEventListener('change', (event) => { if (event.target.name === 'verdict') remember(edited()); });
+  actual.addEventListener('input', () => {
+    actual.setCustomValidity('');
+    remember(true);
+  });
+  actual.addEventListener('invalid', () => actual.setCustomValidity(VERDICT_REASONS.NO_ACTUAL));
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const verdict = choice();
+    if (needsActual() && !actual.value.trim()) {
+      actual.value = '';
+      actual.reportValidity();
+      return;
+    }
+    // Nothing changed: the same verdict, and for a saved NG no new actual result.
+    if (verdict === saved && !(verdict === 'ng' && edited())) {
+      verdictDrafts.delete(key);
+      status.textContent = '変更はありません';
+      return;
+    }
+    save.disabled = true;
+    // What is sent: a change made while the reply is awaited is a draft of its own and stays.
+    const sent = JSON.stringify(verdictDrafts.get(key));
+    const replace = verdict === 'ng' && edited();
+    const reply = await send('SET_VERDICT', {
+      recordingId: rec.id, ref: step.ref, verdict: verdict || null, ...(replace && { actual: actual.value })
+    });
+    save.disabled = false;
+    if (reply?.ok && JSON.stringify(verdictDrafts.get(key)) === sent) verdictDrafts.delete(key);
+    // What the worker kept is drawn from the recording read again, whatever the reply.
+    await refresh();
+    if (!reply?.ok) {
+      const shown = [...ui.steps.querySelectorAll('.verdict')].find((f) => f.dataset.ref === step.ref);
+      const line = shown?.querySelector('[role="status"]') || ui.outputStatus;
+      line.textContent = VERDICT_REASONS[reply?.reason] || `保存できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
+    }
+  });
+  return form;
+}
+
+/**
+ * The recording the panel showed last. What is written for a recording (what was not tested) is
+ * for that recording only: when another one is shown - discarded, a new start, another panel's
+ * stop and start - the field is emptied, whichever way it changed (ADR 0005).
+ */
+let shownRecordingId;
 
 function render() {
   const rec = recording;
+  if ((rec?.id ?? null) !== shownRecordingId) {
+    shownRecordingId = rec?.id ?? null;
+    ui.notTested.value = '';
+    stopError = '';
+  }
   const isRecording = rec?.state === 'recording';
   ui.recState.textContent = isRecording ? '記録中' : rec ? '停止（記録あり）' : '停止中';
   ui.recState.classList.toggle('live', isRecording);
   ui.start.disabled = isRecording || !pagePattern(activeTab?.url);
   ui.stop.disabled = !isRecording;
   ui.clear.disabled = !rec;
+  // Written at the start and at the stop (ADR 0005): each field only when it can still be sent.
+  ui.scope.disabled = isRecording;
+  ui.targetVersion.disabled = isRecording;
+  ui.notTested.disabled = !isRecording;
+  const meta = [['対象と範囲', rec?.scope], ['対象のバージョン', rec?.targetVersion], ['やっていないこと', rec?.notTested]]
+    .filter(([, runs]) => runs).map(([label, runs]) => `${label}: ${D.humanize(S.renderRuns(runs))}`);
+  ui.recMeta.textContent = meta.join(' / ');
 
   const pattern = pagePattern(activeTab?.url);
   const ofRecording = isRecording && [...(rec.tabIds || [rec.tabId]), ...(rec.waitingTabIds || [])].includes(activeTab?.id);
@@ -202,6 +368,9 @@ function render() {
 
   const steps = rec?.steps || [];
   ui.stepCount.textContent = String(steps.length);
+  // The list is drawn again whenever a step arrives: a verdict being written keeps its focus.
+  const focused = document.activeElement?.closest?.('.verdict') ? document.activeElement : null;
+  const refocus = focused && { ref: focused.closest('.verdict').dataset.ref, name: focused.name, value: focused.value, at: focused.selectionStart };
   ui.steps.replaceChildren();
   steps.forEach((step, index) => {
     const li = document.createElement('li');
@@ -222,9 +391,19 @@ function render() {
     // The recording as shown: a second click before the list is drawn again removes nothing.
     remove.addEventListener('click', () => send('DELETE_STEP', { index, basis: basisOf(rec) }));
     li.append(text, remove);
+    if (isExpectation(step)) li.append(verdictForm(rec, step));
     ui.steps.append(li);
   });
+  if (refocus) {
+    const form = [...ui.steps.querySelectorAll('.verdict')].find((f) => f.dataset.ref === refocus.ref);
+    const field = refocus.name && form?.querySelector(refocus.name === 'actual' ? '[name="actual"]' : `[name="${refocus.name}"][value="${refocus.value}"]`);
+    if (field) {
+      field.focus();
+      if (refocus.name === 'actual' && refocus.at !== null) field.setSelectionRange(refocus.at, refocus.at);
+    }
+  }
 
+  renderFormats(rec);
   ui.gherkin.value = rec ? D.toGherkin(rec) : '';
   if (isStale(rec)) ui.genStatus.textContent = STALE;
 
@@ -253,8 +432,13 @@ ui.start.addEventListener('click', () => {
       ui.tabStatus.textContent = 'サイトへのアクセスが許可されなかったため記録を開始できません';
       return;
     }
-    const result = await send('START', { tabId: tab.id, url: tab.url });
+    const result = await send('START', { tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value });
     startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
+    if (result?.ok) {
+      ui.scope.value = '';
+      ui.targetVersion.value = '';
+      verdictDrafts.clear();
+    }
     ui.repro.value = '';
     generator = 'none';
     basis = null;
@@ -275,13 +459,21 @@ ui.addOrigin.addEventListener('click', () => {
 });
 
 ui.stop.addEventListener('click', async () => {
-  await send('STOP');
+  // The recording this panel shows, with what was not tested (ADR 0005).
+  const reply = await send('STOP', { recordingId: recording?.id, notTested: ui.notTested.value });
+  const STOP_REASONS = {
+    OTHER_RECORDING: '別の記録に変わったため停止しませんでした',
+    ALREADY_STOPPED: 'すでに停止していたため、やっていないことは保存しませんでした'
+  };
+  stopError = reply?.ok ? '' : STOP_REASONS[reply?.reason] || `停止できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
+  if (reply?.ok) ui.notTested.value = '';
   await refresh();
 });
 
 ui.clear.addEventListener('click', async () => {
   if (!confirm('記録を破棄します。元に戻せません。')) return;
   await send('CLEAR');
+  verdictDrafts.clear();
   ui.repro.value = '';
   basis = null;
   generator = 'none';
@@ -513,6 +705,79 @@ async function copyFromPayload(label, pick) {
 }
 
 ui.copyMd.addEventListener('click', () => copyFromPayload('Markdown', (p) => p.reproduction.markdown));
+
+// ------------------------------------------------------------ the readers' formats (ADR 0005)
+
+/** The NG expectations to make a ticket of, and whether a session record can be made yet. */
+function renderFormats(rec) {
+  const ngs = (rec?.steps || []).filter((s) => isExpectation(s) && s.verdict === 'ng');
+  const chosen = ui.ticketRef.value;
+  ui.ticketRef.replaceChildren(...ngs.map((s) => {
+    const option = document.createElement('option');
+    option.value = s.ref;
+    option.textContent = `${s.ref} ${D.humanize(S.renderRuns(s.note))}`;
+    return option;
+  }));
+  if (ngs.some((s) => s.ref === chosen)) ui.ticketRef.value = chosen;
+  const noTicket = !ngs.length;
+  ui.ticketRef.disabled = noTicket;
+  ui.copyTicket.disabled = noTicket;
+  ui.saveTicket.disabled = noTicket;
+  const noSession = !rec?.endedAt;
+  ui.copySession.disabled = noSession;
+  ui.saveSession.disabled = noSession;
+  ui.formatHint.textContent = [
+    noTicket ? 'バグチケットは、期待結果を NG にすると作れます。' : '',
+    noSession ? '実施記録は、記録を止めると作れます。' : ''
+  ].filter(Boolean).join(' ');
+}
+
+/**
+ * One format, made now from the recording through the exit (shared/formats.js): the checked
+ * payload, then the whole text scanned with the keywords as they are now. Never the hand-edited
+ * Markdown, so a stale draft does not stop it. Returns { rec, text } or { error }.
+ */
+async function formatNow(which) {
+  await loadSettings();
+  const rec = await loadRecording();
+  if (!rec) return { error: '記録がありません' };
+  const payload = P.buildPayload(rec, { generator: 'none', markdown: '' }, environment());
+  const made = F.checkedFormats(payload, { keywords: settings.keywords, hosts: S.aliasedHosts(rec.aliases) });
+  if (made.problems) return { error: blockedMessage(made.problems.map((p) => ({ path: p.path, kinds: [`形: ${p.problem}`] }))) };
+  const out = which === 'session' ? made.session : made.tickets.find((t) => t.ref === ui.ticketRef.value);
+  if (!out) return { error: which === 'session' ? '実施記録は、記録を止めてから作れます' : 'この NG の期待結果は記録にありません' };
+  if (out.findings.length) return { error: blockedMessage(out.findings) };
+  return { rec, text: out.text, name: which === 'session' ? `${rec.id}-session.md` : `${rec.id}-${out.ref}.md` };
+}
+
+async function copyFormat(which, label) {
+  const made = await formatNow(which);
+  if (made.error) {
+    ui.outputStatus.textContent = made.error;
+    return;
+  }
+  await navigator.clipboard.writeText(made.text);
+  ui.outputStatus.textContent = `${label}をコピーしました`;
+}
+
+async function saveFormat(which) {
+  const made = await formatNow(which);
+  if (made.error) {
+    ui.outputStatus.textContent = made.error;
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([made.text], { type: 'text/markdown' }));
+  link.download = made.name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  ui.outputStatus.textContent = `${link.download} を保存しました`;
+}
+
+ui.copyTicket.addEventListener('click', () => copyFormat('ticket', 'バグチケット'));
+ui.saveTicket.addEventListener('click', () => saveFormat('ticket'));
+ui.copySession.addEventListener('click', () => copyFormat('session', '実施記録'));
+ui.saveSession.addEventListener('click', () => saveFormat('session'));
 ui.copyGherkin.addEventListener('click', () => copyFromPayload('Gherkin', (p) => p.reproduction.gherkin));
 
 ui.download.addEventListener('click', async () => {

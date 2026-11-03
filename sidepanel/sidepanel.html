@@ -19,11 +19,27 @@
           開始すると、このタブのサイトに対する記録許可を求めます。「商用環境のホスト」での自由入力は文字数だけを残し、
           記録データはブラウザを閉じると消えます。
         </p>
+        <fieldset class="fields">
+          <legend>開始するときに書く（どちらも空欄でよい）</legend>
+          <label class="field">
+            <span>対象と範囲</span>
+            <input id="scope" type="text" maxlength="300" placeholder="例: 検索画面の絞り込み">
+          </label>
+          <label class="field">
+            <span>対象のバージョン</span>
+            <input id="target-version" type="text" maxlength="80" placeholder="例: 2.3.0">
+          </label>
+        </fieldset>
+        <label class="field">
+          <span>やっていないこと（停止するときに記録する。空欄でよい）</span>
+          <input id="not-tested" type="text" maxlength="300" placeholder="例: 決済と返品は確かめていない" disabled>
+        </label>
         <div class="row">
           <button id="rec-start" type="button">記録開始</button>
           <button id="rec-stop" type="button" class="secondary" disabled>停止</button>
           <button id="rec-clear" type="button" class="secondary" disabled>破棄</button>
         </div>
+        <p id="rec-meta" class="hint"></p>
         <div id="origin-gate" class="callout" hidden>
           <p>このサイトはまだ記録を許可していないため、ページ遷移以外の操作は記録されません。</p>
           <button id="add-origin" type="button" class="secondary">このサイトも記録する</button>
@@ -83,6 +99,19 @@
           <button id="copy-gherkin" type="button" class="secondary">Gherkin をコピー</button>
           <button id="download" type="button" class="secondary">JSON を保存</button>
         </div>
+        <fieldset class="fields">
+          <legend>読み手ごとの書式（記録から作る。手で編集した簡易手順は使わない）</legend>
+          <div class="row">
+            <select id="ticket-ref" aria-label="バグチケットにする NG の期待結果"></select>
+            <button id="copy-ticket" type="button" class="secondary">バグチケットをコピー</button>
+            <button id="save-ticket" type="button" class="secondary">保存</button>
+          </div>
+          <div class="row">
+            <button id="copy-session" type="button" class="secondary">実施記録をコピー</button>
+            <button id="save-session" type="button" class="secondary">保存</button>
+          </div>
+          <p id="format-hint" class="hint"></p>
+        </fieldset>
         <p id="output-status" class="hint"></p>
       </div>
     </details>
@@ -145,6 +174,7 @@
   <script src="../shared/sanitize.js"></script>
   <script src="../shared/describe.js"></script>
   <script src="../shared/payload.js"></script>
+  <script src="../shared/formats.js"></script>
   <script src="sidepanel.js" type="module"></script>
 </body>
 </html>

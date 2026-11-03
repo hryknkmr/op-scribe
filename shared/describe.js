@@ -426,7 +426,229 @@
     return `${out.map(line).join('\n')}\n`;
   }
 
-  const api = { rendered: txt, display, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin };
+  // ------------------------------------------------------- ADR 0005 formats
+
+  /** The tester's expectation (ADR 0005): a note without a kind, written in the side panel. */
+  const isExpectation = (step) => step.type === 'note' && !step.kind && step.source === 'user';
+  const VERDICTS = { ok: 'OK', ng: 'NG' };
+  const verdictOf = (step) => VERDICTS[step.verdict] || '未判定';
+  // What the browser handed over as the person's operation (W7): counted apart from tool calls and the page's notes.
+  const OPERATIONS = new Set(['click', 'input', 'select', 'check', 'upload', 'key']);
+  const isOperation = (step) => step.source === 'user' && OPERATIONS.has(step.type);
+  const UNKNOWN_SCREEN = '画面不明';
+  const TRIMMED = '記録の一部が欠けている可能性がある';
+
+  /** The masked URL of the closest step before index that has one, shown, or 画面不明. */
+  function screenBefore(steps, index) {
+    for (let i = index - 1; i >= 0; i -= 1) if (steps[i].url) return shown(txt(steps[i].url));
+    return UNKNOWN_SCREEN;
+  }
+
+  /**
+   * The notices shown for the expectation at index: from the closest person's operation, tool
+   * call or navigation before it (else the start), up to it, in order (ADR 0005).
+   */
+  function noticesBefore(steps, index) {
+    let from = 0;
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (isOperation(steps[i]) || steps[i].type === 'tool' || steps[i].type === 'navigate') { from = i + 1; break; }
+    }
+    return steps.slice(from, index).filter((s) => s.type === 'notice').map((s) => shown(describeStep(s)));
+  }
+
+  /** The environment and the version under test, one line each. */
+  function environmentLines(recording) {
+    const env = recording.environment || {};
+    const parts = ['browser', 'platform', 'language'].map((k) => (env[k] ? shown(txt(env[k])) : '')).filter(Boolean);
+    return [
+      `- 環境: ${parts.length ? parts.join(' / ') : '（記録なし）'}`,
+      `- 対象のバージョン: ${recording.targetVersion ? shown(txt(recording.targetVersion)) : '（記録なし）'}`
+    ];
+  }
+
+  /**
+   * The steps that bring the tester to the expectation at index, as the Markdown words them,
+   * without the expectations, the exploration notes, the page's notes or the notices: those are
+   * no steps to take (ADR 0005). A navigation right after an operation stays folded into it.
+   */
+  function reproductionBefore(recording, index) {
+    const before = recording.steps.slice(0, index).filter((s) => s.type !== 'note' && s.type !== 'notice');
+    const repro = buildReproduction({ ...recording, steps: before });
+    const lines = [];
+    if (recording.trimmed || recording.steps[0]?.type !== 'navigate') lines.push(`（${TRIMMED}）`);
+    lines.push(...repro.preconditions.map((p) => `- 前提: ${p}`));
+    if (!repro.steps.length) lines.push('（記録された操作なし）');
+    repro.steps.forEach((step, i) => {
+      lines.push(`${i + 1}. ${step.action}`);
+      if (step.expected) lines.push(`   - その後: ${step.expected}`);
+    });
+    const cues = replayCues(before);
+    if (cues.length) lines.push('', '再現の前に確かめること:', ...cues.map((c) => `- ${c}`));
+    return lines;
+  }
+
+  // The person's operations that act on an element (a key may be pressed on the page itself).
+  const TARGETED = new Set(['click', 'input', 'select', 'check', 'upload']);
+  const MASKED_VALUES = new Set(['input', 'select', 'upload']);
+
+  /**
+   * What to settle before replaying the steps (ADR 0005, Issue #42 slice 3), by fixed rules:
+   * an operation whose sentence gives nothing to find its element by, and a value that
+   * was masked, which the tester supplies. Each step's sentence once, in the order recorded.
+   */
+  const NO_CUE = '対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す';
+  const MASKED = '値を伏せてある。テスト値を用意して使い、伏せた値は推測しない';
+  /**
+   * Whether the sentence of targetText() shows something to find the element by (reviews r45, r46):
+   * a name with the page's own characters (not only masked parts, which read ‹メールアドレス›),
+   * a role the sentence names (ROLE_NOUN; any other role reads 要素), or the selector, which the
+   * sentence shows only when there is no name at all (a masked-only name hides it too).
+   */
+  function hasCue(target) {
+    if (!target) return false;
+    const parts = Array.isArray(target.name) ? target.name : [target.name];
+    const named = parts.some((p) => typeof p === 'string' && p.replace(HIDDEN, '').trim());
+    return named || Boolean(ROLE_NOUN[target.role]) || (Boolean(target.selector) && !txt(target.name));
+  }
+  function replayCues(steps) {
+    // By sentence, in the order first recorded; its notes in a fixed order, each once.
+    const bySentence = new Map();
+    for (const step of steps) {
+      if (step.source !== 'user') continue;
+      const sentence = shown(describeStep(step));
+      const acts = TARGETED.has(step.type) || (step.type === 'key' && step.target);
+      const notes = bySentence.get(sentence) || new Set();
+      if (acts && !hasCue(step.target)) notes.add(NO_CUE);
+      // A field emptied (length 0) needs no value: its sentence says to empty it.
+      const emptied = step.value?.treatment === 'length' && step.value.length === 0;
+      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept' && !emptied) notes.add(MASKED);
+      if (notes.size) bySentence.set(sentence, notes);
+    }
+    return [...bySentence].map(([sentence, notes]) => `${sentence}（${[NO_CUE, MASKED].filter((n) => notes.has(n)).join('。')}）`);
+  }
+
+  /**
+   * Format A (ADR 0005): one bug ticket for each expectation judged NG, built from a checked
+   * payload's recording. Returns [{ ref, text }] in the order of the recording.
+   */
+  function bugTickets(recording) {
+    const steps = recording?.steps || [];
+    const out = [];
+    steps.forEach((step, index) => {
+      if (!isExpectation(step) || step.verdict !== 'ng') return;
+      const expected = shown(txt(step.note));
+      const notices = noticesBefore(steps, index);
+      const lines = [
+        `# [${step.ref}] 『${expected}』が期待どおりにならない（${screenBefore(steps, index)}）`,
+        '',
+        '## 再現手順',
+        ...reproductionBefore(recording, index),
+        '',
+        '## 期待結果',
+        expected,
+        '',
+        '## 実際の結果',
+        shown(txt(step.actual)),
+        ...(notices.length ? ['', '画面に出た通知:', ...notices.map((n) => `- ${n}`)] : []),
+        '',
+        '## 環境・対象バージョン',
+        ...environmentLines(recording),
+        '',
+        `記録 ID: ${recording.id}`
+      ];
+      out.push({ ref: step.ref, text: `${lines.map((l) => humanize(line(l))).join('\n')}\n` });
+    });
+    return out;
+  }
+
+  /** The conclusion of a session record, by the first row of ADR 0005's table that applies. */
+  function conclusionOf(recording) {
+    const judged = recording.steps.filter(isExpectation);
+    const ng = judged.filter((s) => s.verdict === 'ng').length;
+    const ok = judged.filter((s) => s.verdict === 'ok').length;
+    const open = judged.length - ng - ok;
+    if (ng) return `問題あり（NG ${ng} 件）${open ? `（未判定 ${open} 件）` : ''}${recording.trimmed ? '（記録の一部が欠けている）' : ''}`;
+    if (recording.trimmed === 'user') return '判定なし（記録の一部が欠けている）';
+    if (!judged.length) return '判定なし（期待結果が無い）';
+    if (open) return `判定なし（未判定 ${open} 件）`;
+    return `確かめた範囲で問題なし（OK ${ok} 件）`;
+  }
+
+  /**
+   * The masked URLs in the order they changed (ADR 0005): a new part wherever a step's URL
+   * differs from the part it is in; a step without one stays in the part it is in, or a first
+   * 画面不明 part. Each part counts the person's operations, tool calls and the page's notes.
+   */
+  function screenParts(steps) {
+    const parts = [];
+    let current = null;
+    for (const step of steps) {
+      const url = step.url ? txt(step.url) : null;
+      if (!current || (url !== null && url !== current.url)) {
+        current = { url, operations: 0, tools: 0, reports: 0 };
+        parts.push(current);
+      }
+      if (isOperation(step)) current.operations += 1;
+      else if (step.type === 'tool') current.tools += 1;
+      else if (step.type === 'note' && step.source === 'agent') current.reports += 1;
+    }
+    return parts;
+  }
+
+  /** One step of the appendix: the template's sentence, with what kind of note it is. */
+  function appendixLine(step, i) {
+    if (step.type !== 'note') return `${i + 1}. ${shown(describeStep(step))}`;
+    const note = shown(txt(step.note));
+    if (step.source === 'agent') return `${i + 1}. ${note}（ページからの申告）`;
+    if (step.kind) return `${i + 1}. ${note}（${NOTE_KIND_LABELS[step.kind]}）`;
+    return `${i + 1}. ${note}（期待結果: ${verdictOf(step)}）`;
+  }
+
+  /**
+   * Format B (ADR 0005): the session record of one recording, built from a checked payload's
+   * recording once it has ended. null while it has no end, or an end before its start.
+   */
+  function sessionRecord(recording) {
+    if (!recording?.endedAt || !(Date.parse(recording.endedAt) >= Date.parse(recording.startedAt))) return null;
+    const steps = recording.steps || [];
+    const minutes = Math.floor((Date.parse(recording.endedAt) - Date.parse(recording.startedAt)) / 60000);
+    const lines = ['# 実施記録', '', `記録 ID: ${recording.id}`];
+    if (recording.trimmed) lines.push('', '（記録の一部が上限で消えている。操作の数・画面・付録も一部）');
+    lines.push('', '## 結論', conclusionOf(recording));
+    lines.push('', '## 対象と範囲', recording.scope ? shown(txt(recording.scope)) : '（記録なし）');
+    lines.push('', '## 対象のバージョン・環境', ...environmentLines(recording));
+    lines.push('', '## 実施した時間', `${recording.startedAt} 〜 ${recording.endedAt}（${minutes} 分）`);
+    lines.push('', '## 実施した操作', '伏せた URL の移り変わり（記録された操作は、ブラウザが人の操作として届けたもの）:');
+    screenParts(steps).forEach((part, i) => {
+      lines.push(`${i + 1}. ${part.url === null ? UNKNOWN_SCREEN : shown(part.url)}: 記録された操作 ${part.operations} 件 / ツール呼び出し ${part.tools} 件 / ページからの申告 ${part.reports} 件`);
+    });
+    lines.push('', '## 確かめたこと');
+    const expectations = steps.map((s, i) => [s, i]).filter(([s]) => isExpectation(s));
+    if (!expectations.length) lines.push('（期待結果なし）');
+    for (const [step, index] of expectations) {
+      lines.push(`- [${step.ref}] ${shown(txt(step.note))}（画面: ${screenBefore(steps, index)}）: ${verdictOf(step)}`);
+      if (step.verdict === 'ng') {
+        lines.push(`  - 実際の結果: ${shown(txt(step.actual))}`);
+        lines.push(...noticesBefore(steps, index).map((n) => `  - 画面に出た通知: ${n}`));
+        lines.push(`  - バグチケット [${step.ref}]`);
+      }
+    }
+    lines.push('', '## 見つけたこと');
+    const findings = steps.filter((s) => s.type === 'note' && s.kind);
+    if (!findings.length) lines.push('（なし）');
+    for (const kind of Object.keys(NOTE_KIND_LABELS)) {
+      const of = findings.filter((s) => s.kind === kind);
+      if (of.length) lines.push(`- ${NOTE_KIND_LABELS[kind]}`, ...of.map((s) => `  - ${shown(txt(s.note))}`));
+    }
+    lines.push('', '## やっていないこと', recording.notTested ? shown(txt(recording.notTested)) : '（記録なし）');
+    lines.push('', '## 付録: 記録したステップ', ...steps.map(appendixLine));
+    return `${lines.map((l) => humanize(line(l))).join('\n')}\n`;
+  }
+
+  const api = {
+    rendered: txt, display, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin,
+    bugTickets, sessionRecord
+  };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -602,3 +602,21 @@ test('a waiting tab joins at the page it is on now (#72)', async () => {
   assert.equal((await join(w, 9, 'https://example.com/a')).ok, true);
   assert.match(JSON.stringify(w.session.opsRecording.steps.at(-1).url), /after-redirect/);
 });
+
+test('a stop that comes after another one says what was not tested was not saved (ADR 0005)', async () => {
+  const { send, control, session } = worker();
+  await startAt(send);
+  await control.hello;
+  const id = session.opsRecording.id;
+  // Two panels stop at once; the second one's text cannot be saved and it is told so.
+  const [first, second] = await Promise.all([
+    send(panel('STOP', { recordingId: id, notTested: '決済' })),
+    send(panel('STOP', { recordingId: id, notTested: '返品' }))
+  ]);
+  assert.deepEqual([plain(first), plain(second)], [{ ok: true }, { ok: false, reason: 'ALREADY_STOPPED' }]);
+  assert.deepEqual(plain(session.opsRecording.notTested), ['決済']);
+  // A stop with nothing written after the end is no failure.
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id }))), { ok: true });
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '  ' }))), { ok: true });
+  assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '在庫' }))), { ok: false, reason: 'ALREADY_STOPPED' });
+});

@@ -1,0 +1,210 @@
+import { test, expect } from './fixtures.mjs';
+
+// What the tester writes in the panel (ADR 0005): the scope and the version at the start, a verdict
+// on each expectation with the actual result of an NG, and what was not tested at the stop.
+
+// The panel's sections open one at a time: the one holding the element is opened first.
+const openSection = (ui, id) => ui.locator(`#${id}`).evaluate((node) => { node.closest('details').open = true; });
+
+test('the panel takes a verdict on each expectation and what was not tested at the stop (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  // The start as the panel sends it; this panel is a tab, so its own start button has no page to record.
+  const tab = await panel.page.evaluate(async () => (await chrome.tabs.query({ url: 'http://a.test/*' }))[0]);
+  expect(await panel.send('START', { tabId: tab.id, url: tab.url, scope: '検索画面の絞り込み', targetVersion: '2.3.0' })).toEqual({ ok: true });
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'rec-meta');
+  await expect(ui.locator('#rec-meta')).toContainText('対象と範囲: 検索画面の絞り込み');
+  await expect(ui.locator('#scope')).toBeDisabled();
+  await expect(ui.locator('#not-tested')).toBeEnabled();
+
+  // An expectation gets a verdict form; an exploration note does not.
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('一覧に結果が出る');
+  await ui.locator('#note-form button[type="submit"]').click();
+  await ui.locator('#note-kind').selectOption('idea');
+  await ui.locator('#note-input').fill('並び順が気になる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  const form = ui.locator('form.verdict');
+  await expect(form).toHaveCount(1);
+  const ref = await form.getAttribute('data-ref');
+  expect(ref).toMatch(/^E-[0-9a-z]{6}$/);
+  const verdictOf = async () => (await panel.recording()).steps.find((s) => s.ref === ref);
+
+  // NG without an actual result is not sent: the browser asks for it.
+  await form.getByLabel('NG', { exact: true }).check();
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect(form.locator('[name="actual"]')).toHaveJSProperty('validity.valueMissing', true);
+  expect((await verdictOf()).verdict).toBeUndefined();
+
+  // A failed NG does not hold back another choice: OK saves at once, and NG is back to write.
+  await form.getByLabel('OK', { exact: true }).check();
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect.poll(async () => (await verdictOf()).verdict).toBe('ok');
+  await ui.locator('form.verdict').getByLabel('NG', { exact: true }).check();
+
+  // With it, the worker keeps the NG and the panel draws what was kept.
+  await form.locator('[name="actual"]').fill('一覧が空のまま');
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect.poll(async () => (await verdictOf()).verdict).toBe('ng');
+  expect((await verdictOf()).actual).toEqual(['一覧が空のまま']);
+  await expect(ui.locator('form.verdict legend')).toContainText('NG');
+
+  // OK clears the actual result.
+  await ui.locator('form.verdict').getByLabel('OK', { exact: true }).check();
+  await ui.locator('form.verdict').getByRole('button', { name: '判定を保存' }).click();
+  await expect.poll(async () => (await verdictOf()).verdict).toBe('ok');
+  expect((await verdictOf()).actual).toBeUndefined();
+
+  // The stop names this recording and keeps what was not tested.
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('決済と返品');
+  await ui.locator('#rec-stop').click();
+  await expect.poll(async () => (await panel.recording()).state).toBe('stopped');
+  expect((await panel.recording()).notTested).toEqual(['決済と返品']);
+  await expect(ui.locator('#rec-meta')).toContainText('やっていないこと: 決済と返品');
+});
+
+test('a verdict being written keeps its choice and its text while steps arrive (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('保存できる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  const form = ui.locator('form.verdict');
+  await form.getByLabel('NG', { exact: true }).check();
+  await form.locator('[name="actual"]').fill('エラーが');
+  // A step arrives and the list is drawn again.
+  await site.fill('#q', 'x');
+  await site.press('#q', 'Enter');
+  await expect.poll(async () => (await panel.recording()).steps.map((s) => s.type)).toContain('key');
+  await expect(ui.locator('form.verdict').getByLabel('NG', { exact: true })).toBeChecked();
+  await expect(ui.locator('form.verdict [name="actual"]')).toHaveValue('エラーが');
+  await expect(ui.locator('form.verdict [name="actual"]')).toBeFocused();
+});
+
+test('what was not tested is not carried from a discarded recording into the next (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('前の記録のメモ');
+  ui.once('dialog', (dialog) => dialog.accept());
+  await ui.locator('#rec-clear').click();
+  await expect.poll(() => panel.recording()).toBeUndefined();
+  await expect(ui.locator('#not-tested')).toHaveValue('');
+  await panel.start(site);
+  await ui.locator('#rec-stop').click();
+  await expect.poll(async () => (await panel.recording())?.state).toBe('stopped');
+  expect((await panel.recording()).notTested).toBeUndefined();
+});
+
+test('a change made while a verdict is being saved is kept as a draft (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('保存できる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  // The panel's SET_VERDICT is held until the test lets it go.
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__release = null;
+    chrome.runtime.sendMessage = (message) => (message?.type === 'SET_VERDICT'
+      ? new Promise((resolve) => { window.__release = () => resolve(original(message)); })
+      : original(message));
+  });
+  const form = ui.locator('form.verdict');
+  await form.getByLabel('OK', { exact: true }).check();
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await ui.waitForFunction(() => typeof window.__release === 'function');
+  // Changed to NG with an actual result while the OK is on its way.
+  await form.getByLabel('NG', { exact: true }).check();
+  await form.locator('[name="actual"]').fill('エラーが出る');
+  await ui.evaluate(() => window.__release());
+  await expect.poll(async () => (await panel.recording()).steps.find((s) => s.type === 'note').verdict).toBe('ok');
+  await expect(ui.locator('form.verdict').getByLabel('NG', { exact: true })).toBeChecked();
+  await expect(ui.locator('form.verdict [name="actual"]')).toHaveValue('エラーが出る');
+});
+
+test('an untouched verdict form shows what another panel saved, and a saved actual result is shown, never sent back (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('保存できる');
+  await ui.locator('#note-form button[type="submit"]').click();
+  await expect(ui.locator('form.verdict')).toHaveCount(1);
+  const { id, steps } = await panel.recording();
+  const { ref } = steps.find((s) => s.type === 'note');
+  // Another panel saves an NG whose actual result has a masked part.
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ng', actual: '確認メールが tester@example.com に届かない' })).toEqual({ ok: true });
+  const form = ui.locator('form.verdict');
+  await expect(form.getByLabel('NG', { exact: true })).toBeChecked();
+  await expect(form.locator('small')).toContainText('保存済み: 確認メールが ‹メールアドレス› に届かない');
+  await expect(form.locator('[name="actual"]')).toHaveValue('');
+  const saved = (await panel.recording()).steps.find((s) => s.ref === ref).actual;
+  expect(saved).toContainEqual({ redacted: 'email' });
+  // Saving it unchanged sends nothing: the masked part stays a masked part.
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    window.__verdicts = 0;
+    chrome.runtime.sendMessage = (message) => { if (message?.type === 'SET_VERDICT') window.__verdicts += 1; return original(message); };
+  });
+  await form.getByRole('button', { name: '判定を保存' }).click();
+  await expect(form.locator('[role="status"]')).toHaveText('変更はありません');
+  expect(await ui.evaluate(() => window.__verdicts)).toBe(0);
+  expect((await panel.recording()).steps.find((s) => s.ref === ref).actual).toEqual(saved);
+  // And another panel's OK is what this one shows next.
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toEqual({ ok: true });
+  await expect(ui.locator('form.verdict').getByLabel('OK', { exact: true })).toBeChecked();
+});
+
+test('what was not tested stays in its field when the stop came too late to save it (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  // The worker's reply when another panel stopped first (tests/worker.test.mjs makes the race itself).
+  await ui.evaluate(() => {
+    const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+    chrome.runtime.sendMessage = (message) => (message?.type === 'STOP' ? Promise.resolve({ ok: false, reason: 'ALREADY_STOPPED' }) : original(message));
+  });
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('決済と返品');
+  await ui.locator('#rec-stop').click();
+  await expect(ui.locator('#tab-status')).toContainText('やっていないことは保存しませんでした');
+  await expect(ui.locator('#not-tested')).toHaveValue('決済と返品');
+});
+
+test('what was not tested for one recording is not saved into the next another panel started (ADR 0005)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await panel.page.reload();
+  const ui = panel.page;
+  const first = (await panel.recording()).id;
+  await openSection(ui, 'not-tested');
+  await ui.locator('#not-tested').fill('前の記録のためのメモ');
+  // Another panel stops this recording and starts the next.
+  await panel.send('STOP', { recordingId: first });
+  await panel.start(site);
+  const next = (await panel.recording()).id;
+  expect(next).not.toBe(first);
+  await expect(ui.locator('#rec-stop')).toBeEnabled();
+  await expect(ui.locator('#not-tested')).toHaveValue('');
+  await ui.locator('#rec-stop').click();
+  await expect.poll(async () => (await panel.recording()).state).toBe('stopped');
+  expect((await panel.recording()).notTested).toBeUndefined();
+});
