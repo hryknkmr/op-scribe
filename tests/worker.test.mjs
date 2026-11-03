@@ -662,6 +662,24 @@ test('a waiting tab joins at the page it is on now (#72)', async () => {
   assert.match(JSON.stringify(w.session.opsRecording.steps.at(-1).url), /after-redirect/);
 });
 
+test('a waiting tab that is gone does not join, and is forgotten when its close arrives (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+  const before = w.session.opsRecording.steps.length;
+  // Closed while the permission dialog was open: the join is handled before the close.
+  w.control.gone = [9];
+  const reply = await join(w, 9, 'https://example.com/a');
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'TAB_GONE');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
+  assert.equal(w.session.opsRecording.steps.length, before, 'no navigation for a tab that is gone');
+  await w.removeTab(9);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.equal(w.session.opsRecording.state, 'recording');
+});
+
 test('a stop that comes after another one says what was not tested was not saved (ADR 0005)', async () => {
   const { send, control, session } = worker();
   await startAt(send);
