@@ -256,8 +256,8 @@ const stopNow = (id, notTested) => mutate(async (rec) => {
 
 /**
  * Lets the recording reach the site of url, in the tab tabId (the tab it started in when none
- * is named). A tab waiting for access to its site joins the recording here, with its page as
- * a navigation (#40).
+ * is named). A waiting tab joins the recording here, the person's choice in the panel, with the
+ * page it is on (url) as a navigation (#40).
  */
 const addPattern = (url, tabId) => mutate(async (rec) => {
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
@@ -284,18 +284,14 @@ const addPattern = (url, tabId) => mutate(async (rec) => {
   return { save: rec, reply: { ok: true } };
 });
 
-/** A tab joins at once when the extension already has its site (#40); otherwise it waits for the panel. */
-async function joinIfAllowed(tabId, url) {
-  if (!httpUrl(url) || !(await chrome.permissions.contains({ origins: [originPattern(url)] }))) return;
-  await addPattern(url, tabId);
-}
 
 /**
  * A tab opened from a tab of the recording to a page of the web (a link with target="_blank",
- * window.open) may join it; a tab opened any other way never does. What decides is the page the tab
- * opens to: one that starts at the browser's new tab page (Ctrl+T), even with an opener, is not a
- * candidate, and a waiting tab joins only from the panel, never by a later navigation (owner
- * decision on #72). Up to LIMITS.tabs tabs at a time, waiting ones included.
+ * window.open) waits to join it; a tab opened any other way never does. What decides is the page the
+ * tab opens to: one that starts at the browser's new tab page (Ctrl+T), even with an opener, is not a
+ * candidate. A waiting tab joins only when the person adds it in the panel, with the page it is on
+ * then, whether or not the extension can already reach the site (owner decisions on #72). Up to
+ * LIMITS.tabs tabs at a time, waiting and opening ones included.
  */
 async function noticeOpenedTab(tab) {
   if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
@@ -318,15 +314,12 @@ async function noticeOpenedTab(tab) {
 }
 
 /** The first page of an opening tab: a page of the web makes it wait to join, anything else drops it (#72). */
-async function firstPage(tabId, url) {
-  const waits = await mutate(async (rec) => {
-    if (rec?.state !== 'recording' || !openingOf(rec).includes(tabId)) return { reply: false };
-    rec.openingTabIds = openingOf(rec).filter((id) => id !== tabId);
-    if (httpUrl(url)) rec.waitingTabIds = [...waitingOf(rec), tabId];
-    return { save: rec, reply: httpUrl(url) };
-  });
-  if (waits) await joinIfAllowed(tabId, url);
-}
+const firstPage = (tabId, url) => mutate(async (rec) => {
+  if (rec?.state !== 'recording' || !openingOf(rec).includes(tabId)) return null;
+  rec.openingTabIds = openingOf(rec).filter((id) => id !== tabId);
+  if (httpUrl(url)) rec.waitingTabIds = [...waitingOf(rec), tabId];
+  return { save: rec };
+});
 
 /**
  * Origin as it appears in the recording (real if allowlisted, otherwise its alias), or null

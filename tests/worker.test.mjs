@@ -390,12 +390,19 @@ const startIn7 = async (w) => {
   await w.control.hello;
 };
 const from = (id, url) => ({ tab: { id, url }, url, origin: new URL(url).origin });
+// The person adds a waiting tab from the panel, on the page it is on (#72).
+const join = (w, id, url) => w.send({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url, tabId: id } });
 const stepIn = (w, id, url) => w.send({ from: 'op-scribe/content', type: 'STEP', detail: { type: 'click', pageUrl: url, target: { role: 'button', name: 'OK' } } }, from(id, url));
 
-test('a tab opened from the recording joins it when the extension has its site, and its steps are recorded (#40)', async () => {
+test('a tab opened from the recording waits, even on a site the extension can reach, and joins when the person adds it (#40, #72)', async () => {
   const w = worker();
   await startIn7(w);
   await w.openTab({ id: 9, openerTabId: 7, url: 'https://shop.example.com/item' });
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
+  assert.equal((await stepIn(w, 9, 'https://shop.example.com/item')).ok, false);
+  // It joins with the page it is on when the person adds it, not the one it opened to.
+  assert.equal((await join(w, 9, 'https://shop.example.com/item?redirected')).ok, true);
   const rec = w.session.opsRecording;
   assert.deepEqual(rec.tabIds, [7, 9]);
   assert.deepEqual(rec.waitingTabIds, []);
@@ -404,8 +411,10 @@ test('a tab opened from the recording joins it when the extension has its site, 
   assert.equal(rec.steps.at(-1).type, 'navigate');
   assert.equal((await stepIn(w, 9, 'https://shop.example.com/item')).ok, true);
   assert.equal(w.session.opsRecording.steps.at(-1).type, 'click');
-  // A tab opened from that tab joins too.
+  assert.match(JSON.stringify(rec.steps.at(-1).url), /redirected/);
+  // A tab opened from that tab can join too.
   await w.openTab({ id: 10, openerTabId: 9, url: 'https://example.com/help' });
+  assert.equal((await join(w, 10, 'https://example.com/help')).ok, true);
   assert.deepEqual(w.session.opsRecording.tabIds, [7, 9, 10]);
 });
 
@@ -447,8 +456,10 @@ test('a tab on a site the extension cannot reach waits until the panel adds it, 
 test('a recording holds at most LIMITS.tabs tabs, waiting ones included (#40)', async () => {
   const w = worker();
   await startIn7(w);
-  w.control.denied = ['https://wait.example.net/*'];
-  for (let id = 100; id < 120; id += 1) await w.openTab({ id, openerTabId: 7, url: id % 2 ? 'https://wait.example.net/' : 'https://example.com/x' });
+  for (let id = 100; id < 120; id += 1) {
+    await w.openTab({ id, openerTabId: 7, url: 'https://example.com/x' });
+    if (id % 2) await join(w, id, 'https://example.com/x');
+  }
   const rec = w.session.opsRecording;
   assert.equal(rec.tabIds.length + rec.waitingTabIds.length, 10);
 });
@@ -457,7 +468,7 @@ test('closing a tab leaves the recording on; closing its last tab ends it, and a
   const w = worker();
   await startIn7(w);
   await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
-  w.control.denied = ['https://wait.example.net/*'];
+  await join(w, 9, 'https://example.com/a');
   await w.openTab({ id: 11, openerTabId: 9, url: 'https://wait.example.net/' });
   await w.removeTab(11);
   assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
@@ -469,19 +480,20 @@ test('closing a tab leaves the recording on; closing its last tab ends it, and a
   assert.equal(w.session.opsRecording.state, 'stopped');
 });
 
-test('a tab whose page Chrome gives only when asked joins (#40)', async () => {
+test('a tab whose page Chrome gives only when asked waits by that page (#40)', async () => {
   const w = worker();
   await startIn7(w);
   // Neither url nor pendingUrl on creation: the tab says it only when asked.
   w.control.tabs = { 9: { url: 'https://example.com/late' } };
   await w.openTab({ id: 9, openerTabId: 7 });
-  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
 });
 
 test('a stop flushes and stops every tab of the recording (#40)', async () => {
   const w = worker();
   await startIn7(w);
   await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+  await join(w, 9, 'https://example.com/a');
   w.control.toTabs = [];
   await w.send({ from: 'op-scribe/panel', type: 'STOP' });
   const sent = (type) => w.control.toTabs.filter(([, t]) => t === type).map(([id]) => id).sort();
@@ -513,7 +525,7 @@ test('a tab whose page comes only in its first update (window.open) is decided b
   await w.openTab({ id: 9, openerTabId: 7 });
   assert.deepEqual(w.session.opsRecording.openingTabIds, [9]);
   await w.urlChanged(9, 'https://example.com/popup');
-  assert.deepEqual(w.session.opsRecording.tabIds, [7, 9]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
   assert.deepEqual(w.session.opsRecording.openingTabIds, []);
   // Closed before its first page, it is forgotten.
   await w.openTab({ id: 10, openerTabId: 7 });
@@ -544,9 +556,9 @@ test('a tab that closes while its page is asked for is forgotten, so it never ho
   }
   w.control.holdGet = null;
   assert.deepEqual(w.session.opsRecording.openingTabIds, []);
-  // A link opened afterwards still joins.
+  // A link opened afterwards still finds a place.
   await w.openTab({ id: 30, openerTabId: 7, pendingUrl: 'https://example.com/link' });
-  assert.deepEqual(w.session.opsRecording.tabIds, [7, 30]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [30]);
 });
 
 test('a first update that comes while the page is asked for decides, and a later one does not (#72)', async () => {

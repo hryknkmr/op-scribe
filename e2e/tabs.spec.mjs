@@ -1,6 +1,17 @@
 import { test, expect } from './fixtures.mjs';
 
-// A tab opened from a tab of the recording joins it; any other tab does not (#40).
+// A tab opened from a tab of the recording waits, and joins when the person adds it in the panel; any other tab
+// never does (#40, #72).
+
+// What the panel sends when the person presses "このタブも記録する" on that tab.
+async function join(panel, page) {
+  await page.waitForURL(/^http:/);
+  const reply = await panel.page.evaluate(async (url) => {
+    const [tab] = await chrome.tabs.query({ url });
+    return chrome.runtime.sendMessage({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: tab.url, tabId: tab.id } });
+  }, page.url());
+  expect(reply?.ok).toBe(true);
+}
 
 test('a tab opened by a link or window.open joins the recording, and what is done there is recorded (#40)', async ({ context, panel }) => {
   const site = await context.newPage();
@@ -9,6 +20,10 @@ test('a tab opened by a link or window.open joins the recording, and what is don
 
   const [byLink] = await Promise.all([context.waitForEvent('page'), site.click('#blank')]);
   await byLink.waitForLoadState();
+  // It waits, though the extension can reach the site, until the person adds it.
+  await expect.poll(async () => (await panel.recording()).waitingTabIds?.length).toBe(1);
+  expect((await panel.recording()).tabIds).toHaveLength(1);
+  await join(panel, byLink);
   await expect.poll(async () => (await panel.recording()).tabIds?.length).toBe(2);
   await byLink.waitForFunction(() => document.readyState === 'complete');
   await byLink.fill('#q', 'Bで入力');
@@ -17,6 +32,8 @@ test('a tab opened by a link or window.open joins the recording, and what is don
 
   const [byScript] = await Promise.all([context.waitForEvent('page'), site.click('#open')]);
   await byScript.waitForLoadState();
+  await expect.poll(async () => (await panel.recording()).waitingTabIds?.length).toBe(1);
+  await join(panel, byScript);
   await expect.poll(async () => (await panel.recording()).tabIds?.length).toBe(3);
 
 });
@@ -26,6 +43,7 @@ test('a tab not opened from the recording is not recorded, and the recording end
   await site.goto('http://a.test/tabs.html');
   await panel.start(site);
   const [child] = await Promise.all([context.waitForEvent('page'), site.click('#blank')]);
+  await join(panel, child);
   await expect.poll(async () => (await panel.recording()).tabIds?.length).toBe(2);
 
   // A tab not opened from the recording. Playwright's newPage() names the page open before it as the
