@@ -418,6 +418,13 @@ test('a ticket says what to settle before replaying: an element with nothing to 
     { ...bare, target: { role: 'slider', name: ['音量 ', { redacted: 'number' }] } },
     { ...bare, target: { role: 'button', name: [{ redacted: 'email' }] } },
     { ...bare, target: { role: 'slider', selector: '#volume' } }]), []);
+  // A name of masked parts only, or of blanks, hides the selector from the sentence (review r46).
+  assert.deepEqual(cuesOf([nav(A),
+    { ...bare, target: { role: 'slider', name: [{ redacted: 'email' }], selector: '#email' } },
+    { ...bare, target: { name: [' '], selector: '#x' } }]), [
+    '- 「‹メールアドレス›」をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）',
+    '- 「 」をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）'
+  ]);
   // Only the steps of the ticket: what comes after its NG is not looked at.
   const after = D.bugTickets(recording([nav(A), expect('出る', 'E-aaaaaa', 'ng', 'x'), bare]))[0].text;
   assert.ok(!after.includes('再現の前に確かめること'), after);

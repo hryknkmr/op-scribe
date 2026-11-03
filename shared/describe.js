@@ -499,15 +499,16 @@
   const NO_CUE = '対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す';
   const MASKED = '値を伏せてある。テスト値を用意して使い、伏せた値は推測しない';
   /**
-   * Whether the sentence of targetText() shows something to find the element by (review r45):
+   * Whether the sentence of targetText() shows something to find the element by (reviews r45, r46):
    * a name with the page's own characters (not only masked parts, which read ‹メールアドレス›),
-   * a role the sentence names (ROLE_NOUN; any other role reads 要素), or a selector.
+   * a role the sentence names (ROLE_NOUN; any other role reads 要素), or the selector, which the
+   * sentence shows only when there is no name at all (a masked-only name hides it too).
    */
   function hasCue(target) {
     if (!target) return false;
     const parts = Array.isArray(target.name) ? target.name : [target.name];
     const named = parts.some((p) => typeof p === 'string' && p.replace(HIDDEN, '').trim());
-    return named || Boolean(ROLE_NOUN[target.role]) || Boolean(target.selector);
+    return named || Boolean(ROLE_NOUN[target.role]) || (Boolean(target.selector) && !txt(target.name));
   }
   function replayCues(steps) {
     // By sentence, in the order first recorded; its notes in a fixed order, each once.
