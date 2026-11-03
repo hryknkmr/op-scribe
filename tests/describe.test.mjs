@@ -393,6 +393,11 @@ test('a ticket says what to settle before replaying: an element with nothing to 
     '- 要素をクリックする（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）',
     '- 「パスワード」入力欄に ‹秘匿値› を入力する（値を伏せてある。テスト値を用意して使い、伏せた値は推測しない）'
   ]);
+  // Both on one sentence, or the same sentence twice: one line, the two notes in a fixed order.
+  const both = { type: 'input', t: 0, env: 'standard', source: 'user', url: [A], target: { tag: 'input' }, value: typed.redacted('secret', 'secret') };
+  assert.deepEqual(cuesOf([nav(A), both, both]), [
+    '- 要素に ‹秘匿値› を入力する（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す。値を伏せてある。テスト値を用意して使い、伏せた値は推測しない）'
+  ]);
   // A selector or a name is enough to find it by; nothing to settle, no section.
   assert.deepEqual(cuesOf([nav(A), { ...bare, target: { tag: 'div', selector: '#save' } }, kept]), []);
   // Only the steps of the ticket: what comes after its NG is not looked at.

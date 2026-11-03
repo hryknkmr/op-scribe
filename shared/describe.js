@@ -496,17 +496,22 @@
    * an operation whose element has no role, name or selector to find it by, and a value that
    * was masked, which the tester supplies. Each step's sentence once, in the order recorded.
    */
+  const NO_CUE = '対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す';
+  const MASKED = '値を伏せてある。テスト値を用意して使い、伏せた値は推測しない';
   function replayCues(steps) {
-    const cues = [];
+    // By sentence, in the order first recorded; its notes in a fixed order, each once.
+    const bySentence = new Map();
     for (const step of steps) {
       if (step.source !== 'user') continue;
       const sentence = shown(describeStep(step));
       const acts = TARGETED.has(step.type) || (step.type === 'key' && step.target);
       const t = step.target;
-      if (acts && !(t && (t.role || txt(t.name) || t.selector))) cues.push(`${sentence}（対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す）`);
-      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept') cues.push(`${sentence}（値を伏せてある。テスト値を用意して使い、伏せた値は推測しない）`);
+      const notes = bySentence.get(sentence) || new Set();
+      if (acts && !(t && (t.role || txt(t.name) || t.selector))) notes.add(NO_CUE);
+      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept') notes.add(MASKED);
+      if (notes.size) bySentence.set(sentence, notes);
     }
-    return [...new Set(cues)];
+    return [...bySentence].map(([sentence, notes]) => `${sentence}（${[NO_CUE, MASKED].filter((n) => notes.has(n)).join('。')}）`);
   }
 
   /**
