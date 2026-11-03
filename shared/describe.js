@@ -482,7 +482,49 @@
       lines.push(`${i + 1}. ${step.action}`);
       if (step.expected) lines.push(`   - その後: ${step.expected}`);
     });
+    const cues = replayCues(before);
+    if (cues.length) lines.push('', '再現の前に確かめること:', ...cues.map((c) => `- ${c}`));
     return lines;
+  }
+
+  // The person's operations that act on an element (a key may be pressed on the page itself).
+  const TARGETED = new Set(['click', 'input', 'select', 'check', 'upload']);
+  const MASKED_VALUES = new Set(['input', 'select', 'upload']);
+
+  /**
+   * What to settle before replaying the steps (ADR 0005, Issue #42 slice 3), by fixed rules:
+   * an operation whose sentence gives nothing to find its element by, and a value that
+   * was masked, which the tester supplies. Each step's sentence once, in the order recorded.
+   */
+  const NO_CUE = '対象を見つける手がかり（役割・名前・selector）が無い。画面から同じ要素を探す';
+  const MASKED = '値を伏せてある。テスト値を用意して使い、伏せた値は推測しない';
+  /**
+   * Whether the sentence of targetText() shows something to find the element by (reviews r45, r46):
+   * a name with the page's own characters (not only masked parts, which read ‹メールアドレス›),
+   * a role the sentence names (ROLE_NOUN; any other role reads 要素), or the selector, which the
+   * sentence shows only when there is no name at all (a masked-only name hides it too).
+   */
+  function hasCue(target) {
+    if (!target) return false;
+    const parts = Array.isArray(target.name) ? target.name : [target.name];
+    const named = parts.some((p) => typeof p === 'string' && p.replace(HIDDEN, '').trim());
+    return named || Boolean(ROLE_NOUN[target.role]) || (Boolean(target.selector) && !txt(target.name));
+  }
+  function replayCues(steps) {
+    // By sentence, in the order first recorded; its notes in a fixed order, each once.
+    const bySentence = new Map();
+    for (const step of steps) {
+      if (step.source !== 'user') continue;
+      const sentence = shown(describeStep(step));
+      const acts = TARGETED.has(step.type) || (step.type === 'key' && step.target);
+      const notes = bySentence.get(sentence) || new Set();
+      if (acts && !hasCue(step.target)) notes.add(NO_CUE);
+      // A field emptied (length 0) needs no value: its sentence says to empty it.
+      const emptied = step.value?.treatment === 'length' && step.value.length === 0;
+      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept' && !emptied) notes.add(MASKED);
+      if (notes.size) bySentence.set(sentence, notes);
+    }
+    return [...bySentence].map(([sentence, notes]) => `${sentence}（${[NO_CUE, MASKED].filter((n) => notes.has(n)).join('。')}）`);
   }
 
   /**
