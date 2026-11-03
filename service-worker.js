@@ -276,7 +276,13 @@ const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
   const waiting = isWaitingTab(rec, target);
   if (!waiting && !isRecordingTab(rec, target)) return { reply: { ok: false, error: 'NOT_RECORDING_TAB' } };
   // A waiting tab joins at the page it is on now, not one the panel saw earlier (a redirect since).
-  if (waiting) url = (await chrome.tabs.get(target).catch(() => null))?.url || url;
+  // One that is gone (closed after the panel asked, before this ran) does not join at all: its close
+  // may still be on its way to the queue, and there is no page to join at.
+  if (waiting) {
+    const tab = await chrome.tabs.get(target).catch(() => null);
+    if (!tab) return { reply: { ok: false, error: 'TAB_GONE' } };
+    url = tab.url || url;
+  }
   if (!httpUrl(url)) return { reply: { ok: false, error: 'NOT_HTTP' } };
   const pattern = originPattern(url);
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {

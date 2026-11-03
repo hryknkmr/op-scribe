@@ -662,6 +662,27 @@ test('a waiting tab joins at the page it is on now (#72)', async () => {
   assert.match(JSON.stringify(w.session.opsRecording.steps.at(-1).url), /after-redirect/);
 });
 
+test('a waiting tab that is gone does not join, and is forgotten when its close arrives (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  await w.openTab({ id: 9, openerTabId: 7, url: 'https://shop.example.com/a' });
+  const before = w.session.opsRecording.steps.length;
+  // Closed after the panel asked, before the join ran: the join is handled before the close.
+  w.control.gone = [9];
+  const reply = await join(w, 9, 'https://shop.example.com/a');
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'TAB_GONE');
+  const rec = w.session.opsRecording;
+  assert.deepEqual(rec.tabIds, [7]);
+  assert.deepEqual(rec.waitingTabIds, [9]);
+  assert.equal(rec.steps.length, before, 'no navigation for a tab that is gone');
+  assert.ok(!rec.grantedPatterns.includes('https://shop.example.com/*'), 'its site is not added either');
+  assert.ok(!w.control.injected?.includes(9), 'nothing is injected into it');
+  await w.removeTab(9);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  assert.equal(w.session.opsRecording.state, 'recording');
+});
+
 test('a stop that comes after another one says what was not tested was not saved (ADR 0005)', async () => {
   const { send, control, session } = worker();
   await startAt(send);
