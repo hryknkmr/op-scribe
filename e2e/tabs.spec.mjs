@@ -38,6 +38,19 @@ test('a tab opened by a link or window.open joins the recording, and what is don
 
 });
 
+test('a popup opened empty and sent to its page afterwards waits by that page (#72)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/tabs.html');
+  await panel.start(site);
+  const [popup] = await Promise.all([context.waitForEvent('page'), site.click('#open-blank')]);
+  await popup.waitForURL('http://c.test/');
+  await popup.waitForLoadState();
+  await expect.poll(async () => (await panel.recording()).waitingTabIds?.length).toBe(1);
+  expect((await panel.recording()).openingTabIds ?? []).toHaveLength(0);
+  await join(panel, popup);
+  await expect.poll(async () => (await panel.recording()).tabIds?.length).toBe(2);
+});
+
 test('a tab not opened from the recording is not recorded, and the recording ends with its last tab (#40)', async ({ context, panel }) => {
   const site = await context.newPage();
   await site.goto('http://a.test/tabs.html');

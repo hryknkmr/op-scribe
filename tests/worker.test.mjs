@@ -533,6 +533,65 @@ test('a tab whose page comes only in its first update (window.open) is decided b
   assert.deepEqual(w.session.opsRecording.openingTabIds, []);
 });
 
+test('a popup opened empty and sent to its page afterwards waits by that page, and holds a place until then (#72)', async () => {
+  const w = worker();
+  await startIn7(w);
+  // window.open('about:blank'): Chrome gives the empty page at creation and in the first update.
+  await w.openTab({ id: 9, openerTabId: 7, url: 'about:blank' });
+  assert.deepEqual(w.session.opsRecording.openingTabIds, [9]);
+  await w.urlChanged(9, 'about:blank');
+  assert.deepEqual(w.session.opsRecording.openingTabIds, [9]);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, []);
+  await w.urlChanged(9, 'https://login.example.net/');
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
+  // One that is sent to the new tab page instead is dropped, as any other.
+  w.control.tabs = { 10: { url: 'about:blank' } };
+  await w.openTab({ id: 10, openerTabId: 7 });
+  assert.deepEqual(w.session.opsRecording.openingTabIds, [10]);
+  await w.urlChanged(10, 'chrome://newtab/');
+  assert.deepEqual(w.session.opsRecording.openingTabIds, []);
+  assert.deepEqual(w.session.opsRecording.waitingTabIds, [9]);
+});
+
+test('a stop flushes every tab it stops: a tab that joins while the stop flushes is refused (#72)', async () => {
+  const sent = (w, type) => w.control.toTabs.filter(([, t]) => t === type).map(([id]) => id).sort();
+  {
+    const w = worker();
+    await startIn7(w);
+    await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+    w.control.toTabs = [];
+    let flushing;
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    const started = new Promise((resolve) => { flushing = resolve; });
+    w.control.flush = () => { flushing(); return held; };
+    const stopped = w.send({ from: 'op-scribe/panel', type: 'STOP' });
+    await started;
+    const joined = await join(w, 9, 'https://example.com/a');
+    assert.equal(joined.ok, false);
+    assert.equal(joined.error, 'STOPPING');
+    release();
+    assert.equal((await stopped).ok, true);
+    assert.deepEqual(sent(w, 'OPS_FLUSH'), [7]);
+    assert.deepEqual(sent(w, 'OPS_STOP'), [7]);
+    assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+  }
+  {
+    const w = worker();
+    await startIn7(w);
+    await w.openTab({ id: 9, openerTabId: 7, url: 'https://example.com/a' });
+    w.control.toTabs = [];
+    // A join and a stop at once: whichever comes first in the queue, the tabs flushed are the tabs stopped.
+    const [joined, stopped] = await Promise.all([join(w, 9, 'https://example.com/a'), w.send({ from: 'op-scribe/panel', type: 'STOP' })]);
+    assert.equal(stopped.ok, true);
+    const tabs = joined.ok ? [7, 9] : [7];
+    assert.deepEqual(sent(w, 'OPS_FLUSH'), tabs);
+    assert.deepEqual(sent(w, 'OPS_STOP'), tabs);
+    assert.deepEqual(w.session.opsRecording.tabIds, tabs);
+  }
+});
+
 test('a navigation is recorded before the click that follows it (#72)', async () => {
   const w = worker();
   await startIn7(w);

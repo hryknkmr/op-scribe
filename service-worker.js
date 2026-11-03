@@ -230,17 +230,21 @@ async function flushTab(rec) {
 const unsaved = (notTested) => (typeof notTested === 'string' && notTested.trim() ? { ok: false, reason: 'ALREADY_STOPPED' } : { ok: true });
 
 const stop = async ({ recordingId, notTested } = {}) => {
-  const rec = await getRecording();
-  if (recordingId !== undefined && rec?.id !== recordingId) return { ok: false, reason: 'OTHER_RECORDING' };
+  const seen = await getRecording();
+  if (recordingId !== undefined && seen?.id !== recordingId) return { ok: false, reason: 'OTHER_RECORDING' };
   // Nothing to stop: a recording started meanwhile is not the one asked to stop.
-  if (rec?.state !== 'recording') return unsaved(notTested);
-  stopping = rec.id;
+  if (seen?.state !== 'recording') return unsaved(notTested);
+  stopping = seen.id;
   try {
+    // The tabs to flush are read in the queue, once stopping is set: a tab that joined before is
+    // among them, and none joins after (addPattern), so the flush reaches every tab the stop stops.
+    const rec = await mutate(async (now) => ({ reply: now?.id === seen.id && now.state === 'recording' ? now : null }));
+    if (!rec) return unsaved(notTested);
     await flushTab(rec);
     // A recording started while this one was flushing is not the one asked to stop.
-    return await stopNow(rec.id, notTested);
+    return await stopNow(seen.id, notTested);
   } finally {
-    if (stopping === rec.id) stopping = null;
+    if (stopping === seen.id) stopping = null;
   }
 };
 
@@ -266,6 +270,8 @@ const stopNow = (id, notTested) => mutate(async (rec) => {
 const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
   let url = pageUrl;
   if (!rec || rec.state !== 'recording') return { reply: { ok: false, error: 'NOT_RECORDING' } };
+  // A stop is flushing the tabs it read: a tab joining now would be stopped without its flush.
+  if (rec.id === stopping) return { reply: { ok: false, error: 'STOPPING' } };
   const target = Number.isInteger(tabId) ? tabId : rec.tabId;
   const waiting = isWaitingTab(rec, target);
   if (!waiting && !isRecordingTab(rec, target)) return { reply: { ok: false, error: 'NOT_RECORDING_TAB' } };
@@ -296,13 +302,17 @@ const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
  * A tab opened from a tab of the recording to a page of the web (a link with target="_blank",
  * window.open) waits to join it; a tab opened any other way never does. What decides is the page the
  * tab opens to: one that starts at the browser's new tab page (Ctrl+T), even with an opener, is not a
- * candidate. A waiting tab joins only when the person adds it in the panel, with the page it is on
+ * candidate. A tab opened empty (about:blank) and sent to its page afterwards, a sign-in window
+ * say, has no page yet: it is decided by the first page it is sent to, and holds a place until
+ * then. A waiting tab joins only when the person adds it in the panel, with the page it is on
  * then, whether or not the extension can already reach the site (owner decisions on #72). Up to
  * LIMITS.tabs tabs at a time, waiting and opening ones included.
  */
+const blank = (url) => !url || url === 'about:blank';
+const pageOf = (tab) => [tab?.pendingUrl, tab?.url].find((url) => !blank(url)) || '';
 async function noticeOpenedTab(tab) {
   if (!Number.isInteger(tab?.id) || !Number.isInteger(tab?.openerTabId)) return;
-  const given = tab.pendingUrl || tab.url;
+  const given = pageOf(tab);
   if (given && !httpUrl(given)) return;
   // Kept as opening first, in the queue, so its close and its first update are handled after this
   // whatever the order Chrome sends them in; its first page then decides (firstPage).
@@ -315,14 +325,16 @@ async function noticeOpenedTab(tab) {
   if (!kept) return;
   // Chrome gives the page to open in url or pendingUrl, or only when asked (a link), or only in the
   // tab's first update (window.open), which firstPage handles when it comes.
-  const asked = given ? null : await chrome.tabs.get(tab.id).catch(() => null);
-  const url = given || asked?.pendingUrl || asked?.url;
+  const url = given || pageOf(await chrome.tabs.get(tab.id).catch(() => null));
   if (url) await firstPage(tab.id, url);
 }
 
-/** The first page of an opening tab: a page of the web makes it wait to join, anything else drops it (#72). */
+/**
+ * The first page of an opening tab: a page of the web makes it wait to join, anything else drops it;
+ * an empty page (about:blank) is no page yet and decides nothing (#72).
+ */
 const firstPage = (tabId, url) => mutate(async (rec) => {
-  if (rec?.state !== 'recording' || !openingOf(rec).includes(tabId)) return null;
+  if (blank(url) || rec?.state !== 'recording' || !openingOf(rec).includes(tabId)) return null;
   rec.openingTabIds = openingOf(rec).filter((id) => id !== tabId);
   if (httpUrl(url)) rec.waitingTabIds = [...waitingOf(rec), tabId];
   return { save: rec };

@@ -8,8 +8,11 @@
   <h1>タブ</h1>
   <a id="blank" href="http://b.test/" target="_blank">別タブで開く</a>
   <button id="open" type="button">ウィンドウを開く</button>
+  <button id="open-blank" type="button">空のウィンドウを開いてから移動する</button>
   <script>
     document.getElementById('open').addEventListener('click', () => { window.open('http://c.test/', '_blank'); });
+    // A popup opened empty and sent to its page afterwards (a sign-in window, say).
+    document.getElementById('open-blank').addEventListener('click', () => { const w = window.open('about:blank', '_blank'); setTimeout(() => { w.location = 'http://c.test/'; }, 300); });
   </script>
 </body>
 </html>
