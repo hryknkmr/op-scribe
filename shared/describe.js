@@ -508,7 +508,9 @@
       const t = step.target;
       const notes = bySentence.get(sentence) || new Set();
       if (acts && !(t && (t.role || txt(t.name) || t.selector))) notes.add(NO_CUE);
-      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept') notes.add(MASKED);
+      // A field emptied (length 0) needs no value: its sentence says to empty it.
+      const emptied = step.value?.treatment === 'length' && step.value.length === 0;
+      if (MASKED_VALUES.has(step.type) && step.value && step.value.treatment !== 'kept' && !emptied) notes.add(MASKED);
       if (notes.size) bySentence.set(sentence, notes);
     }
     return [...bySentence].map(([sentence, notes]) => `${sentence}（${[NO_CUE, MASKED].filter((n) => notes.has(n)).join('。')}）`);
