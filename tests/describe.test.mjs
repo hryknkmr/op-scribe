@@ -429,3 +429,55 @@ test('a ticket says what to settle before replaying: an element with nothing to 
   const after = D.bugTickets(recording([nav(A), expect('出る', 'E-aaaaaa', 'ng', 'x'), bare]))[0].text;
   assert.ok(!after.includes('再現の前に確かめること'), after);
 });
+
+test('a step in another tab is told as a switch first, and a navigation there is not the outcome of an operation here (#40)', () => {
+  const tabs = {
+    id: 'rec-tabs',
+    startUrl: 'https://site-1.invalid/',
+    steps: [
+      { type: 'navigate', t: 0, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/' },
+      { type: 'click', t: 1000, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'link', name: '別タブで開く' } },
+      // The tab that joined: its page, right after the click, is where it is, not where the click led.
+      { type: 'navigate', t: 1500, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/item' },
+      { type: 'click', t: 2000, env: 'standard', source: 'user', tab: 2, url: 'https://site-2.invalid/item', target: { role: 'button', name: '買う' } },
+      { type: 'navigate', t: 2500, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/done' },
+      // Written in the side panel: no tab, so no switch.
+      { type: 'note', t: 2600, env: 'standard', source: 'user', note: '完了と出る' },
+      { type: 'click', t: 3000, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'button', name: '更新' } },
+      // The same page as tab 1's last navigation, but in tab 2: not a repeat.
+      { type: 'navigate', t: 9000, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-1.invalid/' }
+    ]
+  };
+  const feature = D.toGherkin(tabs);
+  const lines = feature.split('\n').filter((l) => /^ {4}(Given|When|Then|And) /.test(l)).map((l) => l.trim());
+  assert.deepEqual(lines, [
+    'Given "https://site-1.invalid/" を開いている',
+    'When 「別タブで開く」リンクをクリックする',
+    'And タブ 2 に切り替える',
+    'And "https://site-2.invalid/item" を開く',
+    'And 「買う」ボタンをクリックする',
+    'Then "https://site-2.invalid/done" に遷移する',
+    'And 完了と出る',
+    'When タブ 1 に切り替える',
+    'And 「更新」ボタンをクリックする',
+    'And タブ 2 に切り替える',
+    'And "https://site-1.invalid/" を開く'
+  ], feature);
+  assert.match(feature, /^ {4}And タブ 2 に切り替える\n {6}\| action \| switch-tab \|\n {6}\| tab +\| 2 +\|$/m);
+  const md = D.toMarkdown(D.buildReproduction(tabs));
+  const items = md.split('\n').filter((l) => /^\d+\. /.test(l)).map((l) => l.replace(/^\d+\. /, ''));
+  assert.deepEqual(items, [
+    'https://site-1.invalid/ を開く',
+    '「別タブで開く」リンクをクリックする',
+    'タブ 2 に切り替える',
+    'https://site-2.invalid/item を開く',
+    '「買う」ボタンをクリックする',
+    'タブ 1 に切り替える',
+    '「更新」ボタンをクリックする',
+    'タブ 2 に切り替える',
+    'https://site-1.invalid/ を開く'
+  ], md);
+  // Steps without tabs read as before: no switch anywhere.
+  assert.ok(!/切り替える/.test(D.toGherkin(rec)));
+  assert.ok(!/切り替える/.test(D.toMarkdown(D.buildReproduction(rec))));
+});

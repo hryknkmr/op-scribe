@@ -203,7 +203,8 @@
 
   /**
    * raw: what the content script, the panel or the tab listener reported.
-   * from: { tabUrl, frameUrl } as Chrome reports the sender; empty for the panel.
+   * from: { tabUrl, frameUrl, tab } as Chrome reports the sender, with the worker's number for the
+   * tab (#40); empty for the panel.
    * Returns the step to store, or null when it is not a step this recorder knows.
    */
   function cleanStep(raw, rec, settings, from = {}) {
@@ -239,6 +240,8 @@
     // The page's expectation belongs to its page (W8): without one it is not recorded.
     if (type === 'note' && source === 'agent' && !raw.pageUrl) return null;
     const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source };
+    // The tab the step happened in, as the worker numbers it (T9, #40); a panel note has none.
+    if (Number.isInteger(from.tab) && from.tab >= 1) step.tab = from.tab;
     // A note of the person's is written in the side panel and belongs to no page (W7, W8).
     if (raw.pageUrl && !(type === 'note' && source === 'user')) {
       // A page on a host past the alias limit is not recorded (K5; review R42).
@@ -299,7 +302,7 @@
     // Only what this kind of step may carry, and nothing without what it must (row T6).
     const rule = STEP_RULES[type];
     for (const f of Object.keys(step)) {
-      if (!['type', 't', 'env', 'source'].includes(f) && !rule.allowed.includes(f)) delete step[f];
+      if (!['type', 't', 'env', 'source', 'tab'].includes(f) && !rule.allowed.includes(f)) delete step[f];
     }
     // The site of the page, as the recording names it: WebMCP returns a site its own steps by it (W8, #17).
     // Kept in the browser only; buildPayload copies the fields of SHAPE, which has none for it.
@@ -330,11 +333,13 @@
    * An alias numbers a site in the whole recording: site-2 says another site came first.
    * The page gets aliases of its own from site-1, its site first when it is an alias and then
    * in the order its steps name them, so a reply tells nothing of the other sites (W8; review
-   * of #37 R12). An allowed host keeps its name (U4).
-   * Only hosts are renamed (url, target.href): text is the page's own and stays as it is.
+   * of #37 R12). An allowed host keeps its name (U4). The tabs are numbered the same way (T9, #40):
+   * in the order the site's own steps name them, so a reply tells nothing of the other tabs.
+   * Only hosts and tab numbers change (url, target.href, tab): text is the page's own and stays as it is.
    */
   function localAliases(site, steps) {
     const names = new Map();
+    const tabs = new Map();
     const swap = (u) => {
       const m = ALIAS_ORIGIN.exec(u);
       if (!m) return u;
@@ -350,6 +355,10 @@
         const local = { ...s };
         if (s.url !== undefined) local.url = runs(s.url);
         if (s.target?.href !== undefined) local.target = { ...s.target, href: runs(s.target.href) };
+        if (s.tab !== undefined) {
+          if (!tabs.has(s.tab)) tabs.set(s.tab, tabs.size + 1);
+          local.tab = tabs.get(s.tab);
+        }
         return local;
       }),
     };

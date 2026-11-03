@@ -412,6 +412,17 @@ test('a tab opened from the recording waits, even on a site the extension can re
   assert.equal((await stepIn(w, 9, 'https://shop.example.com/item')).ok, true);
   assert.equal(w.session.opsRecording.steps.at(-1).type, 'click');
   assert.match(JSON.stringify(rec.steps.at(-1).url), /redirected/);
+  // Each step says which tab it happened in, by the order the tabs joined (#40).
+  assert.deepEqual(w.session.opsRecording.steps.map((s) => [s.type, s.tab]), [['navigate', 1], ['navigate', 2], ['click', 2]]);
+  assert.equal((await stepIn(w, 7, 'https://example.com/')).ok, true);
+  assert.equal(w.session.opsRecording.steps.at(-1).tab, 1);
+  // The same page as tab 1 is on, opened in tab 2, is a navigation of tab 2, not a repeat.
+  await w.urlChanged(9, 'https://example.com/');
+  assert.deepEqual(w.session.opsRecording.steps.at(-1) && [w.session.opsRecording.steps.at(-1).type, w.session.opsRecording.steps.at(-1).tab], ['navigate', 2]);
+  // A note written in the panel belongs to no tab.
+  assert.equal((await w.send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'メモ' } })).ok, true);
+  assert.equal(w.session.opsRecording.steps.at(-1).tab, undefined);
+  assert.deepEqual(w.session.opsRecording.tabOrder, [7, 9]);
   // A tab opened from that tab can join too.
   await w.openTab({ id: 10, openerTabId: 9, url: 'https://example.com/help' });
   assert.equal((await join(w, 10, 'https://example.com/help')).ok, true);
@@ -476,6 +487,8 @@ test('closing a tab leaves the recording on; closing its last tab ends it, and a
   assert.equal(w.session.opsRecording.state, 'recording');
   assert.deepEqual(w.session.opsRecording.tabIds, [9]);
   assert.equal((await stepIn(w, 9, 'https://example.com/a')).ok, true);
+  // Its number stays 2 after the first tab closed (#40).
+  assert.equal(w.session.opsRecording.steps.at(-1).tab, 2);
   await w.removeTab(9);
   assert.equal(w.session.opsRecording.state, 'stopped');
 });

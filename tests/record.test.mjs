@@ -818,3 +818,33 @@ test('a selector with a URL in it is dropped (T3, K4)', () => {
   const step = R.cleanStep({ type: 'click', target: { role: 'link', tag: 'a', name: 'x', selector: 'a[href="https://private.internal.test/orders"]' } }, rec, {}, { tabUrl: 'https://example.test/' });
   assert.equal(step.target.selector, undefined);
 });
+
+test('a step takes the tab number the worker gives it, and nothing that is not one (row T9; #40)', () => {
+  const settings = { keywords: [] };
+  const rec = { startedAt: Date.now(), aliases: {}, redactions: {}, steps: [], policy: { commercialHosts: [] } };
+  const click = { type: 'click', pageUrl: 'https://example.com/', target: { role: 'button', name: 'OK' } };
+  assert.equal(R.cleanStep(click, rec, settings, { tabUrl: 'https://example.com/', tab: 2 }).tab, 2);
+  for (const tab of [undefined, 0, -1, 1.5, '2', null]) {
+    assert.equal(R.cleanStep(click, rec, settings, { tabUrl: 'https://example.com/', tab }).tab, undefined, `tab ${JSON.stringify(tab)}`);
+  }
+  // The panel's note has no sender and no tab.
+  assert.equal(R.cleanStep({ type: 'note', note: 'メモ' }, rec, settings).tab, undefined);
+});
+
+test('a WebMCP reply numbers the tabs by the order the steps of its site name them, like the aliases (rows W8, T9; #40)', () => {
+  const rec = newRec();
+  const settings2 = { ...settings, keywords: [] };
+  const at = (tab, url) => R.cleanStep({ type: 'click', pageUrl: url, target: { role: 'button', name: 'OK' } }, rec, settings2, { tabUrl: url, tab });
+  // The site's steps happened in the recording's tabs 3 and 1; another site's step in tab 2 is not its business.
+  rec.steps.push(at(3, `${BETA}/a`), at(2, `${PROD}/b`), at(1, `${BETA}/c`), at(3, `${BETA}/d`));
+  const site = rec.steps[0].site;
+  const reply = R.webmcpReply(rec, settings2, site, 'reproduction');
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert.equal(reply.steps, 3);
+  // Tabs 3, 1, 3 of the recording are this site's tabs 1, 2, 1.
+  const switches = reply.gherkin.split('\n').filter((l) => /切り替える/.test(l)).map((l) => l.trim().replace(/^(When|And) /, ''));
+  assert.deepEqual(switches, ['タブ 2 に切り替える', 'タブ 1 に切り替える'], reply.gherkin);
+  assert.ok(!/タブ 3/.test(reply.gherkin) && !/タブ 3/.test(reply.markdown), reply.markdown);
+  // The recording itself keeps the numbers of the whole recording.
+  assert.deepEqual(rec.steps.map((s) => s.tab), [3, 2, 1, 3]);
+});

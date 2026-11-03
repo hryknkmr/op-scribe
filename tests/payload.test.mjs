@@ -86,10 +86,10 @@ const build = (r = rec, markdown = '') => P.buildPayload(withRuns(clone(r)), { g
 test('buildPayload carries no local-only state and passes both exit checks', () => {
   const payload = build(rec, D.toMarkdown(D.buildReproduction(withRuns(clone(rec)))));
   const json = JSON.stringify(payload);
-  for (const leak of ['tabId', 'tabIds', 'waitingTabIds', 'openingTabIds', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
+  for (const leak of ['tabId', 'tabIds', 'tabOrder', 'waitingTabIds', 'openingTabIds', 'aliases', 'grantedPatterns', 'intranet.corp.invalid', 'shop.corp.invalid', 'userAgent', 'commercialHosts']) {
     assert.ok(!json.includes(leak), `payload contains ${leak}`);
   }
-  assert.equal(payload.schema, 'op-scribe.recording/v4');
+  assert.equal(payload.schema, 'op-scribe.recording/v5');
   assert.deepEqual(payload.privacy, { policy: 'commercial-strict/1', coverage: 'commercial', hostsAliased: 1, redactions: { text: 1, secret: 1 } });
   assert.deepEqual(P.checkPayload(payload), []);
   assert.deepEqual(S.finalScan(payload, { keywords: ['intranet.corp.invalid'] }), []);
@@ -350,7 +350,8 @@ test('the largest recording the limits allow, with the worst characters, passes 
       ref: `E-${i.toString(36).padStart(6, '0')}`, verdict: 'ng', actual: `${worst(LIMITS.actual, false)}…` }),
     (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…`, kind: 'next' })
   ];
-  const steps = Array.from({ length: LIMITS.steps }, (_, i) => kinds[i % kinds.length](i));
+  // Every step in a tab of its own (#40): a switch line before each, with the longest number.
+  const steps = Array.from({ length: LIMITS.steps }, (_, i) => ({ ...kinds[i % kinds.length](i), tab: LIMITS.steps - i }));
   const big = withRuns({ ...clone(rec), startUrl: url, steps, webmcpTools: {}, trimmed: 'other',
     scope: `${worst(LIMITS.scope, false)}…`, targetVersion: `${worst(LIMITS.targetVersion, false)}…`, notTested: `${worst(LIMITS.notTested, false)}…` });
   const markdown = D.toMarkdown(D.buildReproduction(big));
@@ -714,22 +715,30 @@ test('each kind of step has the source W7 gives it (row W7; review of #37 R9)', 
 
 // ------------------------------------------------------------- ADR 0005 (v4)
 
-test('v3 and v4 are accepted, each against its own shape, and any other schema is refused (ADR 0005, M1)', () => {
-  const v4 = build(rec);
+test('v3, v4 and v5 are accepted, each against its own shape, and any other schema is refused (ADR 0005, M1; #40)', () => {
+  const v5 = build(rec);
+  assert.deepEqual(P.checkPayload(v5), []);
+  // The same recording as v4: no tab on any step.
+  const v4 = clone(v5);
+  v4.schema = 'op-scribe.recording/v4';
+  for (const s of v4.recording.steps) delete s.tab;
   assert.deepEqual(P.checkPayload(v4), []);
   // The same recording as v3: no ref, and no field v4 added.
   const v3 = clone(v4);
   v3.schema = 'op-scribe.recording/v3';
   delete v3.recording.steps[5].ref;
   assert.deepEqual(P.checkPayload(v3), []);
-  // A v4 field in a v3 payload is an unknown field, not judged by v4's rules.
-  for (const mix of [(p) => { p.recording.steps[5].ref = 'E-a1b2c3'; }, (p) => { p.recording.trimmed = 'other'; }, (p) => { p.recording.scope = ['x']; }]) {
+  // A newer version's field in an older payload is an unknown field, not judged by the newer rules.
+  for (const mix of [(p) => { p.recording.steps[5].ref = 'E-a1b2c3'; }, (p) => { p.recording.trimmed = 'other'; }, (p) => { p.recording.scope = ['x']; }, (p) => { p.recording.steps[0].tab = 1; }]) {
     const p = clone(v3);
     mix(p);
     assert.ok(P.checkPayload(p).some((x) => x.problem.startsWith('unknown field')), JSON.stringify(P.checkPayload(p)));
   }
-  for (const schema of ['op-scribe.recording/v2', 'op-scribe.recording/v5', undefined]) {
-    assert.deepEqual(P.checkPayload({ ...clone(v4), schema }), [{ path: 'schema', problem: 'unknown schema' }]);
+  const tabbed = clone(v4);
+  tabbed.recording.steps[0].tab = 1;
+  assert.deepEqual(P.checkPayload(tabbed), [{ path: 'recording.steps[0]', problem: 'unknown field tab' }]);
+  for (const schema of ['op-scribe.recording/v2', 'op-scribe.recording/v6', undefined]) {
+    assert.deepEqual(P.checkPayload({ ...clone(v5), schema }), [{ path: 'schema', problem: 'unknown schema' }]);
   }
   assert.deepEqual(P.checkPayload(null), [{ path: 'schema', problem: 'unknown schema' }]);
   // v3 keeps accepting an end before the start; v4 does not.
@@ -805,4 +814,24 @@ test('the final scan does not stop on the words v4 adds when a keyword is the sa
   // The same word anywhere else is still found.
   payload.recording.steps[5].note = ['user'];
   assert.ok(S.finalScan(payload, { keywords: ['user'] }).length);
+});
+
+// ------------------------------------------------------------- #40 (v5): the tab of a step
+
+test('a step may say which tab it happened in: an integer from 1, on any kind of step, and nothing else (row T9; #40)', () => {
+  const payload = build(rec);
+  payload.recording.steps.forEach((s, i) => { s.tab = i % 2 ? 2 : 1; });
+  payload.reproduction.gherkin = D.toGherkin(payload.recording);
+  assert.deepEqual(P.checkPayload(payload), []);
+  assert.match(payload.reproduction.gherkin, /^ {4}(When|And) タブ 2 に切り替える\n {6}\| action \| switch-tab \|\n {6}\| tab +\| 2 +\|$/m);
+  for (const bad of [0, -1, 1.5, '1', null, true]) {
+    const p = clone(payload);
+    p.recording.steps[1].tab = bad;
+    assert.notDeepEqual(P.checkPayload(p), [], `tab ${JSON.stringify(bad)} passed`);
+  }
+  // A step without a tab (a panel note) is fine in v5 too.
+  const none = clone(payload);
+  delete none.recording.steps[0].tab;
+  none.reproduction.gherkin = D.toGherkin(none.recording);
+  assert.deepEqual(P.checkPayload(none), []);
 });

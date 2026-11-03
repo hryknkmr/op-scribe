@@ -1,5 +1,5 @@
 /**
- * op-scribe - the one definition of the payload (op-scribe.recording/v4; v3 still accepted).
+ * op-scribe - the one definition of the payload (op-scribe.recording/v5; v3 and v4 still accepted).
  *
  * SHAPE lists every field that may leave the browser, with its type and the
  * row of docs/adr/0003 that decides its treatment. buildPayload copies only
@@ -22,9 +22,11 @@
   const { LIMITS, TOTALS, cut, STEP_RULES, REDACTION_KINDS, typedAllowed, HIDDEN_CHARS, RUN_KINDS, URL_MARKERS, SCHEME, renderRuns } = root.OpScribeLimits || require('./limits.js');
 
   // v3: every text the masking keeps is runs, not a string with placeholders in it (#28).
-  // v4: the tester's verdicts and the recording's own texts (ADR 0005). Both are accepted; the
-  // fields v4 added say so with since: 4, and v3 is SHAPE without them (shapeFor).
-  const SCHEMAS = Object.freeze(['op-scribe.recording/v3', 'op-scribe.recording/v4']);
+  // v4: the tester's verdicts and the recording's own texts (ADR 0005).
+  // v5: the tab each step happened in, by the order the tabs joined (#40).
+  // All are accepted; the fields a version added say so with since, and an older
+  // version's shape is SHAPE without them (shapeFor).
+  const SCHEMAS = Object.freeze(['op-scribe.recording/v3', 'op-scribe.recording/v4', 'op-scribe.recording/v5']);
   const SCHEMA = SCHEMAS[SCHEMAS.length - 1];
   const versionOf = (schema) => Number(/\/v(\d+)$/.exec(schema)?.[1]);
   const POLICY = 'commercial-strict/1';
@@ -95,8 +97,9 @@
     return '';
   }
   const opt = (node) => ({ ...node, optional: true });
-  // A field the payload has had since v4 (ADR 0005).
+  // A field the payload has had since v4 (ADR 0005), or since v5 (#40).
   const v4 = (node) => ({ ...node, since: 4 });
+  const v5 = (node) => ({ ...node, since: 5 });
   const REF = /^E-[0-9a-z]{6}$/;
 
   const TARGET = {
@@ -119,6 +122,9 @@
       t: { type: 'int', row: 'T6', min: 0 },
       env: { type: 'enum', row: 'T6', values: ['commercial', 'standard'] },
       source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
+      // The tab the step happened in, numbered by the order the tabs joined the recording (T9, #40);
+      // a note written in the side panel has none.
+      tab: v5(opt({ type: 'int', row: 'T9', min: 1 })),
       url: opt(URL_VALUE),
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
@@ -431,7 +437,7 @@
   }
 
   // Row T6: STEP_RULES (shared/limits.js) says what each kind of step must and may carry.
-  const BASE_FIELDS = ['n', 'type', 't', 'env', 'source'];
+  const BASE_FIELDS = ['n', 'type', 't', 'env', 'source', 'tab'];
 
   function checkStepKind(step, path, problems) {
     const rule = STEP_RULES[step.type];

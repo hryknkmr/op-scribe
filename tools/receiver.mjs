@@ -63,7 +63,7 @@ createServer(async (req, res) => {
   } catch {
     return reply(res, 400, { error: 'invalid json' });
   }
-  // v3 and v4 (ADR 0005): checkPayload checks each against its own version's shape.
+  // v3, v4 (ADR 0005) and v5 (#40): checkPayload checks each against its own version's shape.
   if (!SCHEMAS.includes(payload?.schema)) return reply(res, 422, { error: 'unknown schema' });
 
   let problems;

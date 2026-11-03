@@ -172,6 +172,13 @@
 
   const quote = (value) => (/^\[\[[^\]]+\]\]$/.test(value) ? value : `「${value}」`);
 
+  // Which tab a step happened in (#40): a navigation in another tab is not the outcome of an
+  // operation in this one, and a step in another tab is said to be there before it is told.
+  const sameTab = (a, b) => a?.tab === b?.tab;
+  const switchText = (tab) => `タブ ${tab} に切り替える`;
+  /** The tab the steps start in: the first step that has one. */
+  const firstTab = (steps) => steps.find((s) => s.tab !== undefined)?.tab;
+
   /** One step as one Japanese sentence. Placeholders stay raw; call humanize() to display. */
   function describeStep(step) {
     return line(sentenceOf(step));
@@ -225,6 +232,7 @@
     const notes = [];
     const findings = [];
     let previous = null;
+    let tab = firstTab(steps);
 
     for (const step of steps) {
       // What the tester noticed is not an expected result: it stays out of the steps.
@@ -251,7 +259,7 @@
         else notes.push(seen);
         continue;
       }
-      if (step.type === 'navigate' && previous && NAVIGATION_CAUSES.has(previous.type)
+      if (step.type === 'navigate' && previous && sameTab(previous, step) && NAVIGATION_CAUSES.has(previous.type)
           && step.t - previous.t <= FOLLOW_MS && out.length) {
         const last = out[out.length - 1];
         const moved = shown(`${txt(step.url)} に遷移する`);
@@ -259,7 +267,12 @@
         previous = step;
         continue;
       }
-      if (step.type === 'navigate' && previous?.type === 'navigate' && txt(previous.url) === txt(step.url)) continue;
+      if (step.type === 'navigate' && previous?.type === 'navigate' && sameTab(previous, step) && txt(previous.url) === txt(step.url)) continue;
+      // In another tab than the step before: the switch is a step of its own (#40).
+      if (step.tab !== undefined && step.tab !== tab) {
+        out.push({ action: switchText(step.tab) });
+        tab = step.tab;
+      }
       out.push({ action: shown(describeStep(step)) });
       previous = step;
     }
@@ -392,6 +405,7 @@
 
     let lastKeyword = '';
     let previous = null;
+    let tab = start?.tab ?? firstTab(steps);
     const push = (keyword, text, rows) => {
       const shown = keyword === lastKeyword ? 'And' : keyword;
       lastKeyword = keyword;
@@ -409,10 +423,15 @@
         push('Then', humanize(describeStep(step)), attributesOf(step));
         continue;
       }
+      // In another tab than the step before: said first, as a step of the person's (#40).
+      if (step.tab !== undefined && step.tab !== tab) {
+        push('When', switchText(step.tab), [['action', 'switch-tab'], ['tab', String(step.tab)]]);
+        tab = step.tab;
+      }
       if (step.type === 'note') {
         push('Then', line(humanize(txt(step.note))), step.source ? [['source', step.source]] : null);
       } else if (step.type === 'navigate') {
-        const caused = previous && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
+        const caused = previous && sameTab(previous, step) && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
         const source = step.source ? [['source', step.source]] : [];
         if (caused) push('Then', `"${humanize(txt(step.url))}" に遷移する`, [['url', txt(step.url)], ...source]);
         else push('When', `"${humanize(txt(step.url))}" を開く`, [['action', 'navigate'], ['url', txt(step.url)], ...source]);

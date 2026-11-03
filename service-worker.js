@@ -138,6 +138,10 @@ const tabsOf = (rec) => (Array.isArray(rec?.tabIds) ? rec.tabIds : (Number.isInt
 const waitingOf = (rec) => (Array.isArray(rec?.waitingTabIds) ? rec.waitingTabIds : []);
 // Tabs opened from the recording whose first page Chrome has not given yet (window.open): the first one decides.
 const openingOf = (rec) => (Array.isArray(rec?.openingTabIds) ? rec.openingTabIds : []);
+// The tabs in the order they joined, never shrinking: a step's tab number (1 for the tab the
+// recording started in) stays the same after its tab closes (#40). Browser-only, like the ids.
+const orderOf = (rec) => (Array.isArray(rec?.tabOrder) ? rec.tabOrder : tabsOf(rec));
+const tabNumber = (rec, tabId) => { const i = orderOf(rec).indexOf(tabId); return i < 0 ? undefined : i + 1; };
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && tabsOf(rec).includes(tabId);
 const isWaitingTab = (rec, tabId) => rec?.state === 'recording' && waitingOf(rec).includes(tabId);
 const httpUrl = (url) => { try { return ['http:', 'https:'].includes(new URL(url).protocol); } catch { return false; } };
@@ -158,6 +162,7 @@ async function start({ tabId, url, scope, targetVersion }) {
       state: 'recording',
       tabId,
       tabIds: [tabId],
+      tabOrder: [tabId],
       waitingTabIds: [],
       openingTabIds: [],
       startedAt: Date.now(),
@@ -178,7 +183,7 @@ async function start({ tabId, url, scope, targetVersion }) {
     // What the tester writes at the start, masked like a note (ADR 0005).
     setRecordingText(rec, 'scope', scope, settings);
     setRecordingText(rec, 'targetVersion', targetVersion, settings);
-    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url });
+    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url, tab: 1 });
     try {
       if (previous?.state === 'recording') await stopTab(previous);
       await syncContentScripts(rec.grantedPatterns);
@@ -296,7 +301,8 @@ const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
   if (waiting) {
     rec.waitingTabIds = waitingOf(rec).filter((id) => id !== target);
     rec.tabIds = [...tabsOf(rec), target];
-    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, await getSettings(), { tabUrl: url });
+    if (!orderOf(rec).includes(target)) rec.tabOrder = [...orderOf(rec), target];
+    addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, await getSettings(), { tabUrl: url, tab: tabNumber(rec, target) });
   }
   await syncContentScripts(rec.grantedPatterns);
   await injectNow(target);
@@ -369,7 +375,7 @@ async function webmcpRequest(rec, sender, { op, args }) {
     const note = String(args?.text || '').trim();
     if (!note) return { reply: { ok: false, error: 'EMPTY_TEXT' } };
     // The note belongs to the page it came from, so only that site gets it back (W8, #17).
-    const { step, changed } = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender));
+    const { step, changed } = addStep(rec, { type: 'note', note, source: 'agent', pageUrl: sender.url || sender.tab?.url }, settings, fromOf(sender, rec));
     // Past the limit of what the page may report, nothing is added (W7); the recording keeps its trimmed mark (ADR 0005).
     if (!step) return { ...(changed && { save: rec }), reply: { ok: false, error: 'NOT_RECORDED' } };
     // The note as the page's agent reads it: rendered with ‹…› labels, never [[…]] (E6, #28).
@@ -382,7 +388,7 @@ async function webmcpRequest(rec, sender, { op, args }) {
 // ------------------------------------------------------------------ messages
 
 /** Where a content script message came from, as Chrome reports it (not as the page claims). */
-const fromOf = (sender) => ({ tabUrl: sender.tab?.url, frameUrl: sender.url });
+const fromOf = (sender, rec) => ({ tabUrl: sender.tab?.url, frameUrl: sender.url, tab: tabNumber(rec, sender.tab?.id) });
 
 /**
  * The answer to a recorder that says hello: whether its tab is recorded, and how. In the queue, so a
@@ -447,7 +453,7 @@ async function handle(message, sender) {
       if (!isRecordingTab(rec, tabId) || message.recording !== rec.id) return { reply: { ok: false, error: 'NOT_RECORDING' } };
       const settings = await getSettings();
       if (type === 'STEP') {
-        addStep(rec, detail, settings, fromOf(sender));
+        addStep(rec, detail, settings, fromOf(sender, rec));
         return { save: rec, reply: { ok: true } };
       }
       if (type === 'WEBMCP_TOOLS') {
@@ -493,10 +499,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
-    const last = [...rec.steps].reverse().find((s) => s.type === 'navigate');
+    // Where this tab already is: the last navigation of this tab, when nothing came after it (#40).
+    const tab = tabNumber(rec, tabId);
+    const last = [...rec.steps].reverse().find((s) => s.type === 'navigate' && s.tab === tab);
     const moved = (step) => !(last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last);
     // A navigation a limit kept out still marks the recording trimmed (ADR 0005): saved on any change.
-    const { changed } = addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url }, moved);
+    const { changed } = addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url, tab }, moved);
     return changed ? { save: rec } : null;
   });
   // After the navigations of the recorded tabs, so none of theirs waits on this.
