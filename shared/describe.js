@@ -240,6 +240,13 @@
         findings.push({ kind: step.kind, note: shown(txt(step.note)), afterStep: out.length });
         continue;
       }
+      // In another tab than the step before: the switch is a step of its own, before anything of
+      // that tab - a page's note or notice too, which then belongs to the switch, not to an
+      // operation in the other tab (#40). A panel note has no tab and switches nothing.
+      if (step.tab !== undefined && step.tab !== tab) {
+        out.push({ action: switchText(step.tab) });
+        tab = step.tab;
+      }
       if (step.type === 'note') {
         // Everything in the Markdown is rendered with ‹…› labels, never [[…]] (E4, #28).
         const note = shown(txt(step.note));
@@ -268,11 +275,6 @@
         continue;
       }
       if (step.type === 'navigate' && previous?.type === 'navigate' && sameTab(previous, step) && txt(previous.url) === txt(step.url)) continue;
-      // In another tab than the step before: the switch is a step of its own (#40).
-      if (step.tab !== undefined && step.tab !== tab) {
-        out.push({ action: switchText(step.tab) });
-        tab = step.tab;
-      }
       out.push({ action: shown(describeStep(step)) });
       previous = step;
     }
@@ -419,14 +421,15 @@
         out.push(`    # [${NOTE_KIND_LABELS[step.kind]}] ${line(humanize(txt(step.note)))}`);
         continue;
       }
-      if (step.type === 'notice') {
-        push('Then', humanize(describeStep(step)), attributesOf(step));
-        continue;
-      }
-      // In another tab than the step before: said first, as a step of the person's (#40).
+      // In another tab than the step before: said first, as a step of the person's, before
+      // anything of that tab, a notice or a page's note too (#40). Same rule as the Markdown.
       if (step.tab !== undefined && step.tab !== tab) {
         push('When', switchText(step.tab), [['action', 'switch-tab'], ['tab', String(step.tab)]]);
         tab = step.tab;
+      }
+      if (step.type === 'notice') {
+        push('Then', humanize(describeStep(step)), attributesOf(step));
+        continue;
       }
       if (step.type === 'note') {
         push('Then', line(humanize(txt(step.note))), step.source ? [['source', step.source]] : null);

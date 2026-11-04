@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { createRequire } from 'node:module';
 
 const ROOT = new URL('..', import.meta.url);
 const read = (file) => readFileSync(new URL(file, ROOT), 'utf8');
@@ -487,8 +488,12 @@ test('closing a tab leaves the recording on; closing its last tab ends it, and a
   assert.equal(w.session.opsRecording.state, 'recording');
   assert.deepEqual(w.session.opsRecording.tabIds, [9]);
   assert.equal((await stepIn(w, 9, 'https://example.com/a')).ok, true);
-  // Its number stays 2 after the first tab closed (#40).
+  // Its number stays 2 after the first tab closed (#40), and a tab that joins later is 3, not a number given before.
   assert.equal(w.session.opsRecording.steps.at(-1).tab, 2);
+  await w.openTab({ id: 12, openerTabId: 9, url: 'https://example.com/c' });
+  assert.equal((await join(w, 12, 'https://example.com/c')).ok, true);
+  assert.equal(w.session.opsRecording.steps.at(-1).tab, 3);
+  await w.removeTab(12);
   await w.removeTab(9);
   assert.equal(w.session.opsRecording.state, 'stopped');
 });
@@ -712,4 +717,22 @@ test('a stop that comes after another one says what was not tested was not saved
   assert.deepEqual(plain(await send(panel('STOP', { recordingId: id }))), { ok: true });
   assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '  ' }))), { ok: true });
   assert.deepEqual(plain(await send(panel('STOP', { recordingId: id, notTested: '在庫' }))), { ok: false, reason: 'ALREADY_STOPPED' });
+});
+
+test('no more than LIMITS.tabsJoined tabs join one recording, closed ones included (row T9; #40)', async () => {
+  const { LIMITS } = createRequire(import.meta.url)('../shared/limits.js');
+  const w = worker();
+  await startIn7(w);
+  // One at a time: each joins and closes, so the limit of tabs at once never applies.
+  for (let id = 100; id < 100 + LIMITS.tabsJoined - 1; id += 1) {
+    await w.openTab({ id, openerTabId: 7, url: 'https://example.com/x' });
+    assert.equal((await join(w, id, 'https://example.com/x')).ok, true, `tab ${id}`);
+    await w.removeTab(id);
+  }
+  assert.equal(w.session.opsRecording.steps.at(-1).tab, LIMITS.tabsJoined);
+  await w.openTab({ id: 999, openerTabId: 7, url: 'https://example.com/x' });
+  const reply = await join(w, 999, 'https://example.com/x');
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'TOO_MANY_TABS');
+  assert.deepEqual(w.session.opsRecording.tabIds, [7]);
 });

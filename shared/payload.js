@@ -124,7 +124,7 @@
       source: { type: 'enum', row: 'T6', values: ['user', 'agent', 'unknown'] },
       // The tab the step happened in, numbered by the order the tabs joined the recording (T9, #40);
       // a note written in the side panel has none.
-      tab: v5(opt({ type: 'int', row: 'T9', min: 1 })),
+      tab: v5(opt({ type: 'int', row: 'T9', min: 1, max: LIMITS.tabsJoined })),
       url: opt(URL_VALUE),
       target: opt(TARGET),
       value: opt({ type: 'typed', row: 'I1-I8' }),
@@ -579,6 +579,8 @@
       const path = `recording.steps[${i}]`;
       if (step.n !== i + 1) problems.push({ path: `${path}.n`, problem: 'out of order' });
       if (D.isPanelNote(step) && step.env !== D.panelNoteEnv(steps)) problems.push({ path: `${path}.env`, problem: 'panel note environment' });
+      // Written in the side panel, a note happened in no tab (T9, #40).
+      if (D.isPanelNote(step) && step.tab !== undefined) problems.push({ path: `${path}.tab`, problem: 'panel note in a tab' });
       checkStepKind(step, path, problems);
       if (step.url !== undefined) checkUrl(step.url, step.env, `${path}.url`, problems);
       if (step.target?.href !== undefined) checkUrl(step.target.href, step.env, `${path}.target.href`, problems);

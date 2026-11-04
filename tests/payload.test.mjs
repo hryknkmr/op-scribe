@@ -350,8 +350,11 @@ test('the largest recording the limits allow, with the worst characters, passes 
       ref: `E-${i.toString(36).padStart(6, '0')}`, verdict: 'ng', actual: `${worst(LIMITS.actual, false)}…` }),
     (i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: `${worst(LIMITS.note, false)}…`, kind: 'next' })
   ];
-  // Every step in a tab of its own (#40): a switch line before each, with the longest number.
-  const steps = Array.from({ length: LIMITS.steps }, (_, i) => ({ ...kinds[i % kinds.length](i), tab: LIMITS.steps - i }));
+  // A switch before every step that has a tab, with the longest numbers (#40); the panel's notes have none.
+  const steps = Array.from({ length: LIMITS.steps }, (_, i) => {
+    const step = kinds[i % kinds.length](i);
+    return step.type === 'note' ? step : { ...step, tab: LIMITS.tabsJoined - (i % 2) };
+  });
   const big = withRuns({ ...clone(rec), startUrl: url, steps, webmcpTools: {}, trimmed: 'other',
     scope: `${worst(LIMITS.scope, false)}…`, targetVersion: `${worst(LIMITS.targetVersion, false)}…`, notTested: `${worst(LIMITS.notTested, false)}…` });
   const markdown = D.toMarkdown(D.buildReproduction(big));
@@ -820,11 +823,17 @@ test('the final scan does not stop on the words v4 adds when a keyword is the sa
 
 test('a step may say which tab it happened in: an integer from 1, on any kind of step, and nothing else (row T9; #40)', () => {
   const payload = build(rec);
-  payload.recording.steps.forEach((s, i) => { s.tab = i % 2 ? 2 : 1; });
+  payload.recording.steps.forEach((s, i) => { if (!D.isPanelNote(s)) s.tab = i % 2 ? 2 : 1; });
   payload.reproduction.gherkin = D.toGherkin(payload.recording);
   assert.deepEqual(P.checkPayload(payload), []);
   assert.match(payload.reproduction.gherkin, /^ {4}(When|And) タブ 2 に切り替える\n {6}\| action \| switch-tab \|\n {6}\| tab +\| 2 +\|$/m);
-  for (const bad of [0, -1, 1.5, '1', null, true]) {
+  // A panel note happened in no tab.
+  const note = payload.recording.steps.findIndex((s) => D.isPanelNote(s));
+  assert.ok(note >= 0);
+  const noted = clone(payload);
+  noted.recording.steps[note].tab = 1;
+  assert.ok(P.checkPayload(noted).some((x) => x.problem === 'panel note in a tab'), JSON.stringify(P.checkPayload(noted)));
+  for (const bad of [0, -1, 1.5, '1', null, true, 101, 1e21]) {
     const p = clone(payload);
     p.recording.steps[1].tab = bad;
     assert.notDeepEqual(P.checkPayload(p), [], `tab ${JSON.stringify(bad)} passed`);

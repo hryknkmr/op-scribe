@@ -481,3 +481,30 @@ test('a step in another tab is told as a switch first, and a navigation there is
   assert.ok(!/切り替える/.test(D.toGherkin(rec)));
   assert.ok(!/切り替える/.test(D.toMarkdown(D.buildReproduction(rec))));
 });
+
+test('a notice or a page note from another tab comes after the switch, in the Gherkin and the Markdown alike (#40)', () => {
+  const steps = [
+    { type: 'navigate', t: 0, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/' },
+    { type: 'click', t: 100, env: 'standard', source: 'user', tab: 2, url: 'https://site-2.invalid/', target: { role: 'button', name: '保存' } },
+    { type: 'click', t: 200, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'button', name: '更新' } },
+    { type: 'notice', t: 300, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/', notice: '保存しました', level: 'status' },
+    { type: 'note', t: 400, env: 'standard', source: 'agent', tab: 2, url: 'https://site-2.invalid/', note: 'ページの期待' }
+  ];
+  const r = { id: 'rec-cross', startUrl: 'https://site-1.invalid/', steps };
+  const lines = D.toGherkin(r).split('\n').filter((l) => /^ {4}(Given|When|Then|And) /.test(l)).map((l) => l.trim().replace(/^(Given|When|Then|And) /, ''));
+  const update = lines.indexOf('「更新」ボタンをクリックする');
+  assert.equal(lines[update + 1], 'タブ 2 に切り替える', lines.join('\n'));
+  assert.match(lines[update + 2], /保存しました/, lines.join('\n'));
+  const repro = D.buildReproduction(r);
+  const i = repro.steps.findIndex((s) => s.action === '「更新」ボタンをクリックする');
+  assert.equal(repro.steps[i].observed, undefined, 'nothing of tab 2 is tied to tab 1');
+  assert.equal(repro.steps[i].expected, undefined);
+  assert.equal(repro.steps[i + 1].action, 'タブ 2 に切り替える');
+  assert.ok(repro.steps[i + 1].observed?.length === 1 && repro.steps[i + 1].expected === 'ページの期待', JSON.stringify(repro.steps[i + 1]));
+});
+
+test('a recording in one tab reads the same with or without its tab numbers (#40)', () => {
+  const tagged = { ...rec, steps: rec.steps.map((s) => (s.type === 'note' && !s.url ? s : { ...s, tab: 1 })) };
+  assert.equal(D.toGherkin(tagged), D.toGherkin(rec));
+  assert.equal(D.toMarkdown(D.buildReproduction(tagged)), D.toMarkdown(D.buildReproduction(rec)));
+});

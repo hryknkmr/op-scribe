@@ -298,6 +298,8 @@ const addPattern = (pageUrl, tabId) => mutate(async (rec) => {
     if (rec.grantedPatterns.length >= LIMITS.aliases) return { reply: { ok: false, error: 'TOO_MANY_SITES' } };
     rec.grantedPatterns.push(pattern);
   }
+  // Tab numbers stay below their bound (T9, #40): past it, no tab joins this recording.
+  if (waiting && !orderOf(rec).includes(target) && orderOf(rec).length >= LIMITS.tabsJoined) return { reply: { ok: false, error: 'TOO_MANY_TABS' } };
   if (waiting) {
     rec.waitingTabIds = waitingOf(rec).filter((id) => id !== target);
     rec.tabIds = [...tabsOf(rec), target];
