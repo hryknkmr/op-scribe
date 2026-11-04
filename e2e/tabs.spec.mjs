@@ -4,10 +4,12 @@ import { test, expect } from './fixtures.mjs';
 // never does (#40, #72).
 
 // What the panel sends when the person presses "このタブも記録する" on that tab. The panel shows the
-// button only once the tab waits: a page Playwright sees may still be opening to the worker.
+// button only once the tab waits: a page Playwright sees may still be opening to the worker, and
+// may not yet be the tab's url to Chrome.
 async function join(panel, page) {
   await page.waitForURL(/^http:/);
-  const tabId = await panel.page.evaluate(async (url) => (await chrome.tabs.query({ url }))[0]?.id, page.url());
+  let tabId;
+  await expect.poll(async () => (tabId = await panel.page.evaluate(async (url) => (await chrome.tabs.query({ url }))[0]?.id, page.url()))).toBeDefined();
   await expect.poll(async () => (await panel.recording()).waitingTabIds ?? []).toContain(tabId);
   const reply = await panel.page.evaluate(async (id) => {
     const tab = await chrome.tabs.get(id);
