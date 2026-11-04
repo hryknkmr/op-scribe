@@ -848,3 +848,10 @@ test('a WebMCP reply numbers the tabs by the order the steps of its site name th
   // The recording itself keeps the numbers of the whole recording.
   assert.deepEqual(rec.steps.map((s) => s.tab), [3, 2, 1, 3]);
 });
+
+test('the tester\'s own note never takes a tab, whatever the sender says (row T9; #40)', () => {
+  const rec = { startedAt: Date.now(), aliases: {}, redactions: {}, steps: [], policy: { commercialHosts: [] } };
+  const step = R.cleanStep({ type: 'note', note: 'メモ', pageUrl: 'https://example.com/' }, rec, { keywords: [] }, { tabUrl: 'https://example.com/', tab: 2 });
+  assert.equal(step.source, 'user');
+  assert.equal(step.tab, undefined);
+});

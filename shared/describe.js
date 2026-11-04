@@ -246,6 +246,8 @@
       if (step.tab !== undefined && step.tab !== tab) {
         out.push({ action: switchText(step.tab) });
         tab = step.tab;
+        // The switch stands between: what follows is not the outcome of an operation before it.
+        previous = null;
       }
       if (step.type === 'note') {
         // Everything in the Markdown is rendered with ‹…› labels, never [[…]] (E4, #28).
@@ -424,8 +426,11 @@
       // In another tab than the step before: said first, as a step of the person's, before
       // anything of that tab, a notice or a page's note too (#40). Same rule as the Markdown.
       if (step.tab !== undefined && step.tab !== tab) {
-        push('When', switchText(step.tab), [['action', 'switch-tab'], ['tab', String(step.tab)]]);
+        // Read from the order of the steps, not seen as the person's act: unknown, like a navigation (W7).
+        push('When', switchText(step.tab), [['action', 'switch-tab'], ['tab', String(step.tab)], ['source', 'unknown']]);
         tab = step.tab;
+        // The switch stands between: what follows is not the outcome of an operation before it.
+        previous = null;
       }
       if (step.type === 'notice') {
         push('Then', humanize(describeStep(step)), attributesOf(step));

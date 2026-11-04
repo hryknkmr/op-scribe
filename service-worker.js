@@ -140,7 +140,7 @@ const waitingOf = (rec) => (Array.isArray(rec?.waitingTabIds) ? rec.waitingTabId
 const openingOf = (rec) => (Array.isArray(rec?.openingTabIds) ? rec.openingTabIds : []);
 // The tabs in the order they joined, never shrinking: a step's tab number (1 for the tab the
 // recording started in) stays the same after its tab closes (#40). Browser-only, like the ids.
-const orderOf = (rec) => (Array.isArray(rec?.tabOrder) ? rec.tabOrder : tabsOf(rec));
+const orderOf = (rec) => (Array.isArray(rec?.tabOrder) ? rec.tabOrder : []);
 const tabNumber = (rec, tabId) => { const i = orderOf(rec).indexOf(tabId); return i < 0 ? undefined : i + 1; };
 const isRecordingTab = (rec, tabId) => rec?.state === 'recording' && tabsOf(rec).includes(tabId);
 const isWaitingTab = (rec, tabId) => rec?.state === 'recording' && waitingOf(rec).includes(tabId);

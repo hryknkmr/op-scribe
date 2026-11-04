@@ -241,7 +241,7 @@
     if (type === 'note' && source === 'agent' && !raw.pageUrl) return null;
     const step = { type, t: Math.max(0, Date.now() - rec.startedAt), env, source };
     // The tab the step happened in, as the worker numbers it (T9, #40); a panel note has none.
-    if (Number.isInteger(from.tab) && from.tab >= 1) step.tab = from.tab;
+    if (Number.isInteger(from.tab) && from.tab >= 1 && !(type === 'note' && source === 'user')) step.tab = from.tab;
     // A note of the person's is written in the side panel and belongs to no page (W7, W8).
     if (raw.pageUrl && !(type === 'note' && source === 'user')) {
       // A page on a host past the alias limit is not recorded (K5; review R42).

@@ -508,3 +508,46 @@ test('a recording in one tab reads the same with or without its tab numbers (#40
   assert.equal(D.toGherkin(tagged), D.toGherkin(rec));
   assert.equal(D.toMarkdown(D.buildReproduction(tagged)), D.toMarkdown(D.buildReproduction(rec)));
 });
+
+test('after a switch, a navigation is not the outcome of the operation before it, nor is a switch left empty (#40)', () => {
+  const nav = (tab, url, t) => ({ type: 'navigate', t, env: 'standard', source: 'unknown', tab, url });
+  // A click in tab 1, a notice from tab 2, then tab 1's navigation.
+  const r = { id: 'rec-sw', startUrl: 'https://site-1.invalid/', steps: [
+    nav(1, 'https://site-1.invalid/', 0),
+    { type: 'click', t: 100, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'button', name: '送る' } },
+    { type: 'notice', t: 200, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/', notice: '保存しました', level: 'status' },
+    nav(1, 'https://site-1.invalid/done', 300)
+  ] };
+  const items = D.buildReproduction(r).steps;
+  assert.deepEqual(items.map((s) => s.action), ['https://site-1.invalid/ を開く', '「送る」ボタンをクリックする', 'タブ 2 に切り替える', 'タブ 1 に切り替える', 'https://site-1.invalid/done を開く']);
+  assert.equal(items[3].expected, undefined, 'the switch has no outcome of its own');
+  const lines = D.toGherkin(r).split('\n').filter((l) => /^ {4}(Given|When|Then|And) /.test(l)).map((l) => l.trim().replace(/^(Given|When|Then|And) /, ''));
+  assert.deepEqual(lines.slice(-2), ['タブ 1 に切り替える', '"https://site-1.invalid/done" を開く'], lines.join('\n'));
+  assert.match(D.toGherkin(r), /\| action \| switch-tab \|\n {6}\| tab +\| 2 +\|\n {6}\| source +\| unknown \|/);
+  // A page tab 2 is on again, after a notice from tab 1: the switch back is followed by that page.
+  const back = { id: 'rec-sw2', startUrl: 'https://site-1.invalid/', steps: [
+    nav(1, 'https://site-1.invalid/', 0), nav(2, 'https://site-2.invalid/b', 100),
+    { type: 'notice', t: 200, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/', notice: '更新', level: 'status' },
+    nav(2, 'https://site-2.invalid/b', 300)
+  ] };
+  // Every switch holds something of its tab: what the tab showed, or the step that follows it.
+  const items2 = D.buildReproduction(back).steps;
+  items2.forEach((s, i) => {
+    if (!/切り替える/.test(s.action)) return;
+    const next = items2[i + 1];
+    assert.ok(s.observed?.length || s.expected || (next && !/切り替える/.test(next.action)), items2.map((x) => x.action).join(' / '));
+  });
+  assert.deepEqual(items2.map((x) => x.action).slice(-2), ['タブ 2 に切り替える', 'https://site-2.invalid/b を開く']);
+});
+
+test('a bug ticket\'s steps say where the tabs switch (format A; #40)', () => {
+  const r = { id: 'rec-ticket-tabs', startedAt: '2026-11-04T00:00:00.000Z', endedAt: '2026-11-04T00:01:00.000Z', startUrl: 'https://site-1.invalid/', environment: {}, steps: [
+    { type: 'navigate', t: 0, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/' },
+    { type: 'click', t: 100, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'link', name: '別タブ' } },
+    { type: 'navigate', t: 900, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/' },
+    { type: 'click', t: 1000, env: 'standard', source: 'user', tab: 2, url: 'https://site-2.invalid/', target: { role: 'button', name: '保存' } },
+    { type: 'note', t: 1100, env: 'standard', source: 'user', note: '保存できる', ref: 'E-aaaaaa', verdict: 'ng', actual: 'エラー' }
+  ] };
+  const [ticket] = D.bugTickets(r);
+  assert.ok(ticket.text.includes('3. タブ 2 に切り替える\n4. https://site-2.invalid/ を開く\n5. 「保存」ボタンをクリックする'), ticket.text);
+});
