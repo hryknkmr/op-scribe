@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 伏せ忘れ・脆弱性の報告（非公開）
+    url: https://github.com/hryknkmr/op-scribe/security/advisories/new
+    about: 個人情報や秘密が出口を通ってしまう問題は、公開の Issue ではなくこちらから報告してください。
