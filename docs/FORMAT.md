@@ -73,11 +73,15 @@ Feature: 記録された操作の再現
 
 操作に起因しない遷移（アドレスバーへの直接入力など）は `When "…" を開く` になります。
 
+ステップ（ページの通知・ページからの期待結果も含む）が直前のステップと別のタブで起きたときは、その前に `When タブ N に切り替える`（`action` は `switch-tab`、`tab` は番号）が入ります。別のタブで起きた遷移は、直前の操作に起因する `Then` にはなりません。番号は記録に加わった順（1 は記録を始めたタブ）で、実タブ ID は出ません。サイドパネルで書いたメモはタブを持たないので、切り替えを起こしません。切り替えの後に来たステップは、切り替えの前の操作の結果としてまとめません。
+
+切り替えは、ステップがどのタブで起きたかの並びから書くもので、人がタブを選んだ操作を記録したものではありません。裏のタブでページが自分で遷移したときや、裏のタブの通知が届いたときにも「タブ N に切り替える」が入ります（既知の限界）。実施記録（書式 B）の画面の移り変わりと付録、バグチケット（書式 A）の題名の画面と「画面に出た通知」は、まだタブを区別しません（#40 の残り）。ほかのタブで遷移が起きると、題名の画面がそのタブのものになったり、通知が抜けたりします。
+
 ### 属性（+α）
 
 | 属性 | 内容 | 例 |
 | --- | --- | --- |
-| `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `tool` `navigate` `notice` |
+| `action` | 操作種別 | `click` `input` `select` `check` `upload` `key` `tool` `navigate` `notice` `switch-tab` |
 | `url` | 操作した画面の URL（伏せ済み） | `https://site-1.invalid/orders/[[id]]` |
 | `role` | 対象要素の ARIA ロール（明示 or 暗黙） | `button` `link` `textbox` `combobox` |
 | `name` | 対象要素のアクセシブルネーム（伏せ済み・80 字まで） | `ログインする` |
@@ -90,6 +94,7 @@ Feature: 記録された操作の再現
 | `tool` / `args` | 実行された WebMCP ツール名と引数（伏せ済み） | `search_catalog` / `{"q":"[[text:5]]"}` |
 | `level` / `notice` | ページの通知の強さ（`status` / `alert`）と文（伏せ済み・200 字まで） | `alert` / `保存できませんでした` |
 | `source` | 人の操作は `user`、WebMCP のツール呼び出し・追記は `agent`、タブの遷移とページの通知は `unknown`（人かページか見分けられない） | |
+| `tab` | 切り替え先のタブの番号（`action` が `switch-tab` の行だけ）。記録に加わった順に 1 から。1 は記録を始めたタブ。切り替えの行の `source` は `unknown` | `2` |
 
 再現する側（人・AI）へのルール:
 
@@ -121,16 +126,16 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 - Markdown: `## 探索メモ` の節に `- [不具合] 保存が2回走る（手順 1 の後）` の形で並ぶ。AI で整理したときは手順の番号を付けない
 - Gherkin: その位置のコメント行 `# [不具合] 保存が2回走る` になる。シナリオの意味は変わらない
 
-## 送信ペイロード（`op-scribe.recording/v4`）
+## 送信ペイロード（`op-scribe.recording/v5`）
 
-拡張は v4 を作ります。受信サーバと出口の検査は、v3 も受け付けます（`schema` を読み、その版の形だけで全体を検査します。v3 に v4 の欄があれば拒否します）。
+拡張は v5 を作ります。受信サーバと出口の検査は、v3・v4 も受け付けます（`schema` を読み、その版の形だけで全体を検査します。古い版に新しい版の欄があれば拒否します）。
 
 形の唯一の定義は `shared/payload.js` の `SHAPE` です。各欄が [ADR 0003](adr/0003-privacy-guarantee-matrix.md)
 の表のどの行で扱いが決まるかも、そこに書いてあります（テストで突き合わせます）。
 
 ```jsonc
 {
-  "schema": "op-scribe.recording/v4",
+  "schema": "op-scribe.recording/v5",
   "privacy": {
     "policy": "commercial-strict/1",
     "coverage": "commercial | standard | mixed | none",
@@ -144,15 +149,15 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
     "startUrl": ["https://site-1.invalid/"],
     "environment": { "browser": ["Google Chrome 141"], "platform": ["macOS"], "language": ["ja"] },
     "steps": [
-      { "n": 1, "type": "navigate", "t": 0, "env": "commercial", "source": "unknown", "url": ["https://site-1.invalid/"] },
-      { "n": 2, "type": "input", "t": 900, "env": "commercial", "source": "user", "url": ["…"],
+      { "n": 1, "type": "navigate", "t": 0, "env": "commercial", "source": "unknown", "tab": 1, "url": ["https://site-1.invalid/"] },
+      { "n": 2, "type": "input", "t": 900, "env": "commercial", "source": "user", "tab": 1, "url": ["…"],
         "target": { "role": "textbox", "name": ["本文"], "tag": "textarea", "selector": "#body" },
         "value": { "treatment": "length", "field": "text", "kind": "text", "length": 12 } },
-      { "n": 3, "type": "navigate", "t": 1200, "env": "standard", "source": "unknown",
+      { "n": 3, "type": "navigate", "t": 1200, "env": "standard", "source": "unknown", "tab": 2,
         "url": ["https://site-2.invalid/users/", { "redacted": "id" }, "?q=", { "redacted": "v" }] },
-      { "n": 4, "type": "input", "t": 1300, "env": "standard", "source": "user", "url": ["…"],
+      { "n": 4, "type": "input", "t": 1300, "env": "standard", "source": "user", "tab": 2, "url": ["…"],
         "value": { "treatment": "kept", "field": "text", "text": ["問い合わせ ", { "redacted": "email" }] } },
-      { "n": 5, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tool": ["search_catalog"], "ok": true,
+      { "n": 5, "type": "tool", "t": 1500, "env": "commercial", "source": "agent", "tab": 1, "tool": ["search_catalog"], "ok": true,
         "args": { "q": { "treatment": "length", "field": "arg", "kind": "text", "length": 5 }, "all": true } },
       { "n": 6, "type": "note", "t": 1800, "env": "commercial", "source": "user", "note": ["一覧が表示される"],
         "ref": "E-7f3a9k", "verdict": "ng", "actual": ["一覧が空のまま"] }
@@ -173,7 +178,9 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 ```
 
 - `privacy.redactions` は、記録に入れたステップと欄で伏せた回数の、種類ごとの累計です（上限などで記録しなかったステップの分は数えません）。ステップを削除しても、判定を付け直して実際の結果が消えたり置き換わったりしても減りません（今の記録に残っている伏せ字の数ではありません）。
-- `t` は記録開始からの経過ミリ秒です。`endedAt` は v4 では `startedAt` より前になりません。
+- `t` は記録開始からの経過ミリ秒です。`endedAt` は v4 以降では `startedAt` より前になりません。
+- v5 で足した欄（#40）:
+  - `tab` は、そのステップが起きたタブの番号です。記録に加わった順に 1 から振り、1 は記録を始めたタブです。1 つの記録に加われるタブは、閉じたものも含めて 100 までです（`tabsJoined`）。タブを閉じても番号は変わらず、ほかのタブに振り直しません。サイドパネルで書いたメモ（`type: "note"`・`url` なし）には付きません。実タブ ID や、どのタブから開いたかは出ません。
 - v4 で足した欄（[ADR 0005](adr/0005-output-formats-for-readers.md)）:
   - `ref` は、テスターが書いた期待結果（`type: "note"`・`kind` が無い・`source: "user"`）すべてに付く ID（`E-` と英小文字・数字 6 文字。拡張が乱数で振る）。ほかのステップには付きません。
   - `verdict`（`ok` / `ng`）は、テスターが付けた判定です。無ければ未判定。`actual`（実際の結果）は `ng` のステップにだけ、必ず付きます。

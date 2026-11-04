@@ -29,6 +29,9 @@ test('a tab opened by a link or window.open joins the recording, and what is don
   await byLink.fill('#q', 'Bで入力');
   await byLink.click('#go');
   await expect.poll(async () => (await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => s.type)).toEqual(['click', 'input', 'click']);
+  // Each step says which tab it happened in, by the order the tabs joined (#40).
+  expect((await panel.recording()).steps.filter((s) => s.source === 'user').map((s) => s.tab)).toEqual([1, 2, 2]);
+  expect((await panel.recording()).steps.map((s) => s.tab)).not.toContain(undefined);
 
   const [byScript] = await Promise.all([context.waitForEvent('page'), site.click('#open')]);
   await byScript.waitForLoadState();

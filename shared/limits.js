@@ -55,6 +55,8 @@
     aliases: 500,
     // Tabs one recording records, the one it started in and those opened from them, waiting ones included (#40).
     tabs: 10,
+    // Tabs that may join one recording in all, closed ones included: the highest tab number (T9, #40).
+    tabsJoined: 100,
     redactionCount: 1e9
   });
 
