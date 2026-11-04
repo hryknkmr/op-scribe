@@ -3,6 +3,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { request } from 'node:http';
 import { mkdtempSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -108,4 +109,34 @@ test('a v3 payload is still stored, and a v3 payload with a v4 field is refused 
   blank.reproduction.gherkin = D.toGherkin(blank.recording);
   assert.equal((await post(blank)).status, 422);
   for (const id of ['rec-recv-mix', 'rec-recv-blank']) assert.ok(!readdirSync(join(dir, 'recordings')).includes(`${id}.json`));
+});
+
+// A request whose Host the test chooses, as a page reaches the receiver through a DNS rebinding.
+const postAs = (host, body) => new Promise((resolve, reject) => {
+  const req = request({ host: '127.0.0.1', port, path: '/recordings', method: 'POST', headers: { host, 'content-type': 'application/json' } }, (res) => {
+    let text = '';
+    res.on('data', (chunk) => { text += chunk; });
+    res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+  });
+  req.on('error', reject);
+  req.end(JSON.stringify(body));
+});
+
+const named = (id) => {
+  const payload = good();
+  payload.recording.id = id;
+  payload.reproduction.gherkin = D.toGherkin(payload.recording);
+  return payload;
+};
+
+test('only a Host of localhost, 127.0.0.1 or [::1] is answered, and nothing is written for another', async () => {
+  for (const [i, host] of ['site-1.invalid', `rebind.test:${port}`, `127.0.0.1.rebind.test:${port}`, `localhost.rebind.test`].entries()) {
+    const res = await postAs(host, named(`rec-recv-host-${i}`));
+    assert.equal(res.status, 403, host);
+    assert.ok(!existsSync(join(dir, 'recordings', `rec-recv-host-${i}.json`)), host);
+  }
+  for (const [i, host] of [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`, 'LOCALHOST'].entries()) {
+    const res = await postAs(host, named(`rec-recv-local-${i}`));
+    assert.equal(res.status, 201, `${host} ${JSON.stringify(res.body)}`);
+  }
 });

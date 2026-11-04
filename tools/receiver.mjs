@@ -11,7 +11,8 @@
  * The extension never sends its keyword list or the real hosts it aliased, so
  * the receiver can only look for them when its operator lists them (ADR 0003, E6).
  *
- * Binds to 127.0.0.1 only. Runs the same two checks as the extension's exits:
+ * Binds to 127.0.0.1 only, and answers only a Host of localhost, 127.0.0.1 or [::1]: a page
+ * whose own name a DNS rebinding points here gets nothing. Runs the same two checks as the extension's exits:
  * the structural check against the one payload definition (shared/payload.js:
  * unknown fields, types, treatments, Gherkin rebuilt from the steps) and the
  * best-effort pattern scan. Anything that fails either is rejected (422), so a
@@ -39,12 +40,16 @@ const KEYWORDS = KEYWORDS_FILE
   ? readFileSync(KEYWORDS_FILE, 'utf8').split('\n').map((s) => s.trim()).filter((s) => s && !s.startsWith('#'))
   : [];
 
+// The names the extension may send to over http (sidepanel.js endpointPattern), with any port.
+const LOCAL_HOST = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+
 const reply = (res, status, body) => {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 };
 
 createServer(async (req, res) => {
+  if (!LOCAL_HOST.test(req.headers.host || '')) return reply(res, 403, { error: 'local host names only' });
   if (req.method !== 'POST' || req.url !== '/recordings') return reply(res, 404, { error: 'POST /recordings only' });
   if (TOKEN && req.headers.authorization !== `Bearer ${TOKEN}`) return reply(res, 401, { error: 'unauthorized' });
   if (!String(req.headers['content-type']).startsWith('application/json')) return reply(res, 415, { error: 'json only' });
