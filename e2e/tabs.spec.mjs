@@ -3,14 +3,19 @@ import { test, expect } from './fixtures.mjs';
 // A tab opened from a tab of the recording waits, and joins when the person adds it in the panel; any other tab
 // never does (#40, #72).
 
-// What the panel sends when the person presses "このタブも記録する" on that tab.
+// What the panel sends when the person presses "このタブも記録する" on that tab. The panel shows the
+// button only once the tab waits: a page Playwright sees may still be opening to the worker, and
+// may not yet be the tab's url to Chrome.
 async function join(panel, page) {
   await page.waitForURL(/^http:/);
-  const reply = await panel.page.evaluate(async (url) => {
-    const [tab] = await chrome.tabs.query({ url });
+  let tabId;
+  await expect.poll(async () => (tabId = await panel.page.evaluate(async (url) => (await chrome.tabs.query({ url }))[0]?.id, page.url()))).toBeDefined();
+  await expect.poll(async () => (await panel.recording()).waitingTabIds ?? []).toContain(tabId);
+  const reply = await panel.page.evaluate(async (id) => {
+    const tab = await chrome.tabs.get(id);
     return chrome.runtime.sendMessage({ from: 'op-scribe/panel', type: 'ADD_ORIGIN', detail: { url: tab.url, tabId: tab.id } });
-  }, page.url());
-  expect(reply?.ok).toBe(true);
+  }, tabId);
+  expect(reply).toMatchObject({ ok: true });
 }
 
 test('a tab opened by a link or window.open joins the recording, and what is done there is recorded (#40)', async ({ context, panel }) => {
