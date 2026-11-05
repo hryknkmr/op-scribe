@@ -21,21 +21,23 @@
 (function (root) {
   'use strict';
 
-  const { ALIAS_HOST, HIDDEN_CHARS, oneLine } = root.OpScribeLimits || require('./limits.js');
+  const { ALIAS_HOST, HIDDEN_CHARS, LIMITS, oneLine } = root.OpScribeLimits || require('./limits.js');
   const D = root.OpScribeDescribe || require('./describe.js');
 
   const txt = D.rendered;
   const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
   // Escaped in every literal, so the code shows what it holds and stays one line (E7).
   const UNSAFE = new RegExp(`[\\p{Cc}\\u2028\\u2029]|${HIDDEN_CHARS}`, 'gu');
-  // Every literal written while a file is built, unescaped: the exit scans them as well as the file, since an
-  // escape (a doubled backslash, \") can hide a keyword from a scan of the code (review of #80).
-  let literals = null;
-  const lit = (text) => {
-    if (literals) literals.push(String(text));
-    return JSON.stringify(String(text)).replace(UNSAFE, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
-  };
+  // The recording's text enters the file only through lit() and comment(). An escape here (a doubled
+  // backslash, \") can hide a keyword from a scan of the file, so the exit scans the steps too (shared/formats.js).
+  const lit = (text) => JSON.stringify(String(text)).replace(UNSAFE, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
   const comment = (text) => `// ${oneLine(String(text ?? '').replace(new RegExp(HIDDEN_CHARS, 'gu'), ''))}`;
+  // A stop is a failure, not a skip: a run that cannot go on must not pass as green (review of #80).
+  const stop = (why) => `throw new Error(${lit(why)});`;
+  // The page's own ‹ and › as 〈 and 〉, so every ‹…› in a comment is a masked part (E4), as describe.js shows it.
+  const shown = (text) => D.humanize(String(text ?? '').replace(/‹/g, '〈').replace(/›/g, '〉'));
+  // A text the masking cut to n ends in the "…" it appends (limits.js, ellipsize): not what the page had.
+  const isCut = (text, n) => text.endsWith('…') && [...text].length === n + 1;
 
   /** Runs that hold the page's text only, as that text; null when any part was masked. */
   function plain(runs) {
@@ -63,8 +65,10 @@
     if (!target) return null;
     const spec = [];
     const name = plain(target.name);
-    if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name)) spec.push(`role: ${lit(target.role)}`, `name: ${lit(name)}`);
-    if (typeof target.selector === 'string' && target.selector && !target.selector.endsWith('…')) spec.push(`selector: ${lit(target.selector)}`);
+    if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name) && !isCut(name, LIMITS.name)) {
+      spec.push(`role: ${lit(target.role)}`, `name: ${lit(name)}`);
+    }
+    if (typeof target.selector === 'string' && target.selector && !isCut(target.selector, LIMITS.selector)) spec.push(`selector: ${lit(target.selector)}`);
     return spec.length ? `{ ${spec.join(', ')} }` : null;
   }
 
@@ -78,6 +82,12 @@
   const VERDICTS = { ok: 'OK', ng: 'NG' };
 
   const HELPERS = {
+    at: [
+      '/** That the page shows the path its step was on: anything else stops the test. */',
+      'async function at(page, path, step) {',
+      '  await expect.poll(() => new URL(page.url()).pathname, { message: `ステップ ${step}: 記録した画面（${path}）にいない` }).toBe(path);',
+      '}'
+    ],
     find: [
       '/** The element by role + name, else by selector: the first that matches exactly one element. Never a guess. */',
       'async function find(page, { role, name, selector }, step) {',
@@ -145,11 +155,13 @@
     if (v.treatment === 'kept') {
       if (typeof v.number === 'number') return lit(String(v.number));
       const text = plain(v.text);
-      if (text !== null) return lit(text);
+      // A value cut short is not what was typed or chosen: supplied like a masked one (review of #80).
+      if (text !== null && !isCut(text, LIMITS.kept[v.field] ?? Infinity)) return lit(text);
     }
     if (v.treatment === 'length' && v.length === 0) return lit('');
     used.add('value');
-    return `value(${lit(`OPSCRIBE_VALUE_${n}`)}, ${lit(D.humanize(D.display(v)) || '伏せた値')})`;
+    const what = v.treatment === 'kept' ? '記録では途中で切れている値' : D.humanize(D.display(v)) || '伏せた値';
+    return `value(${lit(`OPSCRIBE_VALUE_${n}`)}, ${lit(what)})`;
   }
 
   /** The statements of one person's operation, or a stop when its element cannot be found. */
@@ -158,7 +170,7 @@
     let el = '';
     if (acts) {
       const spec = locatorSpec(step.target);
-      if (!spec) return [`test.fixme(true, ${lit(`ステップ ${n}: 対象を見つける手がかり（役割と名前・selector）が無い`)});`];
+      if (!spec) return [stop(`ステップ ${n}: 対象を見つける手がかり（役割と名前・selector）が無い`)];
       used.add('find');
       el = `(await find(page, ${spec}, ${n}))`;
     }
@@ -184,23 +196,9 @@
   }
 
   /**
-   * recording: a checked payload's recording. Returns { text, literals }: the test file, and every
-   * string literal in it as the text it holds, for the exit to scan.
+   * recording: a checked payload's recording. Returns the test file as text.
    */
-  function buildPlaywright(recording) {
-    literals = [];
-    try {
-      const text = fileOf(recording);
-      return { text, literals };
-    } finally {
-      literals = null;
-    }
-  }
-
-  /** The test file alone. */
-  const toPlaywright = (recording) => buildPlaywright(recording).text;
-
-  function fileOf(recording) {
+  function toPlaywright(recording) {
     const steps = recording?.steps || [];
     const used = new Set();
     const body = [];
@@ -216,14 +214,14 @@
     if (steps[0]?.type !== 'navigate') {
       const start = gotoCode(urlOf(D.startUrlOf(recording)), used);
       say('記録の始まり（最初の画面を開く操作）が残っていない。URL のある最初のステップの画面から始める');
-      body.push(start ? `await page.goto(${start});` : `test.fixme(true, ${lit('始める画面の URL が記録に無いか、伏せてある')});`);
+      body.push(start ? `await page.goto(${start});` : stop('始める画面の URL が記録に無いか、伏せてある'));
     }
 
     let previous = null;
     steps.forEach((step, i) => {
       const n = Number.isInteger(step.n) ? step.n : i + 1;
       if (step.type === 'note' && step.kind) {
-        say(`[${NOTE_KINDS[step.kind] || step.kind}] ${D.humanize(txt(step.note))}`);
+        say(`[${NOTE_KINDS[step.kind] || step.kind}] ${shown(txt(step.note))}`);
         return;
       }
       if (step.tab !== undefined && step.tab !== tab) {
@@ -236,7 +234,7 @@
       // Only an operation the test replays can be what moved the page: a tool call is not replayed (review of #80).
       const caused = step.type === 'navigate' && D.followsOperation(previous, step)
         && previous.source === 'user' && OPERATIONS.has(previous.type);
-      say(caused ? `${n}. ${D.humanize(txt(step.url))} に遷移したことを確かめる` : `${n}. ${D.humanize(D.describeStep(step))}`);
+      say(caused ? `${n}. ${shown(txt(step.url))} に遷移したことを確かめる` : `${n}. ${shown(D.describeStep(step))}`);
       if (step.type === 'notice') {
         say('（ページが出した表示。結果として確かめはしない）');
         return;
@@ -249,15 +247,24 @@
       if (step.type === 'navigate') {
         const url = urlOf(step.url);
         if (caused) {
-          if (url) body.push(`await expect.poll(() => new URL(page.url()).pathname).toBe(${lit(url.path)});`);
-          else say('遷移先の URL は伏せてあるので確かめない');
+          if (url) {
+            used.add('at');
+            body.push(`await at(page, ${lit(url.path)}, ${n});`);
+          } else say('遷移先の URL は伏せてあるので確かめない');
         } else if (!(previous?.type === 'navigate' && previous.tab === step.tab && txt(previous.url) === txt(step.url))) {
           const to = gotoCode(url, used);
-          body.push(to ? `await page.goto(${to});` : `test.fixme(true, ${lit(`ステップ ${n}: 開く URL が伏せてある`)});`);
+          body.push(to ? `await page.goto(${to});` : stop(`ステップ ${n}: 開く URL が伏せてある`));
         }
       } else if (step.type === 'tool') {
         say('WebMCP ツールの呼び出しは書き出さない（ページの AI エージェントが行ったもの）');
       } else if (OPERATIONS.has(step.type) && step.source === 'user') {
+        // First, that this is the page the step was on: a navigation the recording lost (trimmed, deleted)
+        // or a page the test reached otherwise must stop the test, not let it act there (review of #80).
+        const url = urlOf(step.url);
+        if (url) {
+          used.add('at');
+          body.push(`await at(page, ${lit(url.path)}, ${n});`);
+        } else say('このステップの画面の URL は伏せてあるので、いる画面は確かめない');
         body.push(...operation(step, n, used));
       } else {
         say(`人の操作として記録されていないので書き出さない（source: ${step.source}）`);
@@ -270,13 +277,15 @@
       comment('op-scribe: Playwright のテスト。記録から機械的に作ったもので、AI の出力は使っていない'),
       comment(`記録 ID: ${recording?.id || 'unknown'}`),
       comment('要素は 役割と名前 → selector の順で探し、一つに決まらなければ止まる（推測して操作しない）'),
-      comment('‹…› の値は記録では伏せてある。OPSCRIBE_VALUE_<ステップ番号> などの環境変数でテスト値を渡し、元の値を推測しない')
+      comment('‹…› の値は記録では伏せてある。OPSCRIBE_VALUE_<ステップ番号> などの環境変数でテスト値を渡し、元の値を推測しない'),
+      comment('操作の前に、記録した画面（URL のパス）にいることを確かめ、違えば止まる')
     ];
+    if (recording?.trimmed) head.push(comment('記録の一部が上限で消えている。消えた操作は再生されず、画面が合わないところで止まる'));
     if (used.has('site')) head.push(comment('site-N.invalid は実際のホスト名を伏せた別名。OPSCRIBE_SITE_<N> に実際の origin を渡す'));
     // Double quotes: a quote before @ reads as part of an e-mail address to finalScan, which the exit runs.
     head.push('import { test, expect } from "@playwright/test";');
     if (used.has('files')) head.push('import { delimiter } from "node:path";');
-    const helpers = ['find', 'value', 'files', 'site', 'tab'].filter((h) => used.has(h)).flatMap((h) => ['', ...HELPERS[h]]);
+    const helpers = ['at', 'find', 'value', 'files', 'site', 'tab'].filter((h) => used.has(h)).flatMap((h) => ['', ...HELPERS[h]]);
     const out = [
       ...head,
       ...helpers,
@@ -288,7 +297,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const api = { toPlaywright, buildPlaywright };
+  const api = { toPlaywright };
   root.OpScribePlaywright = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

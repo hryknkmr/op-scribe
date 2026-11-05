@@ -112,7 +112,7 @@ test('operations find their element by role + name, else selector, and fill kept
   ]);
   // The navigation the click caused is checked, not opened: a click that goes nowhere fails it.
   elements[3].to = undefined;
-  await assert.rejects(run(text, { elements, env: { OPSCRIBE_SITE_1: 'https://staging.example.com' } }), /poll: \/form vs \/done/);
+  await assert.rejects(run(text, { elements, env: { OPSCRIBE_SITE_1: 'https://staging.example.com' } }), /ステップ 7: 記録した画面（\/done）にいない/);
 });
 
 test('a caused navigation is checked by its path; an ambiguous element stops without a guess (#2)', async () => {
@@ -124,9 +124,9 @@ test('a caused navigation is checked by its path; an ambiguous element stops wit
   const text = toPlaywright(rec);
   // A host that is not an alias is opened as recorded, with no OPSCRIBE_SITE variable.
   assert.doesNotMatch(text, /OPSCRIBE_SITE/);
-  assert.match(text, /toBe\("\/b"\)/);
+  assert.match(text, /await at\(page, "\/b", 3\);/);
   await assert.rejects(run(text, { elements: [{ role: 'link', name: '次へ' }, { role: 'link', name: '次へ' }] }), /ステップ 2: 対象が一つに決まらない/);
-  await assert.rejects(run(text, { elements: [{ role: 'link', name: '次へ' }] }), /poll: \/a vs \/b/);
+  await assert.rejects(run(text, { elements: [{ role: 'link', name: '次へ' }] }), /ステップ 3: 記録した画面（\/b）にいない/);
   const { calls } = await run(text, { elements: [{ role: 'link', name: '次へ', to: 'https://www.example.com/b' }] });
   assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['click', 'role=link name=次へ']]);
 });
@@ -158,9 +158,11 @@ test('a step with nothing to find its element by, or a masked URL to open, stops
     // The name was masked whole and there is no selector.
     { ...base, type: 'click', url: ['https://www.example.com/a'], target: { role: 'button', name: [{ redacted: 'email' }], tag: 'button' } }
   ]);
-  assert.match((await run(toPlaywright(noCue))).fixme, /ステップ 2: 対象を見つける手がかり/);
+  // A stop is a failure, never a skip that would pass as green.
+  await assert.rejects(run(toPlaywright(noCue)), /ステップ 2: 対象を見つける手がかり/);
+  assert.doesNotMatch(toPlaywright(noCue), /test\.(fixme|skip)/);
   const maskedUrl = recordingOf([{ ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/users/', { redacted: 'id' }] }]);
-  assert.match((await run(toPlaywright(maskedUrl))).fixme, /ステップ 1: 開く URL が伏せてある/);
+  await assert.rejects(run(toPlaywright(maskedUrl)), /ステップ 1: 開く URL が伏せてある/);
 });
 
 test('what the page showed, expectations, notes and tool calls are comments, never steps (#2)', async () => {
@@ -218,9 +220,10 @@ test('the page\'s text never becomes code: quotes, line breaks and hidden charac
   // Every line is one line of code or comment: none starts with page text.
   for (const l of text.split('\n')) assert.doesNotMatch(l, /^process\.exit/);
   const name = rec.steps[1].target.name.join('');
-  const { calls, fixme } = await run(text, { elements: [{ role: 'button', name }] });
-  assert.deepEqual(calls.at(-1), ['click', `role=button name=${name}`]);
-  assert.match(fixme, /ステップ 3: 対象を見つける手がかり/);
+  // The click on the evil name happens; the next step stops, and the stop says so.
+  await assert.rejects(run(text, { elements: [{ role: 'button', name }] }), /ステップ 3: 対象を見つける手がかり/);
+  const clicked = await run(text.replace(/^  throw new Error\(.*$/m, ''), { elements: [{ role: 'button', name }] });
+  assert.deepEqual(clicked.calls.at(-1), ['click', `role=button name=${name}`]);
 });
 
 test('the Playwright test goes through the formats exit: a keyword registered later stops it (#2, E6)', () => {
@@ -250,7 +253,7 @@ test('a navigation after a tool call is opened, not checked: the test does not r
   const text = toPlaywright(rec);
   // The comment says what the line does: open, or check where the click went.
   assert.match(text, /\/\/ 3\. https:\/\/www\.example\.com\/next を開く\n  await page\.goto\("https:\/\/www\.example\.com\/next"\);/);
-  assert.match(text, /\/\/ 5\. https:\/\/www\.example\.com\/a に遷移したことを確かめる\n  await expect\.poll/);
+  assert.match(text, /\/\/ 5\. https:\/\/www\.example\.com\/a に遷移したことを確かめる\n  await at\(page, "\/a", 5\);/);
   const { calls } = await run(text, { elements: [{ role: 'link', name: '戻る', to: 'https://www.example.com/a' }] });
   assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['goto', 1, 'https://www.example.com/next'], ['click', 'role=link name=戻る']]);
 });
@@ -267,4 +270,40 @@ test('a keyword hidden by an escape inside a literal still stops the exit (#2, E
     assert.equal(made.playwright.text, null, selector);
     assert.ok(made.playwright.findings.some((f) => f.kinds.includes('keyword')), selector);
   }
+});
+
+test('a value or a name the masking cut short is never used as if whole (#2, review of #80)', async () => {
+  const long = `${'x'.repeat(200)}…`;
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'input', url: ['https://www.example.com/a'], target: { role: 'textbox', name: ['本文'], tag: 'textarea' }, value: { treatment: 'kept', field: 'text', text: [long] } },
+    { ...base, type: 'click', url: ['https://www.example.com/a'], target: { role: 'button', name: [`${'y'.repeat(80)}…`], tag: 'button', selector: '#go' } }
+  ]);
+  const text = toPlaywright(rec);
+  assert.doesNotMatch(text, /"x{200}…"/);
+  assert.doesNotMatch(text, /y{80}…"/);
+  await assert.rejects(run(text, { elements: [{ role: 'textbox', name: '本文' }] }), /OPSCRIBE_VALUE_2 に 記録では途中で切れている値 のテスト値/);
+  const { calls } = await run(text, { elements: [{ role: 'textbox', name: '本文' }, { selector: '#go' }], env: { OPSCRIBE_VALUE_2: 'z' } });
+  assert.deepEqual(calls.slice(1), [['fill', 'role=textbox name=本文', 'z'], ['click', 'css=#go']]);
+});
+
+test('a step on a page the recording lost the way to stops instead of acting on the page it is on (#2, review of #80)', async () => {
+  // The navigation to /admin was trimmed: the second click is recorded on /admin.
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/'] },
+    { ...base, type: 'click', t: 10, url: ['https://www.example.com/'], target: { role: 'button', name: ['削除'], tag: 'button' } },
+    { ...base, type: 'click', t: 20000, url: ['https://www.example.com/admin'], target: { role: 'button', name: ['削除'], tag: 'button' } }
+  ], { trimmed: 'other' });
+  const text = toPlaywright(rec);
+  assert.match(text, /\/\/ 記録の一部が上限で消えている/);
+  await assert.rejects(run(text, { elements: [{ role: 'button', name: '削除' }] }), /ステップ 3: 記録した画面（\/admin）にいない/);
+});
+
+test('page text that looks like a masked part is shown apart from one in the comments (#2, E4)', () => {
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'click', url: ['https://www.example.com/a'], target: { role: 'button', name: ['‹メールアドレス›'], tag: 'button' } }
+  ]);
+  const text = toPlaywright(rec);
+  assert.match(text, /\/\/ 2\. 「〈メールアドレス〉」ボタンをクリックする/);
 });

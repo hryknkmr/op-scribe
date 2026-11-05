@@ -32,11 +32,15 @@
       const findings = S.finalScan(scanned, scan);
       return { text: findings.length ? null : text, findings };
     };
-    // Each literal on its own (an object, not an array, which the scan would also read joined up).
-    const guardPlaywright = ({ text, literals }) => guard(text, { text, ...Object.fromEntries(literals.map((l, i) => [`literal${i}`, l])) });
+    // The whole file, and the steps it was made from: in the file a literal escapes the page's text (a doubled
+    // backslash), which can hide a keyword from a scan of the file alone (review of #80).
+    const guardPlaywright = (recording) => {
+      const file = PW.toPlaywright(recording);
+      return guard(file, { file, id: recording.id, steps: recording.steps });
+    };
     const tickets = D.bugTickets(payload.recording).map(({ ref, text }) => ({ ref, ...guard(text) }));
     const session = D.sessionRecord(payload.recording);
-    return { tickets, session: session === null ? null : guard(session), playwright: guardPlaywright(PW.buildPlaywright(payload.recording)) };
+    return { tickets, session: session === null ? null : guard(session), playwright: guardPlaywright(payload.recording) };
   }
 
   const api = { checkedFormats };
