@@ -1,14 +1,19 @@
 /**
- * op-scribe - a recording as a Playwright test (Issue #2).
+ * op-scribe - a recording as a draft Playwright test (Issue #2).
  *
  * Built straight from a checked payload's recording, like the Gherkin: no
  * browser, no page and no model is involved, so the same recording always
- * gives the same file. Nothing is guessed:
+ * gives the same file. It is a draft for a person to check and finish, not a
+ * replay to pass or fail on (owner decision 2026-11-05): the recording drops
+ * and changes what it must to mask (aliased hosts, dropped fragments,
+ * normalized characters, cut texts), so the file cannot be what was done.
+ * What it does do, to make the draft safer to finish:
+ *   - before each operation, it checks the page shows the origin and path the
+ *     step was recorded on, and throws otherwise;
  *   - an element is found by role + name, then by selector, and only when one
- *     of them matches exactly one element (docs/FORMAT.md, "再生のルール");
- *     a step without either stops the test (test.fixme);
- *   - a masked value, a file and the real origin behind a site-N.invalid alias
- *     are read from environment variables, and a missing one stops the test;
+ *     of them matches exactly one element; a step without either throws;
+ *   - a masked value, a file, a cut value and the real origin behind a
+ *     site-N.invalid alias are read from environment variables;
  *   - what the page showed, the tester's expectations and WebMCP tool calls
  *     are comments, not assertions: they were observed, not specified.
  *
@@ -28,9 +33,16 @@
   const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
   // Escaped in every literal, so the code shows what it holds and stays one line (E7).
   const UNSAFE = new RegExp(`[\\p{Cc}\\u2028\\u2029]|${HIDDEN_CHARS}`, 'gu');
-  // The recording's text enters the file only through lit() and comment(). An escape here (a doubled
-  // backslash, \") can hide a keyword from a scan of the file, so the exit scans the steps too (shared/formats.js).
+  // The recording's text enters the file only through pageLit() and comment(). The exit scans the steps the
+  // file is made from and each page literal as the text it holds, not the file: an escape in the code (a
+  // doubled backslash) could hide a keyword, and the generator's own code is no page text (owner decision
+  // 2026-11-05, ADR 0005). A comment holds only the steps' text, which the exit scans as steps.
   const lit = (text) => JSON.stringify(String(text)).replace(UNSAFE, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
+  let pageTexts = null;
+  const pageLit = (text) => {
+    if (pageTexts) pageTexts.push(String(text));
+    return lit(text);
+  };
   const comment = (text) => `// ${oneLine(String(text ?? '').replace(new RegExp(HIDDEN_CHARS, 'gu'), ''))}`;
   // A stop is a failure, not a skip: a run that cannot go on must not pass as green (review of #80).
   const stop = (why) => `throw new Error(${lit(why)});`;
@@ -66,9 +78,9 @@
     const spec = [];
     const name = plain(target.name);
     if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name) && !isCut(name, LIMITS.name)) {
-      spec.push(`role: ${lit(target.role)}`, `name: ${lit(name)}`);
+      spec.push(`role: ${pageLit(target.role)}`, `name: ${pageLit(name)}`);
     }
-    if (typeof target.selector === 'string' && target.selector && !isCut(target.selector, LIMITS.selector)) spec.push(`selector: ${lit(target.selector)}`);
+    if (typeof target.selector === 'string' && target.selector && !isCut(target.selector, LIMITS.selector)) spec.push(`selector: ${pageLit(target.selector)}`);
     return spec.length ? `{ ${spec.join(', ')} }` : null;
   }
 
@@ -83,9 +95,15 @@
 
   const HELPERS = {
     at: [
-      '/** That the page shows the path its step was on: anything else stops the test. */',
-      'async function at(page, path, step) {',
-      '  await expect.poll(() => new URL(page.url()).pathname, { message: `ステップ ${step}: 記録した画面（${path}）にいない` }).toBe(path);',
+      '/** A URL as its origin and path, with %-escapes undone where the browser may show them either way. */',
+      'function place(url) {',
+      '  const { origin, pathname } = new URL(url);',
+      '  try { return decodeURI(origin + pathname); } catch { return origin + pathname; }',
+      '}',
+      '',
+      '/** That the page shows the origin and path its step was on: anything else stops the test. */',
+      'async function at(page, url, step) {',
+      '  await expect.poll(() => place(page.url()), { message: `ステップ ${step}: 記録した画面（${place(url)}）にいない` }).toBe(place(url));',
       '}'
     ],
     find: [
@@ -131,17 +149,17 @@
       '}'
     ],
     tab: [
-      '/** A tab of the recording, the first time: the one page not yet used that shows the path its step was on. Never a guess. */',
-      'async function tabOf(context, opened, tab, path) {',
+      '/** A tab of the recording, the first time: the one page not yet used that shows the origin and path its step was on. */',
+      'async function tabOf(context, opened, tab, url) {',
       '  if (!opened.has(tab)) {',
-      '    if (path === null) throw new Error(`タブ ${tab} を見分けられない（そのステップの URL が伏せてある）`);',
+      '    if (url === null) throw new Error(`タブ ${tab} を見分けられない（そのステップの URL が伏せてある）`);',
       '    let found = null;',
       '    await expect.poll(() => {',
       '      const used = [...opened.values()];',
-      '      const pages = context.pages().filter((p) => !used.includes(p) && new URL(p.url()).pathname === path);',
+      '      const pages = context.pages().filter((p) => !used.includes(p) && place(p.url()) === place(url));',
       '      found = pages.length === 1 ? pages[0] : null;',
       '      return pages.length;',
-      '    }, { message: `タブ ${tab}: ${path} を開いているタブが一つに決まらない` }).toBe(1);',
+      '    }, { message: `タブ ${tab}: ${place(url)} を開いているタブが一つに決まらない` }).toBe(1);',
       '    opened.set(tab, found);',
       '  }',
       '  return opened.get(tab);',
@@ -153,10 +171,10 @@
   function valueCode(step, n, used) {
     const v = step.value || {};
     if (v.treatment === 'kept') {
-      if (typeof v.number === 'number') return lit(String(v.number));
+      if (typeof v.number === 'number') return pageLit(String(v.number));
       const text = plain(v.text);
       // A value cut short is not what was typed or chosen: supplied like a masked one (review of #80).
-      if (text !== null && !isCut(text, LIMITS.kept[v.field] ?? Infinity)) return lit(text);
+      if (text !== null && !isCut(text, LIMITS.kept[v.field] ?? Infinity)) return pageLit(text);
     }
     if (v.treatment === 'length' && v.length === 0) return lit('');
     used.add('value');
@@ -190,15 +208,28 @@
   /** Where to go for a navigation: code for the URL, or null when it cannot be opened as recorded. */
   function gotoCode(url, used) {
     if (!url) return null;
-    if (!url.alias) return lit(`${url.origin}${url.rest}`);
+    if (!url.alias) return pageLit(`${url.origin}${url.rest}`);
     used.add('site');
-    return `new URL(${lit(url.rest)}, site(${lit(siteVar(url.alias))})).href`;
+    return `new URL(${pageLit(url.rest)}, site(${lit(siteVar(url.alias))})).href`;
   }
 
   /**
-   * recording: a checked payload's recording. Returns the test file as text.
+   * recording: a checked payload's recording. Returns { text, pageTexts }: the file, and each literal in it
+   * that holds the recording's text, as that text, for the exit to scan.
    */
-  function toPlaywright(recording) {
+  function buildPlaywright(recording) {
+    pageTexts = [];
+    try {
+      return { text: fileOf(recording), pageTexts };
+    } finally {
+      pageTexts = null;
+    }
+  }
+
+  /** The draft alone. */
+  const toPlaywright = (recording) => buildPlaywright(recording).text;
+
+  function fileOf(recording) {
     const steps = recording?.steps || [];
     const used = new Set();
     const body = [];
@@ -211,7 +242,7 @@
     }
 
     // Where it starts: the first step when it opens a page, else the first URL it has.
-    if (steps[0]?.type !== 'navigate') {
+    if (steps.length && steps[0].type !== 'navigate') {
       const start = gotoCode(urlOf(D.startUrlOf(recording)), used);
       say('記録の始まり（最初の画面を開く操作）が残っていない。URL のある最初のステップの画面から始める');
       body.push(start ? `await page.goto(${start});` : stop('始める画面の URL が記録に無いか、伏せてある'));
@@ -224,10 +255,12 @@
         say(`[${NOTE_KINDS[step.kind] || step.kind}] ${shown(txt(step.note))}`);
         return;
       }
-      if (step.tab !== undefined && step.tab !== tab) {
+      // Only a step the test replays switches tabs: a notice or a tool call in a tab the test never opens
+      // is a comment, and must not make it look for that tab (review of #80).
+      const replayed = step.type === 'navigate' || (OPERATIONS.has(step.type) && step.source === 'user');
+      if (step.tab !== undefined && step.tab !== tab && replayed) {
         say(`タブ ${step.tab} に切り替える`);
-        const at = urlOf(step.url);
-        body.push(`page = await tabOf(context, opened, ${Number(step.tab)}, ${at ? lit(at.path) : 'null'});`);
+        body.push(`page = await tabOf(context, opened, ${Number(step.tab)}, ${gotoCode(urlOf(step.url), used) ?? 'null'});`);
         tab = step.tab;
         previous = null;
       }
@@ -249,7 +282,7 @@
         if (caused) {
           if (url) {
             used.add('at');
-            body.push(`await at(page, ${lit(url.path)}, ${n});`);
+            body.push(`await at(page, ${gotoCode(url, used)}, ${n});`);
           } else say('遷移先の URL は伏せてあるので確かめない');
         } else if (!(previous?.type === 'navigate' && previous.tab === step.tab && txt(previous.url) === txt(step.url))) {
           const to = gotoCode(url, used);
@@ -263,7 +296,7 @@
         const url = urlOf(step.url);
         if (url) {
           used.add('at');
-          body.push(`await at(page, ${lit(url.path)}, ${n});`);
+          body.push(`await at(page, ${gotoCode(url, used)}, ${n});`);
         } else say('このステップの画面の URL は伏せてあるので、いる画面は確かめない');
         body.push(...operation(step, n, used));
       } else {
@@ -274,11 +307,12 @@
     if (!steps.length) say('（操作はまだ記録されていません）');
 
     const head = [
-      comment('op-scribe: Playwright のテスト。記録から機械的に作ったもので、AI の出力は使っていない'),
+      comment('op-scribe: Playwright のテストの下書き。記録から機械的に作ったもので、AI の出力は使っていない'),
       comment(`記録 ID: ${recording?.id || 'unknown'}`),
-      comment('要素は 役割と名前 → selector の順で探し、一つに決まらなければ止まる（推測して操作しない）'),
-      comment('‹…› の値は記録では伏せてある。OPSCRIBE_VALUE_<ステップ番号> などの環境変数でテスト値を渡し、元の値を推測しない'),
-      comment('操作の前に、記録した画面（URL のパス）にいることを確かめ、違えば止まる')
+      comment('下書きです。記録は伏せるために情報を落とし・変えている（ホストの別名、URL の # 以降、全角や記号の正規化、長い文字の切り詰め）ので、'),
+      comment('ここにあるのは行った操作そのものではない。人が確かめて直してから使い、そのまま実行した結果を合否の根拠にしない'),
+      comment('操作の前に、記録した画面（origin とパス）にいるかを確かめ、違えば止まる。要素は 役割と名前 → selector の順で、一つに決まるときだけ使う'),
+      comment('‹…› の値は記録では伏せてある。OPSCRIBE_VALUE_<ステップ番号> などの環境変数でテスト値を渡し、元の値を推測しない')
     ];
     if (recording?.trimmed) head.push(comment('記録の一部が上限で消えている。消えた操作は再生されず、画面が合わないところで止まる'));
     if (used.has('site')) head.push(comment('site-N.invalid は実際のホスト名を伏せた別名。OPSCRIBE_SITE_<N> に実際の origin を渡す'));
@@ -290,14 +324,14 @@
       ...head,
       ...helpers,
       '',
-      `test(${lit(`op-scribe ${recording?.id || 'unknown'}`)}, async ({ page, context }) => {`,
+      `test(${lit(`op-scribe ${recording?.id || 'unknown'}（下書き）`)}, async ({ page, context }) => {`,
       ...body.map((l) => `  ${l}`),
       '});'
     ];
     return `${out.join('\n')}\n`;
   }
 
-  const api = { toPlaywright };
+  const api = { toPlaywright, buildPlaywright };
   root.OpScribePlaywright = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

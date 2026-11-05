@@ -32,11 +32,12 @@
       const findings = S.finalScan(scanned, scan);
       return { text: findings.length ? null : text, findings };
     };
-    // The whole file, and the steps it was made from: in the file a literal escapes the page's text (a doubled
-    // backslash), which can hide a keyword from a scan of the file alone (review of #80).
+    // The Playwright draft (#2): not the whole file, but the steps it is made from and each literal that holds
+    // their text, unescaped (owner decision 2026-11-05, ADR 0005). The generator's own code is no page text, so a
+    // keyword such as "page" does not stop every draft; an escape in a literal cannot hide a keyword either.
     const guardPlaywright = (recording) => {
-      const file = PW.toPlaywright(recording);
-      return guard(file, { file, id: recording.id, steps: recording.steps });
+      const { text, pageTexts } = PW.buildPlaywright(recording);
+      return guard(text, { id: recording.id, steps: recording.steps, ...Object.fromEntries(pageTexts.map((t, i) => [`literal${i}`, t])) });
     };
     const tickets = D.bugTickets(payload.recording).map(({ ref, text }) => ({ ref, ...guard(text) }));
     const session = D.sessionRecord(payload.recording);

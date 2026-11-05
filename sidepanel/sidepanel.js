@@ -785,7 +785,7 @@ ui.copyTicket.addEventListener('click', () => copyFormat('ticket', 'バグチケ
 ui.saveTicket.addEventListener('click', () => saveFormat('ticket'));
 ui.copySession.addEventListener('click', () => copyFormat('session', '実施記録'));
 ui.saveSession.addEventListener('click', () => saveFormat('session'));
-ui.copyPlaywright.addEventListener('click', () => copyFormat('playwright', 'Playwright テスト'));
+ui.copyPlaywright.addEventListener('click', () => copyFormat('playwright', 'Playwright 下書き'));
 ui.savePlaywright.addEventListener('click', () => saveFormat('playwright'));
 ui.copyGherkin.addEventListener('click', () => copyFromPayload('Gherkin', (p) => p.reproduction.gherkin));
 
