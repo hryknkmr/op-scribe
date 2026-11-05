@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title description">
+  <title id="title">op-scribe icon</title>
+  <desc id="description">A recording dot and a three-step operation trail on a dark rounded square.</desc>
+
+  <!-- Original source artwork. Keep this SVG as the source for the PNG extension icons. -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#17212b"/>
+
+  <!-- A sheet represents the reproducible steps produced from a recording. -->
+  <path d="M37 25h39l19 19v58H37z" fill="#f7f9fb"/>
+  <path d="M76 25v19h19z" fill="#c7d2dc"/>
+
+  <!-- Recording is active. -->
+  <circle cx="48" cy="45" r="11" fill="#e43b32"/>
+
+  <!-- Three operations become an ordered trail. -->
+  <path d="M49 72h29L63 89h19" fill="none" stroke="#167d91" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="49" cy="72" r="6" fill="#167d91"/>
+  <circle cx="78" cy="72" r="6" fill="#167d91"/>
+  <circle cx="82" cy="89" r="6" fill="#167d91"/>
+</svg>
