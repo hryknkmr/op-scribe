@@ -388,3 +388,46 @@ test('the first page and tab come from a step the draft replays, and a step in a
   const { calls } = await run(text, { elements: [{ role: 'link', name: '次', to: 'https://www.example.com/b' }] });
   assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['click', 'role=link name=次']]);
 });
+
+test('two navigations whose masked URLs render alike are both opened or stopped, never skipped as one (#2, review of #80)', async () => {
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/list'] },
+    { ...base, type: 'navigate', t: 20000, source: 'unknown', url: ['https://www.example.com/user/', { redacted: 'id' }] },
+    { ...base, type: 'navigate', t: 40000, source: 'unknown', url: ['https://www.example.com/user/', { redacted: 'id' }] },
+    { ...base, type: 'click', t: 50000, url: ['https://www.example.com/user/', { redacted: 'id' }], target: { role: 'button', name: ['削除'], tag: 'button' } }
+  ]);
+  const text = toPlaywright(rec);
+  assert.equal(text.match(/ステップ \d: 開く URL が伏せてある/g)?.length, 2);
+  assert.match(text, /⚠ この画面の URL は一部を伏せてある/);
+  await assert.rejects(run(text, { elements: [{ role: 'button', name: '削除' }] }), /ステップ 2: 開く URL が伏せてある/);
+  // Whole URLs alike are still opened once.
+  const same = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'navigate', t: 20000, source: 'unknown', url: ['https://www.example.com/a'] }
+  ]);
+  assert.deepEqual((await run(toPlaywright(same))).calls, [['goto', 1, 'https://www.example.com/a']]);
+});
+
+test('a role word as a keyword does not stop a draft through the role, a word of the format (#2, K2, review of #80)', () => {
+  // No tag here: a tag is the page's element name, which every exit scans (the JSON one too).
+  const payload = P.buildPayload({ id: 'rec-pw-5', startedAt: T0, aliases: {}, redactions: {}, webmcpTools: {}, steps: [
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'click', url: ['https://www.example.com/a'], target: { role: 'button', name: ['保存'] } }
+  ] }, { generator: 'none', markdown: '' }, {});
+  const made = F.checkedFormats(payload, { keywords: ['button'], hosts: [] }).playwright;
+  assert.deepEqual(made.findings, []);
+  assert.match(made.text, /role: "button"/);
+});
+
+test('a kept value with a masked part is asked for as masked, and a value that may not exist is never typed in (#2, review of #80)', () => {
+  const rec = { id: 'rec-pw-6', steps: [
+    { ...base, n: 1, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, n: 2, type: 'input', url: ['https://www.example.com/a'], target: { role: 'textbox', name: ['メモ'] }, value: { treatment: 'kept', field: 'text', text: ['ab', { redacted: 'email' }, 'cd'] } },
+    // Not from checkPayload: a kept secret.
+    { ...base, n: 3, type: 'input', url: ['https://www.example.com/a'], target: { role: 'textbox', name: ['合言葉'] }, value: { treatment: 'kept', field: 'secret', text: ['hunter2'] } }
+  ] };
+  const text = toPlaywright(rec);
+  assert.match(text, /value\("OPSCRIBE_VALUE_2", "記録では一部を伏せた値"\)/);
+  assert.doesNotMatch(text, /hunter2/);
+  assert.match(text, /value\("OPSCRIBE_VALUE_3", /);
+});

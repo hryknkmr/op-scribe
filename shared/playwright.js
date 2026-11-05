@@ -26,7 +26,7 @@
 (function (root) {
   'use strict';
 
-  const { ALIAS_HOST, HIDDEN_CHARS, oneLine } = root.OpScribeLimits || require('./limits.js');
+  const { ALIAS_HOST, HIDDEN_CHARS, oneLine, typedAllowed } = root.OpScribeLimits || require('./limits.js');
   const D = root.OpScribeDescribe || require('./describe.js');
 
   const txt = D.rendered;
@@ -80,7 +80,8 @@
     const spec = [];
     const name = plain(target.name);
     if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name) && !isCut(name)) {
-      spec.push(`role: ${pageLit(target.role)}`, `name: ${pageLit(name)}`);
+      // The role is a word of the format, not page text (K2): the steps scan leaves it, and so does this one.
+      spec.push(`role: ${lit(target.role)}`, `name: ${pageLit(name)}`);
     }
     if (typeof target.selector === 'string' && target.selector && !isCut(target.selector)) spec.push(`selector: ${pageLit(target.selector)}`);
     return spec.length ? `{ ${spec.join(', ')} }` : null;
@@ -174,15 +175,19 @@
   /** The value a masked or kept input, select or upload step fills in, as code. */
   function valueCode(step, n, used) {
     const v = step.value || {};
-    if (v.treatment === 'kept') {
+    // Only a typed value that may exist is written out (TYPED_SCHEMA), as describe.js renders only those: a kept
+    // secret is never typed in, even from a recording that did not go through checkPayload (review of #80).
+    const allowed = typedAllowed(v.treatment, v.field, v.kind);
+    if (allowed && v.treatment === 'kept') {
       if (typeof v.number === 'number') return pageLit(String(v.number));
       const text = plain(v.text);
       // A value cut short is not what was typed or chosen: supplied like a masked one (review of #80).
       if (text !== null && !isCut(text)) return pageLit(text);
     }
-    if (v.treatment === 'length' && v.length === 0) return lit('');
+    if (allowed && v.treatment === 'length' && v.length === 0) return lit('');
     used.add('value');
-    const what = v.treatment === 'kept' ? '記録では途中で切れている値' : D.humanize(D.display(v)) || '伏せた値';
+    let what = D.humanize(D.display(v)) || '伏せた値';
+    if (allowed && v.treatment === 'kept') what = plain(v.text) === null ? '記録では一部を伏せた値' : '記録では途中で切れている値';
     return `value(${lit(`OPSCRIBE_VALUE_${n}`)}, ${lit(what)})`;
   }
 
@@ -296,8 +301,11 @@
           if (url) {
             used.add('at');
             body.push(`await at(page, ${gotoCode(url, used)}, ${n});`);
-          } else say('遷移先の URL は伏せてあるので確かめない');
-        } else if (!(previous?.type === 'navigate' && previous.tab === step.tab && txt(previous.url) === txt(step.url))) {
+          } else say('⚠ 遷移先の URL は一部を伏せてあるので、どの画面に移ったかを確かめられない（違う画面のまま続くことがある）');
+        // The same URL again is not opened twice - only when both are whole: two masked URLs that render alike
+        // (/user/‹ID›) may be two pages, and the second must still be opened or stop (review of #80).
+        } else if (!(previous?.type === 'navigate' && previous.tab === step.tab && url && urlOf(previous.url)
+            && txt(previous.url) === txt(step.url))) {
           const to = gotoCode(url, used);
           body.push(to ? `await page.goto(${to});` : stop(`ステップ ${n}: 開く URL が伏せてある`));
         }
@@ -310,7 +318,7 @@
         if (url) {
           used.add('at');
           body.push(`await at(page, ${gotoCode(url, used)}, ${n});`);
-        } else say('このステップの画面の URL は伏せてあるので、いる画面は確かめない');
+        } else say('⚠ この画面の URL は一部を伏せてあるので、いる画面を確かめられない（違う画面で操作することがある）');
         body.push(...operation(step, n, used));
       } else {
         say(`人の操作として記録されていないので書き出さない（source: ${step.source}）`);
