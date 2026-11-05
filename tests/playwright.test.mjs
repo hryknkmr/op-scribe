@@ -360,3 +360,31 @@ test('the exit scans the page\'s text, not the generator\'s code: a keyword like
   const held = F.checkedFormats(make('page を保存'), { keywords: ['page'], hosts: [] }).playwright;
   assert.equal(held.text, null);
 });
+
+test('a text cut shorter than its limit, after a masked part that did not fit was dropped, is not used either (#2, review of #80)', async () => {
+  // What cutRuns leaves: the page's text before the dropped part, then "…", well under the limit.
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'input', url: ['https://www.example.com/a'], target: { role: 'textbox', name: ['週次の報告 …'], tag: 'input', selector: '#r' }, value: { treatment: 'kept', field: 'text', text: ['よろしく …'] } }
+  ]);
+  const text = toPlaywright(rec);
+  assert.doesNotMatch(text, /name: "週次の報告 …"/);
+  assert.doesNotMatch(text, /fill\("よろしく …"\)/);
+  const { calls } = await run(text, { elements: [{ selector: '#r' }], env: { OPSCRIBE_VALUE_2: 'v' } });
+  assert.deepEqual(calls.at(-1), ['fill', 'css=#r', 'v']);
+});
+
+test('the first page and tab come from a step the draft replays, and a step in another tab does not split a click from its navigation (#2, review of #80)', async () => {
+  const rec = recordingOf([
+    { ...base, type: 'notice', source: 'unknown', tab: 2, url: ['https://www.example.com/other'], notice: ['x'], level: 'status' },
+    { ...base, type: 'click', t: 1000, tab: 1, url: ['https://www.example.com/a'], target: { role: 'link', name: ['次'], tag: 'a' } },
+    { ...base, type: 'tool', t: 1200, source: 'agent', tab: 2, url: ['https://www.example.com/other'], tool: ['t'], ok: true },
+    { ...base, type: 'navigate', t: 1500, source: 'unknown', tab: 1, url: ['https://www.example.com/b'] }
+  ], { trimmed: 'other' });
+  const text = toPlaywright(rec);
+  assert.doesNotMatch(text, /tabOf|opened/);
+  assert.match(text, /await page\.goto\("https:\/\/www\.example\.com\/a"\);/);
+  assert.doesNotMatch(text, /goto\("https:\/\/www\.example\.com\/(b|other)"\)/);
+  const { calls } = await run(text, { elements: [{ role: 'link', name: '次', to: 'https://www.example.com/b' }] });
+  assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['click', 'role=link name=次']]);
+});

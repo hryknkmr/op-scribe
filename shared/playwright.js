@@ -26,7 +26,7 @@
 (function (root) {
   'use strict';
 
-  const { ALIAS_HOST, HIDDEN_CHARS, LIMITS, oneLine } = root.OpScribeLimits || require('./limits.js');
+  const { ALIAS_HOST, HIDDEN_CHARS, oneLine } = root.OpScribeLimits || require('./limits.js');
   const D = root.OpScribeDescribe || require('./describe.js');
 
   const txt = D.rendered;
@@ -48,8 +48,10 @@
   const stop = (why) => `throw new Error(${lit(why)});`;
   // The page's own ‹ and › as 〈 and 〉, so every ‹…› in a comment is a masked part (E4), as describe.js shows it.
   const shown = (text) => D.humanize(String(text ?? '').replace(/‹/g, '〈').replace(/›/g, '〉'));
-  // A text the masking cut to n ends in the "…" it appends (limits.js, ellipsize): not what the page had.
-  const isCut = (text, n) => text.endsWith('…') && [...text].length === n + 1;
+  // A text the masking cut ends in the "…" it appends - shorter than its limit, too, when a masked part
+  // that did not fit was dropped first (sanitize.js, cutRuns). Any text ending in "…" is taken as cut: one
+  // the page wrote that way is then supplied or found by selector, which is only safer (review of #80).
+  const isCut = (text) => text.endsWith('…');
 
   /** Runs that hold the page's text only, as that text; null when any part was masked. */
   function plain(runs) {
@@ -77,10 +79,10 @@
     if (!target) return null;
     const spec = [];
     const name = plain(target.name);
-    if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name) && !isCut(name, LIMITS.name)) {
+    if (/^[a-z]+$/.test(target.role || '') && name && name.trim() && !HIDDEN.test(name) && !isCut(name)) {
       spec.push(`role: ${pageLit(target.role)}`, `name: ${pageLit(name)}`);
     }
-    if (typeof target.selector === 'string' && target.selector && !isCut(target.selector, LIMITS.selector)) spec.push(`selector: ${pageLit(target.selector)}`);
+    if (typeof target.selector === 'string' && target.selector && !isCut(target.selector)) spec.push(`selector: ${pageLit(target.selector)}`);
     return spec.length ? `{ ${spec.join(', ')} }` : null;
   }
 
@@ -90,6 +92,8 @@
 
   const TARGETED = new Set(['click', 'input', 'select', 'check', 'upload']);
   const OPERATIONS = new Set([...TARGETED, 'key']);
+  /** A step the draft replays: a navigation, or the person's operation. */
+  const isReplayed = (step) => step.type === 'navigate' || (OPERATIONS.has(step.type) && step.source === 'user');
   const NOTE_KINDS = { bug: '不具合', question: '疑問', idea: '気づき', next: '次に試す' };
   const VERDICTS = { ok: 'OK', ng: 'NG' };
 
@@ -174,7 +178,7 @@
       if (typeof v.number === 'number') return pageLit(String(v.number));
       const text = plain(v.text);
       // A value cut short is not what was typed or chosen: supplied like a masked one (review of #80).
-      if (text !== null && !isCut(text, LIMITS.kept[v.field] ?? Infinity)) return pageLit(text);
+      if (text !== null && !isCut(text)) return pageLit(text);
     }
     if (v.treatment === 'length' && v.length === 0) return lit('');
     used.add('value');
@@ -234,17 +238,21 @@
     const used = new Set();
     const body = [];
     const say = (text) => body.push(comment(text));
-    const tabs = [...new Set(steps.map((s) => s.tab).filter((t) => t !== undefined))];
-    let tab = steps.find((s) => s.tab !== undefined)?.tab;
+    // Only the steps the draft replays decide its tabs and where it starts: a notice or a tool call is a comment
+    // and must not choose the page the test opens first (review of #80).
+    const replayed = steps.filter(isReplayed);
+    const tabs = [...new Set(replayed.map((s) => s.tab).filter((t) => t !== undefined))];
+    let tab = replayed.find((s) => s.tab !== undefined)?.tab;
     if (tabs.length > 1) {
       used.add('tab');
       body.push(`const opened = new Map([[${Number(tab)}, page]]);`);
     }
 
-    // Where it starts: the first step when it opens a page, else the first URL it has.
-    if (steps.length && steps[0].type !== 'navigate') {
-      const start = gotoCode(urlOf(D.startUrlOf(recording)), used);
-      say('記録の始まり（最初の画面を開く操作）が残っていない。URL のある最初のステップの画面から始める');
+    // Where it starts: the first replayed step when it opens a page, else the page of the first replayed step.
+    const first = replayed[0];
+    if (first && first.type !== 'navigate') {
+      const start = gotoCode(urlOf(first.url), used);
+      say('記録の始まり（最初の画面を開く操作）が残っていない。最初に再生するステップの画面から始める');
       body.push(start ? `await page.goto(${start});` : stop('始める画面の URL が記録に無いか、伏せてある'));
     }
 
@@ -257,8 +265,13 @@
       }
       // Only a step the test replays switches tabs: a notice or a tool call in a tab the test never opens
       // is a comment, and must not make it look for that tab (review of #80).
-      const replayed = step.type === 'navigate' || (OPERATIONS.has(step.type) && step.source === 'user');
-      if (step.tab !== undefined && step.tab !== tab && replayed) {
+      // A step in another tab than the one replayed now, which the draft does not replay: a comment only, and
+      // not the step before the next one there (a click's navigation stays the click's; review of #80).
+      if (step.tab !== undefined && step.tab !== tab && !isReplayed(step)) {
+        say(`${n}. （タブ ${step.tab}）${shown(D.describeStep(step))}（再生しない）`);
+        return;
+      }
+      if (step.tab !== undefined && step.tab !== tab) {
         say(`タブ ${step.tab} に切り替える`);
         body.push(`page = await tabOf(context, opened, ${Number(step.tab)}, ${gotoCode(urlOf(step.url), used) ?? 'null'});`);
         tab = step.tab;
