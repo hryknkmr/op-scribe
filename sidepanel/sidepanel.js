@@ -50,6 +50,8 @@ const ui = {
   saveTicket: el('save-ticket'),
   copySession: el('copy-session'),
   saveSession: el('save-session'),
+  copyPlaywright: el('copy-playwright'),
+  savePlaywright: el('save-playwright'),
   formatHint: el('format-hint'),
   copyGherkin: el('copy-gherkin'),
   download: el('download'),
@@ -744,10 +746,15 @@ async function formatNow(which) {
   const payload = P.buildPayload(rec, { generator: 'none', markdown: '' }, environment());
   const made = F.checkedFormats(payload, { keywords: settings.keywords, hosts: S.aliasedHosts(rec.aliases) });
   if (made.problems) return { error: blockedMessage(made.problems.map((p) => ({ path: p.path, kinds: [`形: ${p.problem}`] }))) };
-  const out = which === 'session' ? made.session : made.tickets.find((t) => t.ref === ui.ticketRef.value);
-  if (!out) return { error: which === 'session' ? '実施記録は、記録を止めてから作れます' : 'この NG の期待結果は記録にありません' };
+  const FORMATS = {
+    session: { out: made.session, missing: '実施記録は、記録を止めてから作れます', name: `${rec.id}-session.md` },
+    playwright: { out: made.playwright, name: `${rec.id}.spec.mjs` },
+    ticket: { out: made.tickets.find((t) => t.ref === ui.ticketRef.value), missing: 'この NG の期待結果は記録にありません' }
+  };
+  const { out, missing, name } = FORMATS[which];
+  if (!out) return { error: missing };
   if (out.findings.length) return { error: blockedMessage(out.findings) };
-  return { rec, text: out.text, name: which === 'session' ? `${rec.id}-session.md` : `${rec.id}-${out.ref}.md` };
+  return { rec, text: out.text, name: name || `${rec.id}-${out.ref}.md` };
 }
 
 async function copyFormat(which, label) {
@@ -767,7 +774,7 @@ async function saveFormat(which) {
     return;
   }
   const link = document.createElement('a');
-  link.href = URL.createObjectURL(new Blob([made.text], { type: 'text/markdown' }));
+  link.href = URL.createObjectURL(new Blob([made.text], { type: which === 'playwright' ? 'text/javascript' : 'text/markdown' }));
   link.download = made.name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
@@ -778,6 +785,8 @@ ui.copyTicket.addEventListener('click', () => copyFormat('ticket', 'バグチケ
 ui.saveTicket.addEventListener('click', () => saveFormat('ticket'));
 ui.copySession.addEventListener('click', () => copyFormat('session', '実施記録'));
 ui.saveSession.addEventListener('click', () => saveFormat('session'));
+ui.copyPlaywright.addEventListener('click', () => copyFormat('playwright', 'Playwright 下書き'));
+ui.savePlaywright.addEventListener('click', () => saveFormat('playwright'));
 ui.copyGherkin.addEventListener('click', () => copyFromPayload('Gherkin', (p) => p.reproduction.gherkin));
 
 ui.download.addEventListener('click', async () => {

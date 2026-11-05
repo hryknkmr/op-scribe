@@ -56,3 +56,33 @@ test('a bug ticket and the session record are copied from the recording, and a k
   }
   expect(await copies(ui)).toHaveLength(2);
 });
+
+test('the Playwright draft copied from the panel replays the recording in a fresh page (#2)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  await site.fill('#q', '天気');
+  await site.click('#go');
+  await expect.poll(async () => (await panel.recording()).steps.map((s) => s.type)).toContain('click');
+  await panel.stop();
+  const ui = panel.page;
+  await countCopies(ui);
+  await openSection(ui, 'copy-playwright');
+  await ui.locator('#copy-playwright').click();
+  await expect(ui.locator('#output-status')).toHaveText('Playwright 下書きをコピーしました');
+  await expect.poll(() => copies(ui)).toHaveLength(1);
+  const [file] = await copies(ui);
+  expect(file).toContain('import { test, expect } from "@playwright/test";');
+  expect(file).not.toContain('a.test');
+
+  // Run the file's test with the real expect against a new page; the alias's origin comes from the environment.
+  const code = file.split('\n').filter((l) => !l.startsWith('import ')).join('\n');
+  let body = null;
+  const register = (title, fn) => { body = fn; };
+  const AsyncFunction = (async () => {}).constructor;
+  await new AsyncFunction('test', 'expect', 'process', 'delimiter', code)(register, expect, { env: { OPSCRIBE_SITE_1: 'http://a.test' } }, ':');
+  const replay = await context.newPage();
+  await body({ page: replay, context });
+  await expect(replay.locator('#q')).toHaveValue('天気');
+  await expect(replay.locator('#result')).toHaveText('結果を表示しました');
+});

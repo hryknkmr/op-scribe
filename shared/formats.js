@@ -1,5 +1,6 @@
 /**
- * op-scribe - the exit for the readers' formats (ADR 0005): bug tickets and the session record.
+ * op-scribe - the exit for the readers' formats (ADR 0005): bug tickets and the session record,
+ * and the recording as a Playwright test (Issue #2).
  *
  * Built only from a payload that passes checkPayload, and each whole text goes
  * through finalScan with the keywords as they are now and the real hosts behind
@@ -14,24 +15,33 @@
   const S = root.OpScribeSanitize || require('./sanitize.js');
   const D = root.OpScribeDescribe || require('./describe.js');
   const P = root.OpScribePayload || require('./payload.js');
+  const PW = root.OpScribePlaywright || require('./playwright.js');
 
   /**
    * payload: what buildPayload made. scan: { keywords, hosts } for finalScan.
    * Returns { problems } when the payload fails the check, else
-   * { tickets: [{ ref, text, findings }], session: { text, findings } | null },
+   * { tickets: [{ ref, text, findings }], session: { text, findings } | null, playwright: { text, findings } },
    * where text is null whenever findings is not empty. A session is null while
    * the recording has not ended.
    */
   function checkedFormats(payload, scan) {
     const problems = P.checkPayload(payload);
     if (problems.length) return { problems };
-    const guard = (text) => {
-      const findings = S.finalScan(text, scan);
+    // scanned: what to scan when it is more than the text (the Playwright test's literals, unescaped).
+    const guard = (text, scanned = text) => {
+      const findings = S.finalScan(scanned, scan);
       return { text: findings.length ? null : text, findings };
+    };
+    // The Playwright draft (#2): not the whole file, but the steps it is made from and each literal that holds
+    // their text, unescaped (owner decision 2026-11-05, ADR 0005). The generator's own code is no page text, so a
+    // keyword such as "page" does not stop every draft; an escape in a literal cannot hide a keyword either.
+    const guardPlaywright = (recording) => {
+      const { text, pageTexts } = PW.buildPlaywright(recording);
+      return guard(text, { id: recording.id, steps: recording.steps, ...Object.fromEntries(pageTexts.map((t, i) => [`literal${i}`, t])) });
     };
     const tickets = D.bugTickets(payload.recording).map(({ ref, text }) => ({ ref, ...guard(text) }));
     const session = D.sessionRecord(payload.recording);
-    return { tickets, session: session === null ? null : guard(session) };
+    return { tickets, session: session === null ? null : guard(session), playwright: guardPlaywright(payload.recording) };
   }
 
   const api = { checkedFormats };
