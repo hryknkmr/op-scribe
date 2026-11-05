@@ -126,6 +126,33 @@ Side Panel でメモの種類を選ぶと、`note` のステップに `kind`（`
 - Markdown: `## 探索メモ` の節に `- [不具合] 保存が2回走る（手順 1 の後）` の形で並ぶ。AI で整理したときは手順の番号を付けない
 - Gherkin: その位置のコメント行 `# [不具合] 保存が2回走る` になる。シナリオの意味は変わらない
 
+## Playwright のテスト
+
+パネルの **Playwright テストをコピー** / **保存** で、記録を `@playwright/test` のテストファイル（`rec-….spec.mjs`）にします（#2）。Gherkin と同じく記録から機械的に作り、Playwright の codegen も AI も使いません。同じ記録からは同じファイルができます。ほかの出口と同じく、構造の検査と全文の検査を通ったときだけ出ます。
+
+```js
+import { test, expect } from "@playwright/test";
+
+test("op-scribe rec-…", async ({ page, context }) => {
+  // 1. https://site-1.invalid/login を開く
+  await page.goto(new URL("/login", site("OPSCRIBE_SITE_1")).href);
+  // 2. 「メール」入力欄に ‹メールアドレス› を入力する
+  await (await find(page, { role: "textbox", name: "メール", selector: "#email" }, 2)).fill(value("OPSCRIBE_VALUE_2", "‹メールアドレス›"));
+  // 3. 「ログイン」ボタンをクリックする
+  await (await find(page, { role: "button", name: "ログイン" }, 3)).click();
+  // 4. https://site-1.invalid/home を開く
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/home");
+});
+```
+
+- 要素は上の「再現する側へのルール」どおりに探す。`role` + `name`（`exact: true`）が一つに決まればそれを、決まらなければ `selector` を使い、どちらでも決まらなければ失敗する。役割と名前も selector も無いステップは `test.fixme` で止まる。
+- 伏せた値は環境変数 `OPSCRIBE_VALUE_<ステップ番号>`、選んだファイルは `OPSCRIBE_FILES_<ステップ番号>`（PATH と同じ区切り）で渡す。無ければ失敗する。元の値を推測しない。
+- 別名のホスト `site-N.invalid` は、`OPSCRIBE_SITE_<N>` に実際の origin（例: `https://staging.example.com`）を渡す。別名にしていないホストは記録の URL をそのまま開く。開く URL の一部が伏せてあるステップは `test.fixme` で止まる。
+- 操作の直後の遷移は、パスだけを確かめる（ホストは別名のため）。
+- 次のものはコメントにとどめ、確かめない: ページが出した通知（一時的な表示で、仕様ではなく観測）、期待結果とその判定（人が判定したもの）、探索メモ、WebMCP のツール呼び出し、人の操作として記録されていないステップ。
+- 別のタブのステップの前で、そのタブに切り替える。タブはテストの中で開いた順に数える（記録のタブ番号は記録に加わった順なので、ずれることがある）。
+- 名前・selector・URL など記録の文字は、エスケープした文字列リテラルかコメントとしてだけ入る（改行や見えない文字はエスケープする）。
+
 ## 送信ペイロード（`op-scribe.recording/v5`）
 
 拡張は v5 を作ります。受信サーバと出口の検査は、v3・v4 も受け付けます（`schema` を読み、その版の形だけで全体を検査します。古い版に新しい版の欄があれば拒否します）。

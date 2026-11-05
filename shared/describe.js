@@ -221,6 +221,9 @@
 
   const NAVIGATION_CAUSES = new Set(['click', 'key', 'tool']);
   const FOLLOW_MS = 4000;
+  /** Whether a navigation is the outcome of the step before it: a click, key or tool call in the same tab, shortly before. */
+  const followsOperation = (previous, step) => Boolean(previous) && sameTab(previous, step)
+    && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
 
   /**
    * Builds { title, preconditions, steps: [{ action, expected? }], notes } from a recording.
@@ -268,8 +271,7 @@
         else notes.push(seen);
         continue;
       }
-      if (step.type === 'navigate' && previous && sameTab(previous, step) && NAVIGATION_CAUSES.has(previous.type)
-          && step.t - previous.t <= FOLLOW_MS && out.length) {
+      if (step.type === 'navigate' && followsOperation(previous, step) && out.length) {
         const last = out[out.length - 1];
         const moved = shown(`${txt(step.url)} に遷移する`);
         last.expected = last.expected ? `${last.expected} / ${moved}` : moved;
@@ -439,7 +441,7 @@
       if (step.type === 'note') {
         push('Then', line(humanize(txt(step.note))), step.source ? [['source', step.source]] : null);
       } else if (step.type === 'navigate') {
-        const caused = previous && sameTab(previous, step) && NAVIGATION_CAUSES.has(previous.type) && step.t - previous.t <= FOLLOW_MS;
+        const caused = followsOperation(previous, step);
         const source = step.source ? [['source', step.source]] : [];
         if (caused) push('Then', `"${humanize(txt(step.url))}" に遷移する`, [['url', txt(step.url)], ...source]);
         else push('When', `"${humanize(txt(step.url))}" を開く`, [['action', 'navigate'], ['url', txt(step.url)], ...source]);
@@ -674,7 +676,7 @@
 
   const api = {
     rendered: txt, display, coverageOf, startUrlOf, isPanelNote, panelNoteEnv, humanize, describeStep, buildReproduction, toMarkdown, toGherkin,
-    bugTickets, sessionRecord
+    bugTickets, sessionRecord, followsOperation
   };
   root.OpScribeDescribe = api;
   if (typeof module === 'object' && module.exports) module.exports = api;

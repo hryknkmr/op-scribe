@@ -1,5 +1,6 @@
 /**
- * op-scribe - the exit for the readers' formats (ADR 0005): bug tickets and the session record.
+ * op-scribe - the exit for the readers' formats (ADR 0005): bug tickets and the session record,
+ * and the recording as a Playwright test (Issue #2).
  *
  * Built only from a payload that passes checkPayload, and each whole text goes
  * through finalScan with the keywords as they are now and the real hosts behind
@@ -14,11 +15,12 @@
   const S = root.OpScribeSanitize || require('./sanitize.js');
   const D = root.OpScribeDescribe || require('./describe.js');
   const P = root.OpScribePayload || require('./payload.js');
+  const PW = root.OpScribePlaywright || require('./playwright.js');
 
   /**
    * payload: what buildPayload made. scan: { keywords, hosts } for finalScan.
    * Returns { problems } when the payload fails the check, else
-   * { tickets: [{ ref, text, findings }], session: { text, findings } | null },
+   * { tickets: [{ ref, text, findings }], session: { text, findings } | null, playwright: { text, findings } },
    * where text is null whenever findings is not empty. A session is null while
    * the recording has not ended.
    */
@@ -31,7 +33,7 @@
     };
     const tickets = D.bugTickets(payload.recording).map(({ ref, text }) => ({ ref, ...guard(text) }));
     const session = D.sessionRecord(payload.recording);
-    return { tickets, session: session === null ? null : guard(session) };
+    return { tickets, session: session === null ? null : guard(session), playwright: guard(PW.toPlaywright(payload.recording)) };
   }
 
   const api = { checkedFormats };
