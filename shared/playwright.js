@@ -28,7 +28,13 @@
   const HIDDEN = new RegExp(HIDDEN_CHARS, 'u');
   // Escaped in every literal, so the code shows what it holds and stays one line (E7).
   const UNSAFE = new RegExp(`[\\p{Cc}\\u2028\\u2029]|${HIDDEN_CHARS}`, 'gu');
-  const lit = (text) => JSON.stringify(String(text)).replace(UNSAFE, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
+  // Every literal written while a file is built, unescaped: the exit scans them as well as the file, since an
+  // escape (a doubled backslash, \") can hide a keyword from a scan of the code (review of #80).
+  let literals = null;
+  const lit = (text) => {
+    if (literals) literals.push(String(text));
+    return JSON.stringify(String(text)).replace(UNSAFE, (c) => `\\u{${c.codePointAt(0).toString(16)}}`);
+  };
   const comment = (text) => `// ${oneLine(String(text ?? '').replace(new RegExp(HIDDEN_CHARS, 'gu'), ''))}`;
 
   /** Runs that hold the page's text only, as that text; null when any part was masked. */
@@ -115,12 +121,18 @@
       '}'
     ],
     tab: [
-      '/** A tab by its number in the recording: tabs join in the order they open, so they are counted that way here too. */',
-      'async function tabOf(context, opened, tab) {',
+      '/** A tab of the recording, the first time: the one page not yet used that shows the path its step was on. Never a guess. */',
+      'async function tabOf(context, opened, tab, path) {',
       '  if (!opened.has(tab)) {',
-      '    const index = opened.size;',
-      '    await expect.poll(() => context.pages().length, { message: `タブ ${tab} が開かない` }).toBeGreaterThan(index);',
-      '    opened.set(tab, context.pages()[index]);',
+      '    if (path === null) throw new Error(`タブ ${tab} を見分けられない（そのステップの URL が伏せてある）`);',
+      '    let found = null;',
+      '    await expect.poll(() => {',
+      '      const used = [...opened.values()];',
+      '      const pages = context.pages().filter((p) => !used.includes(p) && new URL(p.url()).pathname === path);',
+      '      found = pages.length === 1 ? pages[0] : null;',
+      '      return pages.length;',
+      '    }, { message: `タブ ${tab}: ${path} を開いているタブが一つに決まらない` }).toBe(1);',
+      '    opened.set(tab, found);',
       '  }',
       '  return opened.get(tab);',
       '}'
@@ -172,9 +184,23 @@
   }
 
   /**
-   * recording: a checked payload's recording. Returns the test file as text.
+   * recording: a checked payload's recording. Returns { text, literals }: the test file, and every
+   * string literal in it as the text it holds, for the exit to scan.
    */
-  function toPlaywright(recording) {
+  function buildPlaywright(recording) {
+    literals = [];
+    try {
+      const text = fileOf(recording);
+      return { text, literals };
+    } finally {
+      literals = null;
+    }
+  }
+
+  /** The test file alone. */
+  const toPlaywright = (recording) => buildPlaywright(recording).text;
+
+  function fileOf(recording) {
     const steps = recording?.steps || [];
     const used = new Set();
     const body = [];
@@ -202,11 +228,15 @@
       }
       if (step.tab !== undefined && step.tab !== tab) {
         say(`タブ ${step.tab} に切り替える`);
-        body.push(`page = await tabOf(context, opened, ${Number(step.tab)});`);
+        const at = urlOf(step.url);
+        body.push(`page = await tabOf(context, opened, ${Number(step.tab)}, ${at ? lit(at.path) : 'null'});`);
         tab = step.tab;
         previous = null;
       }
-      say(`${n}. ${D.humanize(D.describeStep(step))}`);
+      // Only an operation the test replays can be what moved the page: a tool call is not replayed (review of #80).
+      const caused = step.type === 'navigate' && D.followsOperation(previous, step)
+        && previous.source === 'user' && OPERATIONS.has(previous.type);
+      say(caused ? `${n}. ${D.humanize(txt(step.url))} に遷移したことを確かめる` : `${n}. ${D.humanize(D.describeStep(step))}`);
       if (step.type === 'notice') {
         say('（ページが出した表示。結果として確かめはしない）');
         return;
@@ -218,7 +248,7 @@
       }
       if (step.type === 'navigate') {
         const url = urlOf(step.url);
-        if (D.followsOperation(previous, step)) {
+        if (caused) {
           if (url) body.push(`await expect.poll(() => new URL(page.url()).pathname).toBe(${lit(url.path)});`);
           else say('遷移先の URL は伏せてあるので確かめない');
         } else if (!(previous?.type === 'navigate' && previous.tab === step.tab && txt(previous.url) === txt(step.url))) {
@@ -258,7 +288,7 @@
     return `${out.join('\n')}\n`;
   }
 
-  const api = { toPlaywright };
+  const api = { toPlaywright, buildPlaywright };
   root.OpScribePlaywright = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

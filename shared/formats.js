@@ -27,13 +27,16 @@
   function checkedFormats(payload, scan) {
     const problems = P.checkPayload(payload);
     if (problems.length) return { problems };
-    const guard = (text) => {
-      const findings = S.finalScan(text, scan);
+    // scanned: what to scan when it is more than the text (the Playwright test's literals, unescaped).
+    const guard = (text, scanned = text) => {
+      const findings = S.finalScan(scanned, scan);
       return { text: findings.length ? null : text, findings };
     };
+    // Each literal on its own (an object, not an array, which the scan would also read joined up).
+    const guardPlaywright = ({ text, literals }) => guard(text, { text, ...Object.fromEntries(literals.map((l, i) => [`literal${i}`, l])) });
     const tickets = D.bugTickets(payload.recording).map(({ ref, text }) => ({ ref, ...guard(text) }));
     const session = D.sessionRecord(payload.recording);
-    return { tickets, session: session === null ? null : guard(session), playwright: guard(PW.toPlaywright(payload.recording)) };
+    return { tickets, session: session === null ? null : guard(session), playwright: guardPlaywright(PW.buildPlaywright(payload.recording)) };
   }
 
   const api = { checkedFormats };

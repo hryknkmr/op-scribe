@@ -19,7 +19,7 @@ const recordingOf = (steps, extra = {}) => P.buildPayload({ id: 'rec-pw-1', star
  * Runs a generated file against a stand-in page whose elements are { role, name, selector }.
  * Returns the calls made, or throws what the test would have failed with.
  */
-async function run(text, { elements = [], env = {}, pages = 1 } = {}) {
+async function run(text, { elements = [], env = {}, pages = 1, urls = [] } = {}) {
   const calls = [];
   const code = text.split('\n').filter((l) => !l.startsWith('import ')).join('\n');
   // A click on an element with { to } moves its page there, as a link would.
@@ -42,17 +42,19 @@ async function run(text, { elements = [], env = {}, pages = 1 } = {}) {
       id,
       url: () => url,
       goto: async (to) => { url = to; calls.push(['goto', id, to]); },
+      // An element with { page } is on that page only.
       getByRole: (role, { name, exact }) => {
         assert.equal(exact, true);
-        return locator(page, (e) => e.role === role && e.name === name, `role=${role} name=${name}`);
+        return locator(page, (e) => (e.page ?? id) === id && e.role === role && e.name === name, `role=${role} name=${name}`);
       },
-      locator: (selector) => locator(page, (e) => e.selector === selector, `css=${selector}`),
+      locator: (selector) => locator(page, (e) => (e.page ?? id) === id && e.selector === selector, `css=${selector}`),
       keyboard: { press: async (k) => calls.push(['press', 'page', k]) },
       setUrl: (to) => { url = to; }
     };
     return page;
   };
-  const all = Array.from({ length: pages }, (_, i) => makePage(i + 1));
+  const all = Array.from({ length: Math.max(pages, urls.length) }, (_, i) => makePage(i + 1));
+  urls.forEach((u, i) => { if (u) all[i].setUrl(u); });
   const context = { pages: () => all };
   let body = null;
   class Fixme extends Error {}
@@ -177,16 +179,30 @@ test('what the page showed, expectations, notes and tool calls are comments, nev
   assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a']]);
 });
 
-test('a step in another tab switches to it first (#40, #2)', async () => {
+test('a step in another tab switches to the one new page on its path, and stops when that is not one (#40, #2)', async () => {
   const rec = recordingOf([
     { ...base, type: 'navigate', source: 'unknown', tab: 1, url: ['https://www.example.com/a'] },
-    { ...base, type: 'click', tab: 2, url: ['https://www.example.com/b'], target: { role: 'button', name: ['閉じる'], tag: 'button' } }
+    // Tab 3 first: its steps follow the page it was on, not the order the tabs appear in.
+    { ...base, type: 'click', tab: 3, url: ['https://www.example.com/c'], target: { role: 'button', name: ['OK'], tag: 'button' } },
+    { ...base, type: 'click', tab: 2, url: ['https://www.example.com/b'], target: { role: 'button', name: ['OK'], tag: 'button' } }
   ]);
   const text = toPlaywright(rec);
-  assert.match(text, /page = await tabOf\(context, opened, 2\);/);
-  const { calls } = await run(text, { elements: [{ role: 'button', name: '閉じる' }], pages: 2 });
-  assert.deepEqual(calls.at(-1), ['click', 'role=button name=閉じる']);
-  await assert.rejects(run(text, { elements: [{ role: 'button', name: '閉じる' }], pages: 1 }), /タブ 2 が開かない/);
+  assert.match(text, /page = await tabOf\(context, opened, 3, "\/c"\);/);
+  // Page 2 shows /b and page 3 shows /c: each click lands on the page of its own step.
+  const urls = [null, 'https://www.example.com/b', 'https://www.example.com/c'];
+  const ok = await run(text, { elements: [{ role: 'button', name: 'OK', page: 3 }, { role: 'button', name: 'OK', page: 2 }], urls });
+  assert.deepEqual(ok.calls.slice(1), [['click', 'role=button name=OK'], ['click', 'role=button name=OK']]);
+  // Were the steps on page 2 run on page 3 (or the other way round), find() would find nothing there.
+  await assert.rejects(run(text, { elements: [{ role: 'button', name: 'OK', page: 3 }], urls: [null, 'https://www.example.com/b', 'https://www.example.com/c'] }), /ステップ 3: 対象が一つに決まらない/);
+  // No page on the path, or two: it stops.
+  await assert.rejects(run(text, { urls: [null, 'https://www.example.com/b'] }), /タブ 3: \/c を開いているタブが一つに決まらない/);
+  await assert.rejects(run(text, { urls: [null, 'https://www.example.com/c', 'https://www.example.com/c'] }), /タブ 3: \/c を開いているタブが一つに決まらない/);
+  // A tab whose step has a masked URL cannot be told apart.
+  const masked = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', tab: 1, url: ['https://www.example.com/a'] },
+    { ...base, type: 'click', tab: 2, url: ['https://www.example.com/u/', { redacted: 'id' }], target: { role: 'button', name: ['OK'], tag: 'button' } }
+  ]);
+  await assert.rejects(run(toPlaywright(masked), { pages: 2 }), /タブ 2 を見分けられない/);
 });
 
 test('the page\'s text never becomes code: quotes, line breaks and hidden characters stay inside escaped literals (#2, E7)', async () => {
@@ -221,4 +237,34 @@ test('the Playwright test goes through the formats exit: a keyword registered la
   assert.ok(word.playwright.findings.length);
   // The same recording gives the same file.
   assert.equal(toPlaywright(payload.recording), clean.playwright.text);
+});
+
+test('a navigation after a tool call is opened, not checked: the test does not replay the call (#2, review of #80)', async () => {
+  const rec = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+    { ...base, type: 'tool', t: 10, source: 'agent', url: ['https://www.example.com/a'], tool: ['next'], ok: true },
+    { ...base, type: 'navigate', t: 20, source: 'unknown', url: ['https://www.example.com/next'] },
+    { ...base, type: 'click', t: 30, url: ['https://www.example.com/next'], target: { role: 'link', name: ['戻る'], tag: 'a' } },
+    { ...base, type: 'navigate', t: 40, source: 'unknown', url: ['https://www.example.com/a'] }
+  ]);
+  const text = toPlaywright(rec);
+  // The comment says what the line does: open, or check where the click went.
+  assert.match(text, /\/\/ 3\. https:\/\/www\.example\.com\/next を開く\n  await page\.goto\("https:\/\/www\.example\.com\/next"\);/);
+  assert.match(text, /\/\/ 5\. https:\/\/www\.example\.com\/a に遷移したことを確かめる\n  await expect\.poll/);
+  const { calls } = await run(text, { elements: [{ role: 'link', name: '戻る', to: 'https://www.example.com/a' }] });
+  assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['goto', 1, 'https://www.example.com/next'], ['click', 'role=link name=戻る']]);
+});
+
+test('a keyword hidden by an escape inside a literal still stops the exit (#2, E6, review of #80)', () => {
+  // CSS reads \m as m and \6d  as m: both selectors name "acme". The file holds them with the backslash doubled.
+  for (const selector of ['[data-x="ac\\me"]', '[data-x="ac\\6d e"]']) {
+    const steps = [
+      { ...base, type: 'navigate', source: 'unknown', url: ['https://www.example.com/a'] },
+      { ...base, type: 'click', url: ['https://www.example.com/a'], target: { role: 'button', name: ['OK'], tag: 'button', selector } }
+    ];
+    const payload = P.buildPayload({ id: 'rec-pw-3', startedAt: T0, aliases: {}, redactions: {}, webmcpTools: {}, steps }, { generator: 'none', markdown: '' }, {});
+    const made = F.checkedFormats(payload, { keywords: ['acme'], hosts: [] });
+    assert.equal(made.playwright.text, null, selector);
+    assert.ok(made.playwright.findings.some((f) => f.kinds.includes('keyword')), selector);
+  }
 });
