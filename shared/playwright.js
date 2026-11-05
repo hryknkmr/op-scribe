@@ -99,13 +99,14 @@
   const VERDICTS = { ok: 'OK', ng: 'NG' };
 
   const HELPERS = {
-    at: [
+    place: [
       '/** A URL as its origin and path, with %-escapes undone where the browser may show them either way. */',
       'function place(url) {',
       '  const { origin, pathname } = new URL(url);',
       '  try { return decodeURI(origin + pathname); } catch { return origin + pathname; }',
-      '}',
-      '',
+      '}'
+    ],
+    at: [
       '/** That the page shows the origin and path its step was on: anything else stops the test. */',
       'async function at(page, url, step) {',
       '  await expect.poll(() => place(page.url()), { message: `ステップ ${step}: 記録した画面（${place(url)}）にいない` }).toBe(place(url));',
@@ -150,7 +151,7 @@
       'function site(name) {',
       '  const origin = process.env[name];',
       '  if (!origin) throw new Error(`${name} に実際の origin を渡してください（記録では別名にしてある）`);',
-      '  return origin;',
+      '  return new URL(origin).origin;',
       '}'
     ],
     tab: [
@@ -219,7 +220,8 @@
     if (!url) return null;
     if (!url.alias) return pageLit(`${url.origin}${url.rest}`);
     used.add('site');
-    return `new URL(${pageLit(url.rest)}, site(${lit(siteVar(url.alias))})).href`;
+    // Appended to the origin, not resolved against it: a path starting with // would name another host (review of #80).
+    return `site(${lit(siteVar(url.alias))}) + ${pageLit(url.rest)}`;
   }
 
   /**
@@ -340,7 +342,9 @@
     // Double quotes: a quote before @ reads as part of an e-mail address to finalScan, which the exit runs.
     head.push('import { test, expect } from "@playwright/test";');
     if (used.has('files')) head.push('import { delimiter } from "node:path";');
-    const helpers = ['at', 'find', 'value', 'files', 'site', 'tab'].filter((h) => used.has(h)).flatMap((h) => ['', ...HELPERS[h]]);
+    // at and tabOf both compare places.
+    if (used.has('at') || used.has('tab')) used.add('place');
+    const helpers = ['place', 'at', 'find', 'value', 'files', 'site', 'tab'].filter((h) => used.has(h)).flatMap((h) => ['', ...HELPERS[h]]);
     const out = [
       ...head,
       ...helpers,

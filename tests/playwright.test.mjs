@@ -431,3 +431,17 @@ test('a kept value with a masked part is asked for as masked, and a value that m
   assert.doesNotMatch(text, /hunter2/);
   assert.match(text, /value\("OPSCRIBE_VALUE_3", /);
 });
+
+test('a draft that only switches tabs has every helper it calls, and an aliased path never names another host (#2, review of #80)', async () => {
+  const tabs = recordingOf([
+    { ...base, type: 'navigate', source: 'unknown', tab: 1, url: ['https://www.example.com/a'] },
+    { ...base, type: 'navigate', t: 10000, source: 'unknown', tab: 2, url: ['https://www.example.com/b'] }
+  ]);
+  const text = toPlaywright(tabs);
+  assert.match(text, /^function place\(url\)/m);
+  const { calls } = await run(text, { urls: [null, 'https://www.example.com/b'] });
+  assert.deepEqual(calls, [['goto', 1, 'https://www.example.com/a'], ['goto', 2, 'https://www.example.com/b']]);
+  const slashes = recordingOf([{ ...base, type: 'navigate', source: 'unknown', url: ['https://site-1.invalid///other.test/x'] }]);
+  const opened = await run(toPlaywright(slashes), { env: { OPSCRIBE_SITE_1: 'https://one.example.com' } });
+  assert.deepEqual(opened.calls, [['goto', 1, 'https://one.example.com///other.test/x']]);
+});

@@ -137,15 +137,15 @@ import { test, expect } from "@playwright/test";
 
 test("op-scribe rec-…（下書き）", async ({ page, context }) => {
   // 1. https://site-1.invalid/login を開く
-  await page.goto(new URL("/login", site("OPSCRIBE_SITE_1")).href);
+  await page.goto(site("OPSCRIBE_SITE_1") + "/login");
   // 2. 「メール」入力欄に ‹メールアドレス› を入力する
-  await at(page, new URL("/login", site("OPSCRIBE_SITE_1")).href, 2);
+  await at(page, site("OPSCRIBE_SITE_1") + "/login", 2);
   await (await find(page, { role: "textbox", name: "メール", selector: "#email" }, 2)).fill(value("OPSCRIBE_VALUE_2", "‹メールアドレス›"));
   // 3. 「ログイン」ボタンをクリックする
-  await at(page, new URL("/login", site("OPSCRIBE_SITE_1")).href, 3);
+  await at(page, site("OPSCRIBE_SITE_1") + "/login", 3);
   await (await find(page, { role: "button", name: "ログイン" }, 3)).click();
   // 4. https://site-1.invalid/home に遷移したことを確かめる
-  await at(page, new URL("/home", site("OPSCRIBE_SITE_1")).href, 4);
+  await at(page, site("OPSCRIBE_SITE_1") + "/home", 4);
 });
 ```
 
