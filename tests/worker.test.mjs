@@ -99,6 +99,36 @@ test('a loaded page with no recorder is not attached, and one that has a recorde
   assert.equal(session.opsRecording.attached, false);
 });
 
+test('a recorded tab keeps recording after it moves to an origin already granted to the extension', async () => {
+  const w = worker();
+  await w.send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await w.control.hello;
+  const injections = w.control.injected.length;
+
+  await w.urlChanged(7, 'https://editor.example.net/new');
+
+  assert.ok(w.session.opsRecording.grantedPatterns.includes('https://editor.example.net/*'));
+  assert.ok(w.control.injected.length > injections, 'the recorder is injected into the new origin');
+  const reply = await w.send(
+    { from: 'op-scribe/content', type: 'HELLO' },
+    { tab: { id: 7, url: 'https://editor.example.net/new' }, url: 'https://editor.example.net/new' }
+  );
+  assert.equal(reply.active, true);
+});
+
+test('a recorded tab does not add a new origin without host permission', async () => {
+  const w = worker();
+  await w.send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await w.control.hello;
+  const injections = w.control.injected.length;
+  w.control.denied = ['https://editor.example.net/*'];
+
+  await w.urlChanged(7, 'https://editor.example.net/new');
+
+  assert.ok(!w.session.opsRecording.grantedPatterns.includes('https://editor.example.net/*'));
+  assert.equal(w.control.injected.length, injections, 'nothing is injected without permission');
+});
+
 test('a late failed ping of an earlier recording leaves the new one attached', async () => {
   const { send, control, session, pageLoaded } = worker();
   const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
