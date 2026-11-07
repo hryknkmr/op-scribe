@@ -21,6 +21,27 @@ test('records the page open at the start, then what the person does on it (#23, 
   expect(JSON.stringify(rec.steps)).not.toContain('a.test');
 });
 
+test('keeps inputs when the recorded tab moves to another origin with permission', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+
+  await site.goto('http://b.test/form.html');
+  await site.fill('#q', '別オリジンの入力');
+  await site.click('#go');
+
+  await expect.poll(async () => (await panel.recording()).steps
+    .filter((s) => s.source === 'user')
+    .map((s) => s.type)).toEqual(['input', 'click']);
+  const rec = await panel.recording();
+  expect(rec.grantedPatterns).toContain('http://b.test/*');
+  expect(rec.steps.find((s) => s.type === 'input').value).toEqual({
+    field: 'text',
+    text: ['別オリジンの入力'],
+    treatment: 'kept',
+  });
+});
+
 test('the tests reach no host but the made-up ones', async ({ context }) => {
   const site = await context.newPage();
   await site.goto('http://a.test/');

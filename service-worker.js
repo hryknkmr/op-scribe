@@ -501,13 +501,37 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   await mutate(async (rec) => {
     if (!isRecordingTab(rec, tabId)) return null;
     const settings = await getSettings();
+    // A recorded tab can cross an origin without opening a new tab (an editor or sign-in
+    // surface, for example). If the person has already granted that origin to the extension,
+    // keep the same tab recording there. Without this, the worker records the navigation but
+    // no content recorder reaches the new page, so clicks and inputs disappear silently.
+    // Missing permission still requires the panel's explicit ADD_ORIGIN gesture.
+    let addedPattern = false;
+    if (httpUrl(changeInfo.url)) {
+      const pattern = originPattern(changeInfo.url);
+      if (!rec.grantedPatterns.includes(pattern)
+        && rec.grantedPatterns.length < LIMITS.aliases
+        && await chrome.permissions.contains({ origins: [pattern] })) {
+        rec.grantedPatterns.push(pattern);
+        addedPattern = true;
+      }
+    }
     // Where this tab already is: the last navigation of this tab, when nothing came after it (#40).
     const tab = tabNumber(rec, tabId);
     const last = [...rec.steps].reverse().find((s) => s.type === 'navigate' && s.tab === tab);
     const moved = (step) => !(last?.url && renderRuns(last.url) === renderRuns(step.url) && rec.steps[rec.steps.length - 1] === last);
     // A navigation a limit kept out still marks the recording trimmed (ADR 0005): saved on any change.
     const { changed } = addStep(rec, { type: 'navigate', pageUrl: changeInfo.url, source: 'unknown' }, settings, { tabUrl: changeInfo.url, tab }, moved);
-    return changed ? { save: rec } : null;
+    if (!changed && !addedPattern) return null;
+    return {
+      save: rec,
+      ...(addedPattern && {
+        after: async () => {
+          await syncContentScripts(rec.grantedPatterns);
+          await injectNow(tabId);
+        }
+      })
+    };
   });
   // After the navigations of the recorded tabs, so none of theirs waits on this.
   await firstPage(tabId, changeInfo.url);
