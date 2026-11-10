@@ -410,14 +410,12 @@
       forget();
       window.postMessage({ source: ISO, type: 'STOP' }, location.origin);
     }
-  });
-
-  // Keywords added mid-recording apply to the next step. The host lists stay as
-  // they were when the recording started (ADR 0001), so commercial does not change.
-  chrome.storage.onChanged.addListener((changes, area) => {
-    const next = changes.opsSettings?.newValue;
-    if (area !== 'local' || !next || !config) return;
-    config = { ...config, keywords: next.keywords || [] };
+    // Keywords added mid-recording apply to the next step; the worker tells, since the settings are
+    // not readable here. The host lists stay as they were when the recording started (ADR 0001), so
+    // commercial does not change. Only for the recording this page is in.
+    if (message.type === 'OPS_KEYWORDS' && config && message.recording === config.recording && Array.isArray(message.keywords)) {
+      config = { ...config, keywords: message.keywords };
+    }
   });
 
   globalThis.__opScribeRecorder = { hello };

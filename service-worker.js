@@ -22,6 +22,12 @@ const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 
+// The settings hold the send target's Authorization header, the keywords and the real hosts: only the
+// extension's own pages and this worker read them, never a content script in a page's process. The
+// recorder is given what it needs (the keywords) by message. Set again on every start of the worker.
+chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' })
+  ?.catch((error) => console.warn('[op-scribe] setAccessLevel failed', error));
+
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -480,8 +486,23 @@ async function handle(message, sender) {
   return undefined;
 }
 
+/**
+ * Whether the sender may speak as what the message says it is from. `from` is the sender's own word;
+ * sender.url and sender.tab are Chrome's. A content script runs in the page's process, so one the page
+ * took over could claim anything: only the panel's page may send what the panel sends (whether in the
+ * side panel or opened in a tab), and only a tab's frame what a recorder sends.
+ */
+const PANEL_URL = chrome.runtime.getURL('sidepanel/');
+const trusted = (message, sender) => (message.from === 'op-scribe/panel'
+  ? typeof sender?.url === 'string' && sender.url.startsWith(PANEL_URL)
+  : Number.isInteger(sender?.tab?.id));
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.from !== 'op-scribe/panel' && message?.from !== 'op-scribe/content') return false;
+  if (!trusted(message, sender)) {
+    sendResponse({ ok: false, error: 'UNTRUSTED_SENDER' });
+    return false;
+  }
   (async () => {
     try {
       sendResponse(await handle(message, sender));
@@ -567,6 +588,18 @@ chrome.tabs.onRemoved.addListener((tabId) => mutate(async (rec) => {
   if (!rec.tabIds.length) await end(rec);
   return { save: rec };
 }));
+
+// Keywords added mid-recording apply to the recorders' next step (K2). They cannot read the settings
+// themselves (setAccessLevel above), so every tab of the recording is told.
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  const next = changes[SETTINGS_KEY]?.newValue;
+  if (area !== 'local' || !next) return;
+  const rec = await getRecording();
+  if (rec?.state !== 'recording') return;
+  await Promise.all(tabsOf(rec).map((tabId) => chrome.tabs.sendMessage(tabId, {
+    from: 'op-scribe/worker', type: 'OPS_KEYWORDS', recording: rec.id, keywords: next.keywords || []
+  }).catch(() => { /* tab gone or never injected */ })));
+});
 
 // The session store is wiped when the browser restarts; so is the badge state.
 chrome.runtime.onStartup.addListener(() => setBadge(false));
