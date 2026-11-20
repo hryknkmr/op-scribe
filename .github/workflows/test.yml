@@ -15,10 +15,17 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The lowest Node that package.json engines allows, then the current LTS.
+      # One job, not a matrix: branch protection requires the check named "test".
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Unit tests on Node 22 (privacy filter, step rendering)
+        run: node --test tests/*.test.mjs
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Unit tests (privacy filter, step rendering)
+      - name: Unit tests on Node 24 (privacy filter, step rendering)
         run: node --test tests/*.test.mjs
       - name: Manifest is valid JSON and files it references exist
         run: |
