@@ -122,6 +122,25 @@ export function boundaries(steps, base) {
   return [];
 }
 
+// The markers the log lines use to tell the model where an expected result is and what may not be merged.
+// Text from the page (a label, a value shown) could hold one, in any brackets, or a line break that starts
+// a line of its own: either would make the model read the page's words as the recording's (review of #86).
+const RESERVED = /[（(【［\[〔「『]\s*(確認|区切り)\s*[）)】］\]〕」』]/gu;
+const own = (text) => String(text).replace(/\s+/gu, ' ').replace(RESERVED, '“$1”');
+
+/**
+ * The log lines the model is given, one per template step: its action, （確認） and the expected result when
+ * there is one, and （区切り） when what the page showed or a finding follows it with no expected result
+ * (boundaries). Only these markers are the recording's; the same words from the page are quoted instead.
+ */
+export function promptLines(base) {
+  const findingAfter = new Set((base.findings || []).map((f) => f.afterStep));
+  return base.steps.map((s, i) => {
+    const line = s.expected ? `${own(s.action)}（確認）${own(s.expected)}` : own(s.action);
+    return !s.expected && (s.observed?.length || findingAfter.has(i + 1)) ? `${line}（区切り）` : line;
+  });
+}
+
 /**
  * Returns a list of reasons the model output cannot be trusted; empty means usable.
  * base: the template's reproduction whose steps were the log lines the model was given (sources, boundaries).

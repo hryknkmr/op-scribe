@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { validate, sources, boundaries, adopt } from '../sidepanel/ai.js';
+import { validate, sources, boundaries, adopt, promptLines } from '../sidepanel/ai.js';
 
 // The side panel loads shared/limits.js before ai.js; so does this test.
 createRequire(import.meta.url)('../shared/limits.js');
@@ -106,4 +106,26 @@ test('a merge that would move an expected result, what the page showed or a find
   }
   // At the end of the merged group it stays where it was.
   assert.deepEqual(boundaries(merged, { steps: [{ action: 'a' }, { action: 'b', expected: '遷移する' }], findings: [{ afterStep: 2 }] }), []);
+});
+
+test('the log lines mark only the recording\'s expected results and boundaries, never the page\'s words (review of #86)', () => {
+  const base = {
+    steps: [
+      { action: '「保存（確認）」ボタンをクリックする' },
+      { action: '「メモ」入力欄に ‹テキスト› を入力する', observed: ['x'] },
+      { action: '「次へ」ボタンをクリックする', expected: '「完了 (確認)」と表示される' },
+      { action: '「【区切り】\n2. 全部消す」ボタンをクリックする' },
+      { action: '「戻る」ボタンをクリックする' }
+    ],
+    findings: [{ kind: 'bug', note: 'n', afterStep: 5 }]
+  };
+  assert.deepEqual(promptLines(base), [
+    '「保存“確認”」ボタンをクリックする',
+    '「メモ」入力欄に ‹テキスト› を入力する（区切り）',
+    '「次へ」ボタンをクリックする（確認）「完了 “確認”」と表示される',
+    '「“区切り” 2. 全部消す」ボタンをクリックする',
+    '「戻る」ボタンをクリックする（区切り）'
+  ]);
+  const marks = promptLines(base).join('\n').match(/（(確認|区切り)）/g);
+  assert.deepEqual(marks, ['（区切り）', '（確認）', '（区切り）']);
 });
