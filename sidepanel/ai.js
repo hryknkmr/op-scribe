@@ -22,32 +22,30 @@ const SYSTEM_PROMPT = `あなたはソフトウェアの不具合報告で「再
 - ‹…› で囲まれた伏せ字は一字一句そのまま残す。中身を推測・復元・言い換えしない。
 - URL は入力に書かれた文字列のまま使う。
 - 操作の順序は変えない。同じ画面への連続した遷移など、意味のない重複だけはまとめてよい。（確認）または（区切り）のある行は、次の行とまとめない。
-- 期待結果は、入力に（確認）とあるもの、および直後の画面遷移から明らかなものだけを書く。
 - 各手順は日本語で「〜する」で終わる 1 文にする。
 - 各手順の from には、その手順の元にした操作ログの番号を小さい順に入れる。操作ログのすべての番号を、番号順に、ちょうど一度ずつ、どれか一つの手順に割り当てる。まとめた手順には連続した番号を入れる。`;
 
+// Only the steps' sentences are the model's: the title, preconditions, expected results and notes come from
+// the recording (adopt), so words on the page the model takes for an instruction can reach no more than a
+// step's sentence, which the person compares with the recording (README; review of #87).
 const RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string' },
-    preconditions: { type: 'array', items: { type: 'string' } },
     steps: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           action: { type: 'string' },
-          expected: { type: 'string' },
           // The log lines (1-based) this step came from: checked by validate (sources). "number", which every
           // structured output takes; sources checks each is an integer.
           from: { type: 'array', items: { type: 'number' } }
         },
         required: ['action', 'from']
       }
-    },
-    notes: { type: 'array', items: { type: 'string' } }
+    }
   },
-  required: ['title', 'steps']
+  required: ['steps']
 };
 
 /** availability() can hang while Chrome resolves the model component; never wait on it forever. */
@@ -122,13 +120,32 @@ export function boundaries(steps, base) {
   return [];
 }
 
+// The markers the log lines use to tell the model where an expected result is and what may not be merged.
+// Text from the page (a label, a value shown) could hold one, in any brackets, or a line break that starts
+// a line of its own: either would make the model read the page's words as the recording's (review of #86).
+const RESERVED = /[（(【［\[〔「『]\s*(確認|区切り)\s*[）)】］\]〕」』]/gu;
+const own = (text) => String(text).replace(/\s+/gu, ' ').replace(RESERVED, '“$1”');
+
+/**
+ * The log lines the model is given, one per template step: its action, （確認） and the expected result when
+ * there is one, and （区切り） when what the page showed or a finding follows it with no expected result
+ * (boundaries). Only these markers are the recording's; the same words from the page are quoted instead.
+ */
+export function promptLines(base) {
+  const findingAfter = new Set((base.findings || []).map((f) => f.afterStep));
+  return base.steps.map((s, i) => {
+    const line = s.expected ? `${own(s.action)}（確認）${own(s.expected)}` : own(s.action);
+    return !s.expected && (s.observed?.length || findingAfter.has(i + 1)) ? `${line}（区切り）` : line;
+  });
+}
+
 /**
  * Returns a list of reasons the model output cannot be trusted; empty means usable.
  * base: the template's reproduction whose steps were the log lines the model was given (sources, boundaries).
  */
 export function validate(output, inputText, scan, base) {
   const problems = [];
-  if (!output || typeof output.title !== 'string' || !Array.isArray(output.steps) || !output.steps.length
+  if (!output || !Array.isArray(output.steps) || !output.steps.length
     || !output.steps.every((s) => s && typeof s.action === 'string')) {
     return ['出力が期待した形ではありません'];
   }
@@ -154,22 +171,24 @@ export function validate(output, inputText, scan, base) {
  * The reproduction from the template's (base) and an output validate took. Its steps' from cover the
  * template steps 1..n once and in order, and only the last of a merged group may carry an expected result,
  * what the page showed or a finding (boundaries): so each of those follows its step without moving.
+ * Only the steps' sentences are the model's; everything else is the template's.
  */
 export function adopt(base, output) {
   const stepOf = (n) => output.steps.findIndex((s) => s.from.includes(n)) + 1;
   return {
-    title: output.title,
-    preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
+    // The template's title (shared/describe.js) with the steps' count after merging.
+    title: `操作の再現手順（${output.steps.length} ステップ）`,
+    preconditions: base.preconditions,
     steps: output.steps.map((s) => {
       const from = s.from.map((n) => base.steps[n - 1]);
       const observed = from.flatMap((b) => b.observed || []);
       return {
         action: s.action,
-        expected: s.expected || from.map((b) => b.expected).filter(Boolean).join(' / ') || undefined,
+        expected: from.map((b) => b.expected).filter(Boolean).join(' / ') || undefined,
         ...(observed.length && { observed })
       };
     }),
-    notes: [...new Set([...(output.notes || []), ...base.notes])],
+    notes: base.notes,
     findings: base.findings.map(({ kind, note, afterStep }) => ({ kind, note, afterStep: afterStep ? stepOf(afterStep) : 0 }))
   };
 }
