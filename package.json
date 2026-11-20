@@ -5,7 +5,7 @@
   "license": "MIT",
   "description": "Chrome extension that records browser operations with privacy masking and renders them as reproduction steps (natural language + Gherkin).",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "node --test tests/*.test.mjs",
@@ -16,6 +16,6 @@
     "e2e": "playwright test -c e2e/playwright.config.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1"
+    "@playwright/test": "1.65.0"
   }
 }

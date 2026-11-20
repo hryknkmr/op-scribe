@@ -3,7 +3,7 @@
   "name": "op-scribe",
   "version": "0.1.0",
   "description": "Records clicks and inputs on sites you allow, masks personal and confidential values, and turns them into reproduction steps.",
-  "minimum_chrome_version": "138",
+  "minimum_chrome_version": "158",
   "permissions": ["sidePanel", "storage", "scripting", "tabs"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "background": { "service_worker": "service-worker.js" },
