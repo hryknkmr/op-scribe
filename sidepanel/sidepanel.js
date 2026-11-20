@@ -539,7 +539,7 @@ async function generateAi() {
     const start = D.rendered(D.startUrlOf(rec));
     // The model reads what the Markdown shows: ‹…› labels, never [[…]] (#28).
     const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : D.humanize(start), (text) => { ui.genStatus.textContent = text; });
-    const problems = validate(output, prompt, scanWith(rec), input.length);
+    const problems = validate(output, prompt, scanWith(rec), base);
     if (problems.length) {
       await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
       return;

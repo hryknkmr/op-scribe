@@ -38,8 +38,9 @@ const RESPONSE_SCHEMA = {
         properties: {
           action: { type: 'string' },
           expected: { type: 'string' },
-          // The log lines (1-based) this step came from: checked by validate (sources).
-          from: { type: 'array', items: { type: 'integer' } }
+          // The log lines (1-based) this step came from: checked by validate (sources). "number", which every
+          // structured output takes; sources checks each is an integer.
+          from: { type: 'array', items: { type: 'number' } }
         },
         required: ['action', 'from']
       }
@@ -90,7 +91,7 @@ export function sources(steps, count) {
     if (!Array.isArray(step?.from) || !step.from.length || !step.from.every(Number.isInteger)) {
       return [`手順 ${i + 1} に元の操作の番号がありません`];
     }
-    order.push(...step.from);
+    for (const n of step.from) order.push(n);
   }
   for (let n = 1; n <= count; n += 1) {
     const at = order[n - 1];
@@ -103,16 +104,36 @@ export function sources(steps, count) {
 }
 
 /**
- * Returns a list of reasons the model output cannot be trusted; empty means usable.
- * count: the number of log lines the model was given (sources).
+ * Why a merged step hides where something happened; empty when none does. Only meaningless repeats may be
+ * merged: a template step with an expected result, what the page showed, or a finding right after it ends
+ * what can be merged, since under the merged step it would read as coming after the steps that followed it.
+ * Run on steps sources took.
  */
-export function validate(output, inputText, scan, count) {
+export function boundaries(steps, base) {
+  const findingAfter = new Set((base.findings || []).map((f) => f.afterStep));
+  for (const [i, step] of steps.entries()) {
+    for (const n of step.from.slice(0, -1)) {
+      const b = base.steps[n - 1];
+      if (b.expected || b.observed?.length || findingAfter.has(n)) {
+        return [`手順 ${i + 1} が、期待結果・画面の表示・探索メモのある元の操作 ${n} をまたいでまとめています`];
+      }
+    }
+  }
+  return [];
+}
+
+/**
+ * Returns a list of reasons the model output cannot be trusted; empty means usable.
+ * base: the template's reproduction whose steps were the log lines the model was given (sources, boundaries).
+ */
+export function validate(output, inputText, scan, base) {
   const problems = [];
   if (!output || typeof output.title !== 'string' || !Array.isArray(output.steps) || !output.steps.length
     || !output.steps.every((s) => s && typeof s.action === 'string')) {
     return ['出力が期待した形ではありません'];
   }
-  problems.push(...sources(output.steps, count));
+  const order = sources(output.steps, base.steps.length);
+  problems.push(...(order.length ? order : boundaries(output.steps, base)));
   const text = JSON.stringify(output);
   // The renderer removes hidden characters (E7), so one could make "[\u200B[email]]" or a URL
   // appear only after this check: refuse them instead (one definition, shared/limits.js; review of #34 R10).
@@ -131,8 +152,8 @@ export function validate(output, inputText, scan, count) {
 
 /**
  * The reproduction from the template's (base) and an output validate took. Its steps' from cover the
- * template steps 1..n once and in order, so each template step has exactly one AI step: what the page
- * showed, an expected result the model left out, and where a finding was, follow it.
+ * template steps 1..n once and in order, and only the last of a merged group may carry an expected result,
+ * what the page showed or a finding (boundaries): so each of those follows its step without moving.
  */
 export function adopt(base, output) {
   const stepOf = (n) => output.steps.findIndex((s) => s.from.includes(n)) + 1;
