@@ -22,32 +22,30 @@ const SYSTEM_PROMPT = `あなたはソフトウェアの不具合報告で「再
 - ‹…› で囲まれた伏せ字は一字一句そのまま残す。中身を推測・復元・言い換えしない。
 - URL は入力に書かれた文字列のまま使う。
 - 操作の順序は変えない。同じ画面への連続した遷移など、意味のない重複だけはまとめてよい。（確認）または（区切り）のある行は、次の行とまとめない。
-- 期待結果は、入力に（確認）とある手順にだけ、その内容を書く。それ以外の手順には期待結果を書かない。
 - 各手順は日本語で「〜する」で終わる 1 文にする。
 - 各手順の from には、その手順の元にした操作ログの番号を小さい順に入れる。操作ログのすべての番号を、番号順に、ちょうど一度ずつ、どれか一つの手順に割り当てる。まとめた手順には連続した番号を入れる。`;
 
+// Only the steps' sentences are the model's: the title, preconditions, expected results and notes come from
+// the recording (adopt), so words on the page the model takes for an instruction can reach no more than a
+// step's sentence, which the person compares with the recording (README; review of #87).
 const RESPONSE_SCHEMA = {
   type: 'object',
   properties: {
-    title: { type: 'string' },
-    preconditions: { type: 'array', items: { type: 'string' } },
     steps: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           action: { type: 'string' },
-          expected: { type: 'string' },
           // The log lines (1-based) this step came from: checked by validate (sources). "number", which every
           // structured output takes; sources checks each is an integer.
           from: { type: 'array', items: { type: 'number' } }
         },
         required: ['action', 'from']
       }
-    },
-    notes: { type: 'array', items: { type: 'string' } }
+    }
   },
-  required: ['title', 'steps']
+  required: ['steps']
 };
 
 /** availability() can hang while Chrome resolves the model component; never wait on it forever. */
@@ -147,7 +145,7 @@ export function promptLines(base) {
  */
 export function validate(output, inputText, scan, base) {
   const problems = [];
-  if (!output || typeof output.title !== 'string' || !Array.isArray(output.steps) || !output.steps.length
+  if (!output || !Array.isArray(output.steps) || !output.steps.length
     || !output.steps.every((s) => s && typeof s.action === 'string')) {
     return ['出力が期待した形ではありません'];
   }
@@ -173,25 +171,24 @@ export function validate(output, inputText, scan, base) {
  * The reproduction from the template's (base) and an output validate took. Its steps' from cover the
  * template steps 1..n once and in order, and only the last of a merged group may carry an expected result,
  * what the page showed or a finding (boundaries): so each of those follows its step without moving.
- * A step keeps an expected result only when one of its template steps has one.
+ * Only the steps' sentences are the model's; everything else is the template's.
  */
 export function adopt(base, output) {
   const stepOf = (n) => output.steps.findIndex((s) => s.from.includes(n)) + 1;
   return {
-    title: output.title,
-    preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
+    // The template's title (shared/describe.js) with the steps' count after merging.
+    title: `操作の再現手順（${output.steps.length} ステップ）`,
+    preconditions: base.preconditions,
     steps: output.steps.map((s) => {
       const from = s.from.map((n) => base.steps[n - 1]);
       const observed = from.flatMap((b) => b.observed || []);
       return {
         action: s.action,
-        // Only where the recording has an expected result: one the model wrote for any other step came from
-        // nowhere, or from words on the page the model took for an instruction (review of #87).
-        expected: from.some((b) => b.expected) ? s.expected || from.map((b) => b.expected).filter(Boolean).join(' / ') : undefined,
+        expected: from.map((b) => b.expected).filter(Boolean).join(' / ') || undefined,
         ...(observed.length && { observed })
       };
     }),
-    notes: [...new Set([...(output.notes || []), ...base.notes])],
+    notes: base.notes,
     findings: base.findings.map(({ kind, note, afterStep }) => ({ kind, note, afterStep: afterStep ? stepOf(afterStep) : 0 }))
   };
 }
