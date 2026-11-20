@@ -6,7 +6,7 @@
  * call in the click handler (no await before it), which is why the active
  * tab and the settings are cached here instead of being read on click.
  */
-import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
+import { availability, rewrite, validate, adopt, promptLines, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
 const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
@@ -535,23 +535,18 @@ async function generateAi() {
   }
   ui.genAi.disabled = true;
   try {
-    const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
+    // What the page showed and the findings are not given to the model; only that a step ends what may be
+    // merged (boundaries in ai.js), which an expected result shows by itself.
+    const input = promptLines(base);
     const start = D.rendered(D.startUrlOf(rec));
     // The model reads what the Markdown shows: ‹…› labels, never [[…]] (#28).
     const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : D.humanize(start), (text) => { ui.genStatus.textContent = text; });
-    const problems = validate(output, prompt, scanWith(rec));
+    const problems = validate(output, prompt, scanWith(rec), base);
     if (problems.length) {
       await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
       return;
     }
-    const merged = {
-      title: output.title,
-      preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
-      steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])],
-      // The AI may merge steps, so a step number would no longer point at the right one.
-      findings: base.findings.map(({ kind, note }) => ({ kind, note }))
-    };
+    const merged = adopt(base, output);
     await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
     ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';
   } catch (error) {
@@ -673,6 +668,8 @@ ui.send.addEventListener('click', () => {
         body,
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
+        // A 307 or 308 would send the same body on to another origin: only the target the preview named gets it.
+        redirect: 'error',
         signal: AbortSignal.timeout(15000)
       });
       ui.sendStatus.textContent = response.ok
