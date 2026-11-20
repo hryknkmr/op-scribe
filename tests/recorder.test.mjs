@@ -38,8 +38,8 @@ function recorder() {
         return message.type === 'HELLO' ? { active: true, config: { recording: control.recording, commercial: false, keywords: [] } } : { ok: true };
       },
       onMessage: { addListener: (fn) => { onMessage = fn; } }
-    },
-    storage: { onChanged: { addListener: () => {} } }
+    }
+    // No chrome.storage: the settings are not readable from a page's process (setAccessLevel in the worker).
   };
   const context = vm.createContext({
     chrome, Element, setTimeout, clearTimeout, console,
@@ -50,7 +50,7 @@ function recorder() {
     OpScribeTarget: { isTextField, implicitRole: () => 'textbox', operated: () => null, isOperated: () => false, accessibleName: () => 'q', inSearch: () => false },
     // A stand-in for the masking: a password field's value is redacted, any other kept.
     OpScribeSanitize: {
-      maskFieldValue: (value, meta) => (meta.type === 'password'
+      maskFieldValue: (value, meta, options) => (control.keywords = options.keywords, meta.type === 'password'
         ? { value: { field: 'password', treatment: 'redacted' }, kinds: ['password'] }
         : { value: { field: 'text', text: [value], treatment: 'kept' }, kinds: [] })
     },
@@ -199,4 +199,15 @@ test('every page event the recorder listens to is passive and in the capture pha
     assert.equal(options?.capture, true, type);
     assert.equal(options?.passive, true, type);
   }
+});
+
+test('keywords the worker tells mid-recording mask the next value, only for the recording this page is in (K2)', async () => {
+  const r = recorder();
+  await tick();
+  await r.worker({ type: 'OPS_KEYWORDS', recording: 'first', keywords: ['Acme'] });
+  r.type('a');
+  assert.deepEqual([...r.control.keywords], ['Acme']);
+  await r.worker({ type: 'OPS_KEYWORDS', recording: 'earlier', keywords: ['Other'] });
+  r.type('b');
+  assert.deepEqual([...r.control.keywords], ['Acme'], 'a message for another recording is not taken');
 });

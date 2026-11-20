@@ -22,6 +22,24 @@ const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
 const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 
+// The settings hold the send target's Authorization header, the keywords and the real hosts: only the
+// extension's own pages and this worker read them, never a content script in a page's process. The
+// recorder is given what it needs (the keywords) by message. Set again on every start of the worker.
+// No script is registered or injected into a page until it is set; if it cannot be, nothing is recorded.
+// Stopping and clearing never wait on it.
+const settingsLocked = (async () => {
+  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+})();
+settingsLocked.catch((error) => console.error('[op-scribe] setAccessLevel failed: nothing will be recorded', error));
+const SETTINGS_EXPOSED = 'SETTINGS_EXPOSED';
+async function lockSettings() {
+  try {
+    await settingsLocked;
+  } catch {
+    throw new Error(SETTINGS_EXPOSED);
+  }
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   try {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
@@ -86,6 +104,7 @@ async function syncContentScripts(patterns) {
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids: Object.values(SCRIPT_IDS) });
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
   if (!patterns.length) return;
+  await lockSettings();
   await chrome.scripting.registerContentScripts([
     {
       id: SCRIPT_IDS.recorder,
@@ -108,6 +127,7 @@ async function syncContentScripts(patterns) {
 /** Registered scripts only reach future navigations; the open page needs a direct injection. */
 async function injectNow(tabId) {
   try {
+    await lockSettings();
     await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
   } catch (error) {
@@ -480,8 +500,23 @@ async function handle(message, sender) {
   return undefined;
 }
 
+/**
+ * Whether the sender may speak as what the message says it is from. `from` is the sender's own word;
+ * sender.url and sender.tab are Chrome's. A content script runs in the page's process, so one the page
+ * took over could claim anything: only the panel's page may send what the panel sends (whether in the
+ * side panel or opened in a tab), and only a tab's frame what a recorder sends.
+ */
+const PANEL_URL = chrome.runtime.getURL('sidepanel/');
+const trusted = (message, sender) => (message.from === 'op-scribe/panel'
+  ? typeof sender?.url === 'string' && sender.url.startsWith(PANEL_URL)
+  : Number.isInteger(sender?.tab?.id));
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.from !== 'op-scribe/panel' && message?.from !== 'op-scribe/content') return false;
+  if (!trusted(message, sender)) {
+    sendResponse({ ok: false, error: 'UNTRUSTED_SENDER' });
+    return false;
+  }
   (async () => {
     try {
       sendResponse(await handle(message, sender));
@@ -527,7 +562,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
       save: rec,
       ...(addedPattern && {
         after: async () => {
-          await syncContentScripts(rec.grantedPatterns);
+          try {
+            await syncContentScripts(rec.grantedPatterns);
+          } catch (error) {
+            console.warn('[op-scribe] register failed', error);
+            return;
+          }
           await injectNow(tabId);
         }
       })
@@ -567,6 +607,18 @@ chrome.tabs.onRemoved.addListener((tabId) => mutate(async (rec) => {
   if (!rec.tabIds.length) await end(rec);
   return { save: rec };
 }));
+
+// Keywords added mid-recording apply to the recorders' next step (K2). They cannot read the settings
+// themselves (setAccessLevel above), so every tab of the recording is told.
+chrome.storage.onChanged.addListener(async (changes, area) => {
+  const next = changes[SETTINGS_KEY]?.newValue;
+  if (area !== 'local' || !next) return;
+  const rec = await getRecording();
+  if (rec?.state !== 'recording') return;
+  await Promise.all(tabsOf(rec).map((tabId) => chrome.tabs.sendMessage(tabId, {
+    from: 'op-scribe/worker', type: 'OPS_KEYWORDS', recording: rec.id, keywords: next.keywords || []
+  }).catch(() => { /* tab gone or never injected */ })));
+});
 
 // The session store is wiped when the browser restarts; so is the badge state.
 chrome.runtime.onStartup.addListener(() => setBadge(false));

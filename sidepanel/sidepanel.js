@@ -673,6 +673,8 @@ ui.send.addEventListener('click', () => {
         body,
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
+        // A 307 or 308 would send the same body on to another origin: only the target the preview named gets it.
+        redirect: 'error',
         signal: AbortSignal.timeout(15000)
       });
       ui.sendStatus.textContent = response.ok

@@ -7,14 +7,17 @@ import { createRequire } from 'node:module';
 
 const ROOT = new URL('..', import.meta.url);
 const read = (file) => readFileSync(new URL(file, ROOT), 'utf8');
+const EXTENSION = 'chrome-extension://abcdefghijklmnop/';
+const PANEL = `${EXTENSION}sidepanel/sidepanel.html`;
 
-function worker() {
+// options: what the stand-in does while the worker loads (holdAccessLevel, failAccessLevel).
+function worker(options = {}) {
   const session = {};
   const listeners = {};
   const updated = [];
   const on = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
   const seen = [];
-  const control = {};
+  const control = { ...options };
   const noop = async () => {};
   const chrome = {
     storage: {
@@ -31,9 +34,18 @@ function worker() {
         remove: async (key) => { delete session[key]; }
       },
       // A test may set the settings (control.settings) at any point; read at the time of each get.
-      local: { get: async (key) => (control.settings && key === 'opsSettings' ? { [key]: structuredClone(control.settings) } : {}), set: noop }
+      local: {
+        get: async (key) => (control.settings && key === 'opsSettings' ? { [key]: structuredClone(control.settings) } : {}),
+        set: noop,
+        setAccessLevel: async (level) => {
+          await control.holdAccessLevel;
+          if (control.failAccessLevel) throw new Error('setAccessLevel failed');
+          control.accessLevel = level.accessLevel;
+        }
+      },
+      onChanged: on('storageChanged')
     },
-    runtime: { onInstalled: on('installed'), onStartup: on('startup'), onMessage: on('message'), sendMessage: noop },
+    runtime: { onInstalled: on('installed'), onStartup: on('startup'), onMessage: on('message'), sendMessage: noop, getURL: (path) => `${EXTENSION}${path}` },
     // A test may name origins the extension has no access to (control.denied).
     permissions: { contains: async ({ origins }) => !origins.some((o) => (control.denied || []).includes(o)) },
     scripting: {
@@ -53,7 +65,8 @@ function worker() {
     sidePanel: { setPanelBehavior: noop }
   };
   // A recorder names the recording it was told about (HELLO); a test may name another.
-  const send = (message, sender = {}) => new Promise((resolve) => {
+  // The panel's messages come from the panel's page unless a test names another sender.
+  const send = (message, sender = message.from === 'op-scribe/panel' ? { url: PANEL } : {}) => new Promise((resolve) => {
     const named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
     listeners.message(named, sender, resolve);
   });
@@ -765,4 +778,66 @@ test('no more than LIMITS.tabsJoined tabs join one recording, closed ones includ
   assert.equal(reply.ok, false);
   assert.equal(reply.error, 'TOO_MANY_TABS');
   assert.deepEqual(w.session.opsRecording.tabIds, [7]);
+});
+
+test('the settings are readable by the extension\'s own pages and the worker only, never a content script', async () => {
+  const { control } = worker();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(control.accessLevel, 'TRUSTED_CONTEXTS');
+});
+
+test('no script reaches a page until the settings are closed to content scripts', async () => {
+  let release;
+  const { send, control } = worker({ holdAccessLevel: new Promise((resolve) => { release = resolve; }) });
+  const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(control.injected, undefined);
+  release();
+  assert.equal((await started).ok, true);
+  assert.equal(control.accessLevel, 'TRUSTED_CONTEXTS');
+  assert.ok(control.injected.length > 0 && control.injected.every((id) => id === 7));
+});
+
+test('if the settings cannot be closed to content scripts, nothing is recorded or injected', async () => {
+  const { send, control, session } = worker({ failAccessLevel: true });
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'SETTINGS_EXPOSED');
+  assert.equal(session.opsRecording, undefined);
+  assert.equal(control.injected, undefined);
+  // Stopping and clearing do not wait on it.
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
+});
+
+test('what the panel sends is taken only from the panel\'s page, in the side panel or a tab', async () => {
+  const { send, session } = worker();
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  // A content script the page took over can claim to be the panel; Chrome still says where it runs.
+  for (const sender of [page, { url: 'https://example.com/sidepanel/' }, { url: `${EXTENSION}content/recorder.js` }, {}]) {
+    assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' }, sender)).error, 'UNTRUSTED_SENDER');
+  }
+  assert.equal(session.opsRecording.state, 'recording');
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } }, { tab: { id: 9 }, url: PANEL })).ok, true);
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
+  assert.equal(session.opsRecording, undefined);
+});
+
+test('what a recorder sends is taken only from a tab', async () => {
+  const { send } = worker();
+  assert.equal((await send({ from: 'op-scribe/content', type: 'HELLO' }, { url: PANEL })).error, 'UNTRUSTED_SENDER');
+});
+
+test('keywords added mid-recording are told to every tab of the recording, which cannot read the settings (K2)', async () => {
+  const { send, control, listeners, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  control.toTabs = [];
+  await listeners.storageChanged({ opsSettings: { newValue: { keywords: ['Acme'] } } }, 'local');
+  assert.deepEqual(control.toTabs, [[7, 'OPS_KEYWORDS']]);
+  await listeners.storageChanged({ opsRecording: { newValue: session.opsRecording } }, 'session');
+  assert.deepEqual(control.toTabs, [[7, 'OPS_KEYWORDS']], 'only a change of the settings');
+  await send({ from: 'op-scribe/panel', type: 'STOP' });
+  control.toTabs = [];
+  await listeners.storageChanged({ opsSettings: { newValue: { keywords: ['Beta'] } } }, 'local');
+  assert.deepEqual(control.toTabs, [], 'no recording, no tab told');
 });
