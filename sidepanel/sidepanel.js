@@ -535,7 +535,13 @@ async function generateAi() {
   }
   ui.genAi.disabled = true;
   try {
-    const input = base.steps.map((s) => (s.expected ? `${s.action}（確認）${s.expected}` : s.action));
+    // What the page showed and the findings are not given to the model; only that a step ends what may be
+    // merged (boundaries in ai.js), which an expected result shows by itself.
+    const findingAfter = new Set(base.findings.map((f) => f.afterStep));
+    const input = base.steps.map((s, i) => {
+      const line = s.expected ? `${s.action}（確認）${s.expected}` : s.action;
+      return !s.expected && (s.observed?.length || findingAfter.has(i + 1)) ? `${line}（区切り）` : line;
+    });
     const start = D.rendered(D.startUrlOf(rec));
     // The model reads what the Markdown shows: ‹…› labels, never [[…]] (#28).
     const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : D.humanize(start), (text) => { ui.genStatus.textContent = text; });
