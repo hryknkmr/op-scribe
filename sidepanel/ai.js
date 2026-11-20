@@ -22,7 +22,7 @@ const SYSTEM_PROMPT = `あなたはソフトウェアの不具合報告で「再
 - ‹…› で囲まれた伏せ字は一字一句そのまま残す。中身を推測・復元・言い換えしない。
 - URL は入力に書かれた文字列のまま使う。
 - 操作の順序は変えない。同じ画面への連続した遷移など、意味のない重複だけはまとめてよい。（確認）または（区切り）のある行は、次の行とまとめない。
-- 期待結果は、入力に（確認）とあるもの、および直後の画面遷移から明らかなものだけを書く。
+- 期待結果は、入力に（確認）とある手順にだけ、その内容を書く。それ以外の手順には期待結果を書かない。
 - 各手順は日本語で「〜する」で終わる 1 文にする。
 - 各手順の from には、その手順の元にした操作ログの番号を小さい順に入れる。操作ログのすべての番号を、番号順に、ちょうど一度ずつ、どれか一つの手順に割り当てる。まとめた手順には連続した番号を入れる。`;
 
@@ -173,6 +173,7 @@ export function validate(output, inputText, scan, base) {
  * The reproduction from the template's (base) and an output validate took. Its steps' from cover the
  * template steps 1..n once and in order, and only the last of a merged group may carry an expected result,
  * what the page showed or a finding (boundaries): so each of those follows its step without moving.
+ * A step keeps an expected result only when one of its template steps has one.
  */
 export function adopt(base, output) {
   const stepOf = (n) => output.steps.findIndex((s) => s.from.includes(n)) + 1;
@@ -184,7 +185,9 @@ export function adopt(base, output) {
       const observed = from.flatMap((b) => b.observed || []);
       return {
         action: s.action,
-        expected: s.expected || from.map((b) => b.expected).filter(Boolean).join(' / ') || undefined,
+        // Only where the recording has an expected result: one the model wrote for any other step came from
+        // nowhere, or from words on the page the model took for an instruction (review of #87).
+        expected: from.some((b) => b.expected) ? s.expected || from.map((b) => b.expected).filter(Boolean).join(' / ') : undefined,
         ...(observed.length && { observed })
       };
     }),
