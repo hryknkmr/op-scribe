@@ -25,8 +25,19 @@ const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 // The settings hold the send target's Authorization header, the keywords and the real hosts: only the
 // extension's own pages and this worker read them, never a content script in a page's process. The
 // recorder is given what it needs (the keywords) by message. Set again on every start of the worker.
-chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' })
-  ?.catch((error) => console.warn('[op-scribe] setAccessLevel failed', error));
+// Nothing is handled and no script reaches a page until it is set; if it cannot be, nothing is recorded.
+const settingsLocked = (async () => {
+  await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+})();
+settingsLocked.catch((error) => console.error('[op-scribe] setAccessLevel failed: nothing will be recorded', error));
+const SETTINGS_EXPOSED = 'SETTINGS_EXPOSED';
+async function lockSettings() {
+  try {
+    await settingsLocked;
+  } catch {
+    throw new Error(SETTINGS_EXPOSED);
+  }
+}
 
 chrome.runtime.onInstalled.addListener(async () => {
   try {
@@ -89,6 +100,7 @@ const originPattern = (url) => {
 };
 
 async function syncContentScripts(patterns) {
+  await lockSettings();
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids: Object.values(SCRIPT_IDS) });
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
   if (!patterns.length) return;
@@ -114,6 +126,7 @@ async function syncContentScripts(patterns) {
 /** Registered scripts only reach future navigations; the open page needs a direct injection. */
 async function injectNow(tabId) {
   try {
+    await lockSettings();
     await chrome.scripting.executeScript({ target: { tabId }, files: ['shared/limits.js', 'shared/sanitize.js', 'shared/target.js', 'content/recorder.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content/webmcp-tools.js'], world: 'MAIN' });
   } catch (error) {
@@ -505,6 +518,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   (async () => {
     try {
+      await lockSettings();
       sendResponse(await handle(message, sender));
     } catch (error) {
       console.error('[op-scribe]', message.type, error);

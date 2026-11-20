@@ -10,13 +10,14 @@ const read = (file) => readFileSync(new URL(file, ROOT), 'utf8');
 const EXTENSION = 'chrome-extension://abcdefghijklmnop/';
 const PANEL = `${EXTENSION}sidepanel/sidepanel.html`;
 
-function worker() {
+// options: what the stand-in does while the worker loads (holdAccessLevel, failAccessLevel).
+function worker(options = {}) {
   const session = {};
   const listeners = {};
   const updated = [];
   const on = (name) => ({ addListener: (fn) => { listeners[name] = fn; } });
   const seen = [];
-  const control = {};
+  const control = { ...options };
   const noop = async () => {};
   const chrome = {
     storage: {
@@ -36,7 +37,11 @@ function worker() {
       local: {
         get: async (key) => (control.settings && key === 'opsSettings' ? { [key]: structuredClone(control.settings) } : {}),
         set: noop,
-        setAccessLevel: async (options) => { control.accessLevel = options.accessLevel; }
+        setAccessLevel: async (level) => {
+          await control.holdAccessLevel;
+          if (control.failAccessLevel) throw new Error('setAccessLevel failed');
+          control.accessLevel = level.accessLevel;
+        }
       },
       onChanged: on('storageChanged')
     },
@@ -779,6 +784,27 @@ test('the settings are readable by the extension\'s own pages and the worker onl
   const { control } = worker();
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(control.accessLevel, 'TRUSTED_CONTEXTS');
+});
+
+test('nothing is handled or injected until the settings are closed to content scripts', async () => {
+  let release;
+  const { send, control } = worker({ holdAccessLevel: new Promise((resolve) => { release = resolve; }) });
+  const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(control.injected, undefined);
+  release();
+  assert.equal((await started).ok, true);
+  assert.equal(control.accessLevel, 'TRUSTED_CONTEXTS');
+  assert.ok(control.injected.length > 0 && control.injected.every((id) => id === 7));
+});
+
+test('if the settings cannot be closed to content scripts, nothing is recorded or injected', async () => {
+  const { send, control, session } = worker({ failAccessLevel: true });
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'SETTINGS_EXPOSED');
+  assert.equal(session.opsRecording, undefined);
+  assert.equal(control.injected, undefined);
 });
 
 test('what the panel sends is taken only from the panel\'s page, in the side panel or a tab', async () => {
