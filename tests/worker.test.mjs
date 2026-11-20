@@ -786,7 +786,7 @@ test('the settings are readable by the extension\'s own pages and the worker onl
   assert.equal(control.accessLevel, 'TRUSTED_CONTEXTS');
 });
 
-test('nothing is handled or injected until the settings are closed to content scripts', async () => {
+test('no script reaches a page until the settings are closed to content scripts', async () => {
   let release;
   const { send, control } = worker({ holdAccessLevel: new Promise((resolve) => { release = resolve; }) });
   const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
@@ -805,6 +805,8 @@ test('if the settings cannot be closed to content scripts, nothing is recorded o
   assert.equal(reply.error, 'SETTINGS_EXPOSED');
   assert.equal(session.opsRecording, undefined);
   assert.equal(control.injected, undefined);
+  // Stopping and clearing do not wait on it.
+  assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
 });
 
 test('what the panel sends is taken only from the panel\'s page, in the side panel or a tab', async () => {

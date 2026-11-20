@@ -25,7 +25,8 @@ const SCRIPT_IDS = { recorder: 'opscribe-recorder', webmcp: 'opscribe-webmcp' };
 // The settings hold the send target's Authorization header, the keywords and the real hosts: only the
 // extension's own pages and this worker read them, never a content script in a page's process. The
 // recorder is given what it needs (the keywords) by message. Set again on every start of the worker.
-// Nothing is handled and no script reaches a page until it is set; if it cannot be, nothing is recorded.
+// No script is registered or injected into a page until it is set; if it cannot be, nothing is recorded.
+// Stopping and clearing never wait on it.
 const settingsLocked = (async () => {
   await chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
 })();
@@ -100,10 +101,10 @@ const originPattern = (url) => {
 };
 
 async function syncContentScripts(patterns) {
-  await lockSettings();
   const existing = await chrome.scripting.getRegisteredContentScripts({ ids: Object.values(SCRIPT_IDS) });
   if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: existing.map((s) => s.id) });
   if (!patterns.length) return;
+  await lockSettings();
   await chrome.scripting.registerContentScripts([
     {
       id: SCRIPT_IDS.recorder,
@@ -518,7 +519,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   (async () => {
     try {
-      await lockSettings();
       sendResponse(await handle(message, sender));
     } catch (error) {
       console.error('[op-scribe]', message.type, error);
@@ -562,7 +562,12 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
       save: rec,
       ...(addedPattern && {
         after: async () => {
-          await syncContentScripts(rec.grantedPatterns);
+          try {
+            await syncContentScripts(rec.grantedPatterns);
+          } catch (error) {
+            console.warn('[op-scribe] register failed', error);
+            return;
+          }
           await injectNow(tabId);
         }
       })
