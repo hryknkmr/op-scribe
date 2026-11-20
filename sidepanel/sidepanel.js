@@ -6,7 +6,7 @@
  * call in the click handler (no await before it), which is why the active
  * tab and the settings are cached here instead of being read on click.
  */
-import { availability, rewrite, validate, MAX_AI_STEPS } from './ai.js';
+import { availability, rewrite, validate, adopt, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
 const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
@@ -539,19 +539,12 @@ async function generateAi() {
     const start = D.rendered(D.startUrlOf(rec));
     // The model reads what the Markdown shows: ‹…› labels, never [[…]] (#28).
     const { output, input: prompt } = await rewrite(input, start === '[[url:none]]' ? '' : D.humanize(start), (text) => { ui.genStatus.textContent = text; });
-    const problems = validate(output, prompt, scanWith(rec));
+    const problems = validate(output, prompt, scanWith(rec), input.length);
     if (problems.length) {
       await generateTemplate(`AI の出力を採用しませんでした: ${problems[0]}`);
       return;
     }
-    const merged = {
-      title: output.title,
-      preconditions: [...new Set([...base.preconditions, ...(output.preconditions || [])])],
-      steps: output.steps.map((s) => ({ action: s.action, expected: s.expected || undefined })),
-      notes: [...new Set([...(output.notes || []), ...base.notes])],
-      // The AI may merge steps, so a step number would no longer point at the right one.
-      findings: base.findings.map(({ kind, note }) => ({ kind, note }))
-    };
+    const merged = adopt(base, output);
     await setRepro(rec, D.toMarkdown(merged), 'on-device-ai');
     ui.genStatus.textContent = 'オンデバイス AI で整理しました。内容を確認してください。';
   } catch (error) {
