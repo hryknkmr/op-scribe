@@ -821,6 +821,22 @@ test('if the settings cannot be closed to content scripts, nothing is recorded o
   assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
 });
 
+test('every save says how full the recording is, counted without that usage (ADR 0006)', async () => {
+  const { send, session, control } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await control.hello;
+  const check = () => {
+    const { usage, ...rest } = session.opsRecording;
+    assert.deepEqual(usage, { steps: rest.steps.length, bytes: new TextEncoder().encode(JSON.stringify(rest)).length });
+  };
+  check();
+  await send({ from: 'op-scribe/panel', type: 'ADD_NOTE', detail: { text: 'a' } });
+  check();
+  assert.equal(session.opsRecording.usage.steps, 2);
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
+  check();
+});
+
 test('a start replaces the recording on hand only when it is stopped and the panel names it (ADR 0006)', async () => {
   const { send, session, control } = worker();
   const at = (detail) => send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', ...detail } });

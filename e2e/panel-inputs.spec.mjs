@@ -248,3 +248,131 @@ test('a start with a recording on hand waits for the tester to confirm it, in a 
   expect((await panel.recording()).state).toBe('recording');
   await expect(ui.locator('#start-confirm')).toBeHidden();
 });
+
+test('near the limits the panel saves the recording and continues it in a new one (ADR 0006)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  const ui = panel.page;
+  // This panel is a tab: it is told the site is the active tab, then draws again (CLEAR is told to it).
+  await ui.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'http://a.test/*' });
+    chrome.tabs.query = async () => [tab];
+  });
+  await panel.send('CLEAR');
+  await openSection(ui, 'rec-start');
+  await expect(ui.locator('#rec-start')).toBeEnabled();
+  // Started from this panel, which keeps what the tester wrote for the continuation.
+  await ui.locator('#scope').fill('検索画面の絞り込み');
+  await ui.locator('#target-version').fill('2.3.0');
+  await ui.locator('#rec-start').click();
+  await expect.poll(async () => (await panel.recording())?.state).toBe('recording');
+  const first = (await panel.recording()).id;
+
+  // An expectation whose verdict is chosen and not saved.
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('一覧に結果が出る');
+  await ui.locator('#note-form button[type="submit"]').click();
+  await ui.locator('form.verdict input[value="ok"]').check();
+
+  // The worker counting 400 steps (80 % of 500), without 400 real ones: the panel reads it so.
+  await ui.evaluate(() => {
+    const get = chrome.storage.session.get.bind(chrome.storage.session);
+    chrome.storage.session.get = async (key) => {
+      const got = await get(key);
+      const rec = got.opsRecording;
+      return rec?.state === 'recording' ? { ...got, opsRecording: { ...rec, usage: { ...rec.usage, steps: 400 } } } : got;
+    };
+  });
+  await panel.send('ADD_NOTE', { text: '並び順', kind: 'idea' });
+  await openSection(ui, 'limit-warning');
+  await expect(ui.locator('#limit-warning')).toBeVisible();
+  await expect(ui.locator('#limit-warning-text')).toContainText('上限に近づいています');
+
+  // The unsaved verdict first: saved, then the stop, then the preview.
+  await ui.locator('#continue-new').click();
+  await expect(ui.locator('#drafts-confirm')).toBeVisible();
+  await ui.locator('#drafts-save').click();
+  await expect(ui.locator('#preview-dialog')).toBeVisible();
+  const stopped = await panel.recording();
+  expect(stopped.id).toBe(first);
+  expect(stopped.state).toBe('stopped');
+  expect(stopped.steps.find((s) => s.ref)?.verdict).toBe('ok');
+
+  // Changed after the preview (another panel's verdict): nothing is saved until it builds the previewed text again.
+  const ref = stopped.steps.find((s) => s.ref).ref;
+  await panel.send('SET_VERDICT', { recordingId: first, ref, verdict: null });
+  let downloads = 0;
+  ui.on('download', () => { downloads += 1; });
+  await ui.locator('#save-previewed').click();
+  await expect(ui.locator('#send-status')).toContainText('プレビューのあとに記録が変わりました');
+  await expect(ui.locator('#continue-start')).toBeHidden();
+  expect(downloads).toBe(0);
+  await panel.send('SET_VERDICT', { recordingId: first, ref, verdict: 'ok' });
+
+  // What is saved is the previewed text itself.
+  const downloaded = ui.waitForEvent('download');
+  await ui.locator('#save-previewed').click();
+  const file = await downloaded;
+  expect(file.suggestedFilename()).toBe(`${first}.opscribe.json`);
+  const saved = (await import('node:fs')).readFileSync(await file.path(), 'utf8');
+  expect(saved).toBe(await ui.locator('#payload').textContent());
+
+  // The start form for the continuation, with what the tester wrote; nothing starts yet.
+  await expect(ui.locator('#continue-start')).toBeVisible();
+  await ui.locator('#continue-start').click();
+  await expect(ui.locator('#scope')).toHaveValue('検索画面の絞り込み');
+  await expect(ui.locator('#target-version')).toHaveValue('2.3.0');
+  await expect(ui.locator('#continue-hint')).toContainText(first);
+  expect((await panel.recording()).id).toBe(first);
+
+  await ui.locator('#rec-start').click();
+  await ui.locator('#start-confirmed').click();
+  await expect.poll(async () => (await panel.recording()).id).not.toBe(first);
+  expect((await panel.recording()).state).toBe('recording');
+  await expect(ui.locator('#continue-hint')).toHaveText('');
+
+  // Steps a limit took: told, and offered the same way, for as long as the mark is on the recording.
+  await ui.evaluate(() => {
+    const get = chrome.storage.session.get.bind(chrome.storage.session);
+    chrome.storage.session.get = async (key) => {
+      const got = await get(key);
+      return got.opsRecording ? { ...got, opsRecording: { ...got.opsRecording, trimmed: 'other' } } : got;
+    };
+  });
+  await panel.send('ADD_NOTE', { text: '次', kind: 'idea' });
+  await expect(ui.locator('#limit-warning-text')).toContainText('上限で消えました');
+  await expect(ui.locator('#continue-new')).toBeVisible();
+});
+
+test('a verdict that cannot be saved holds the continuation before the stop (ADR 0006)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  const ui = panel.page;
+  await ui.reload();
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('一覧に結果が出る');
+  await ui.locator('#note-form button[type="submit"]').click();
+  // NG with no actual result: the worker would refuse it.
+  await ui.locator('form.verdict input[value="ng"]').check();
+  await ui.evaluate(() => {
+    const get = chrome.storage.session.get.bind(chrome.storage.session);
+    chrome.storage.session.get = async (key) => {
+      const got = await get(key);
+      return got.opsRecording ? { ...got, opsRecording: { ...got.opsRecording, trimmed: 'other' } } : got;
+    };
+  });
+  await panel.send('ADD_NOTE', { text: '並び順', kind: 'idea' });
+  await openSection(ui, 'continue-new');
+  await ui.locator('#continue-new').click();
+  await expect(ui.locator('#drafts-confirm')).toBeVisible();
+  await ui.locator('#drafts-save').click();
+  await expect(ui.locator('#continue-hint')).toContainText('NG には実際の結果が必要です');
+  expect((await panel.recording()).state).toBe('recording');
+  await expect(ui.locator('#preview-dialog')).toBeHidden();
+  // Discarded instead: then the stop and the preview.
+  await ui.locator('#drafts-discard').click();
+  await expect(ui.locator('#preview-dialog')).toBeVisible();
+  expect((await panel.recording()).state).toBe('stopped');
+  expect((await panel.recording()).steps.find((s) => s.ref)?.verdict).toBeUndefined();
+});

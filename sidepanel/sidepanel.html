@@ -46,6 +46,19 @@
             <button id="start-cancel" type="button" class="secondary">やめる</button>
           </div>
         </div>
+        <div id="limit-warning" class="callout" hidden>
+          <p id="limit-warning-text"></p>
+          <button id="continue-new" type="button">保存して、続きを新しい記録で始める</button>
+        </div>
+        <div id="drafts-confirm" class="callout" hidden>
+          <p id="drafts-text"></p>
+          <div class="row">
+            <button id="drafts-save" type="button">保存して進む</button>
+            <button id="drafts-discard" type="button" class="secondary">捨てて進む</button>
+            <button id="drafts-cancel" type="button" class="secondary">やめる</button>
+          </div>
+        </div>
+        <p id="continue-hint" class="hint" role="status"></p>
         <p id="rec-meta" class="hint"></p>
         <div id="origin-gate" class="callout" hidden>
           <p>このサイトはまだ記録を許可していないため、ページ遷移以外の操作は記録されません。</p>
@@ -175,6 +188,8 @@
       <p id="send-target" class="hint"></p>
       <div class="row">
         <button id="send" type="button">この内容で送信</button>
+        <button id="save-previewed" type="button" class="secondary">この内容で JSON を保存</button>
+        <button id="continue-start" type="button" hidden>続きを始める</button>
         <button value="cancel" class="secondary">閉じる</button>
       </div>
       <p id="send-status" class="hint"></p>

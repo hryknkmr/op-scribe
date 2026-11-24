@@ -413,6 +413,42 @@ test('the session storage is shared out once, and any save is fitted, not only a
   assert.ok(rec.steps.length > 0);
 });
 
+test('a recording fitted with room for its usage still fits once the largest usage is added (ADR 0006)', () => {
+  const bytes = (v) => new TextEncoder().encode(JSON.stringify(v)).length;
+  const room = LIMITS.storeBytes - R.USAGE_RESERVE_BYTES;
+  // Exactly at the room left: nothing goes, and with the largest usage it is still within storeBytes.
+  const rec = newRec();
+  rec.steps = Array.from({ length: 300 }, (_, i) => ({ type: 'note', t: i, env: 'standard', source: 'user', note: 'a'.repeat(15000) }));
+  rec.steps.push({ type: 'note', t: 300, env: 'standard', source: 'user', note: '' });
+  rec.steps.at(-1).note = 'a'.repeat(room - bytes(rec));
+  assert.equal(bytes(rec), room);
+  R.fitRecord(rec, R.USAGE_RESERVE_BYTES);
+  assert.equal(rec.steps.length, 301, 'nothing dropped at the boundary');
+  assert.ok(bytes({ ...rec, usage: { steps: LIMITS.steps, bytes: LIMITS.storeBytes } }) <= LIMITS.storeBytes);
+  // One byte more: a step goes, and the recording is marked.
+  rec.steps.at(-1).note += 'a';
+  R.fitRecord(rec, R.USAGE_RESERVE_BYTES);
+  assert.equal(rec.steps.length, 300);
+  assert.equal(rec.trimmed, 'user');
+  assert.ok(bytes({ ...rec, usage: { steps: LIMITS.steps, bytes: LIMITS.storeBytes } }) <= LIMITS.storeBytes);
+});
+
+test('a recording\'s usage counts it without the usage, as fitRecord counts it (ADR 0006)', () => {
+  const rec = { ...newRec(), steps: [{ type: 'note', t: 1, env: 'standard', source: 'user', note: 'é' }] };
+  const usage = R.usageOf(rec);
+  assert.deepEqual(usage, { steps: 1, bytes: new TextEncoder().encode(JSON.stringify(rec)).length });
+  assert.deepEqual(R.usageOf({ ...rec, usage: { steps: 9, bytes: 9 } }), usage);
+});
+
+test('the panel tells the tester at 80 % of either limit, not before (ADR 0006)', () => {
+  const { nearLimit } = require('../shared/limits.js');
+  assert.equal(nearLimit(undefined), false);
+  assert.equal(nearLimit({ steps: LIMITS.steps * 0.8 - 1, bytes: 0 }), false);
+  assert.equal(nearLimit({ steps: LIMITS.steps * 0.8, bytes: 0 }), true);
+  assert.equal(nearLimit({ steps: 0, bytes: Math.ceil(LIMITS.storeBytes * 0.8) - 1 }), false);
+  assert.equal(nearLimit({ steps: 0, bytes: Math.ceil(LIMITS.storeBytes * 0.8) }), true);
+});
+
 test('a save that drops steps to fit makes the recording a new revision (E4; review R44)', () => {
   const { LIMITS } = require('../shared/limits.js');
   const rec = newRec();

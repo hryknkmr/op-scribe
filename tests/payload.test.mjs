@@ -844,3 +844,9 @@ test('a step may say which tab it happened in: an integer from 1, on any kind of
   none.reproduction.gherkin = D.toGherkin(none.recording);
   assert.deepEqual(P.checkPayload(none), []);
 });
+
+test('how full the recording is (usage, ADR 0006) stays in the browser: the payload never has it', () => {
+  const payload = build({ ...rec, usage: { steps: 3, bytes: 1234 } });
+  assert.equal(JSON.stringify(payload).includes('usage'), false);
+  assert.deepEqual(P.checkPayload(payload), []);
+});
