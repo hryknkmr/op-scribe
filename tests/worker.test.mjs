@@ -49,9 +49,9 @@ function worker(options = {}) {
     // A test may name origins the extension has no access to (control.denied).
     permissions: { contains: async ({ origins }) => !origins.some((o) => (control.denied || []).includes(o)) },
     scripting: {
-      getRegisteredContentScripts: async () => (control.failUnregister ? [{ id: 'recorder' }] : []),
-      unregisterContentScripts: async () => { if (control.failUnregister) throw new Error('unregister failed'); },
-      registerContentScripts: async () => { if (control.failRegister) throw new Error('register failed'); },
+      getRegisteredContentScripts: async () => (control.failUnregister ? [{ id: 'recorder' }] : (control.registered || []).map((id) => ({ id }))),
+      unregisterContentScripts: async () => { if (control.failUnregister) throw new Error('unregister failed'); control.registered = []; },
+      registerContentScripts: async (scripts) => { if (control.failRegister) throw new Error('register failed'); control.registered = scripts.map((x) => x.id); },
       // As in a browser, the injection ends without waiting for the HELLO the recorder sends.
       executeScript: async ({ target, files }) => {
         (control.injected ||= []).push(target.tabId);
@@ -60,7 +60,7 @@ function worker(options = {}) {
         control.hello = hello().then((reply) => seen.push(reply));
       }
     },
-    action: { onClicked: on('clicked'), setBadgeText: async ({ text }) => { control.badge = text; }, setBadgeBackgroundColor: noop },
+    action: { onClicked: on('clicked'), setBadgeText: async ({ text }) => { if (control.failBadge) throw new Error('badge failed'); control.badge = text; }, setBadgeBackgroundColor: noop },
     tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => { await control.holdGet; if (control.gone?.includes(id)) throw new Error('No tab'); return control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }; }, sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
@@ -280,6 +280,19 @@ test('a step is deleted only by an index it has, on the recording the panel show
   const replies = await Promise.all([del({ index: 1, basis }), del({ index: 1, basis })]);
   assert.deepEqual(replies.map((r) => r.ok), [true, false]);
   assert.deepEqual(session.opsRecording.steps, [before.steps[0], ...before.steps.slice(2)]);
+});
+
+test('a start that fails after registering its scripts takes them back (ADR 0006; review of #89)', async () => {
+  const { send, control, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
+  assert.deepEqual(control.registered, []);
+  const before = structuredClone(session.opsRecording);
+  control.failBadge = true;
+  const reply = await restart(send, session);
+  assert.equal(reply.ok, false);
+  assert.deepEqual(session.opsRecording, before);
+  assert.deepEqual(control.registered, [], 'no script is left to reach a page for a recording that did not start');
 });
 
 test('a start that cannot clear the scripts registered before leaves the stopped recording on hand as it was (ADR 0006)', async () => {

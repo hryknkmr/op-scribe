@@ -80,10 +80,12 @@ export const test = base.extend({
     await use({
       page,
       send,
-      async start(site) {
+      // A recording on hand is replaced only when the test says so, as the tester confirms it in the
+      // panel (ADR 0006; the confirmation itself has an E2E test of its own).
+      async start(site, { replacing = false } = {}) {
         const tab = await page.evaluate(async (url) => (await chrome.tabs.query({ url: `${url}*` }))[0], site.url().replace(/[?#].*$/, '').replace(/[^/]*$/, ''));
-        // As the panel sends it once the tester confirmed the recording on hand (ADR 0006).
         const previous = await page.evaluate(async () => (await chrome.storage.session.get('opsRecording')).opsRecording);
+        if (previous && !replacing) throw new Error('START: a recording is on hand; pass { replacing: true }');
         const reply = await send('START', { tabId: tab.id, url: tab.url, expectedPrevious: previous?.id });
         if (!reply?.ok) throw new Error(`START: ${JSON.stringify(reply)}`);
         // The recorder says HELLO once it listens.

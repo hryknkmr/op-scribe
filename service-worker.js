@@ -228,9 +228,15 @@ async function start({ tabId, url, scope, targetVersion, expectedPrevious }) {
     setRecordingText(rec, 'scope', scope, settings);
     setRecordingText(rec, 'targetVersion', targetVersion, settings);
     addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url, tab: 1 });
-    // The recording on hand is stopped (above): a failure here leaves it as it was.
-    await syncContentScripts(rec.grantedPatterns);
-    await setBadge(true);
+    // The recording on hand is stopped (above): a failure here leaves it as it was, and takes back the
+    // scripts registered for the start that did not happen (review of #89).
+    try {
+      await syncContentScripts(rec.grantedPatterns);
+      await setBadge(true);
+    } catch (error) {
+      try { await syncContentScripts([]); } catch { /* nothing more to undo with */ }
+      throw error;
+    }
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
     return { save: rec, reply: { ok: true, id: rec.id }, after: () => injectNow(tabId) };

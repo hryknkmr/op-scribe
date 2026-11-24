@@ -13,7 +13,7 @@ for (const [name, act, expected] of [
     const site = await context.newPage();
     for (let i = 0; i < ROUNDS; i += 1) {
       await site.goto('http://a.test/');
-      await panel.start(site);
+      await panel.start(site, { replacing: i > 0 });
       await act(site, panel);
       await panel.stop();
       const steps = (await panel.recording()).steps.filter((s) => s.type === expected.type);
@@ -72,7 +72,7 @@ test('#9: what was typed for the last recording does not let the page fill the n
   await site.fill('#q', 'いぬ');
   await panel.stop();
   // The same page and the same focused field, in a new recording.
-  await panel.start(site);
+  await panel.start(site, { replacing: true });
   await site.focus('#q');
   await site.evaluate(() => { document.querySelector('#q').value = 'うそ'; });
   await panel.stop();
