@@ -30,7 +30,7 @@ function worker(options = {}) {
           await held;
           return value;
         },
-        set: async (items) => { Object.assign(session, structuredClone(items)); },
+        set: async (items) => { if (control.failSessionSet) throw new Error('session set failed'); Object.assign(session, structuredClone(items)); },
         remove: async (key) => { delete session[key]; }
       },
       // A test may set the settings (control.settings) at any point; read at the time of each get.
@@ -288,7 +288,7 @@ test('a start that fails after registering its scripts takes them back (ADR 0006
   await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
   assert.deepEqual(control.registered, []);
   const before = structuredClone(session.opsRecording);
-  for (const fail of ['failBadge', 'failBadgeColor']) {
+  for (const fail of ['failBadge', 'failBadgeColor', 'failSessionSet']) {
     control[fail] = true;
     const reply = await restart(send, session);
     control[fail] = false;
