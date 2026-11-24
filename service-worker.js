@@ -16,7 +16,7 @@ importScripts('shared/limits.js', 'shared/sanitize.js', 'shared/describe.js', 's
 const { cleanLine, scrubUrl, defaults } = self.OpScribeSanitize;
 const { LIMITS, renderRuns } = self.OpScribeLimits;
 const { humanize } = self.OpScribeDescribe;
-const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply, setVerdict, setRecordingText, endAt, countKinds } = self.OpScribeRecord;
+const { policyOf, envOf, addStep, fitRecord, guardReply, webmcpReply, setVerdict, setRecordingText, endAt, countKinds, usageOf, USAGE_RESERVE_BYTES } = self.OpScribeRecord;
 
 const REC_KEY = 'opsRecording';
 const SETTINGS_KEY = 'opsSettings';
@@ -75,7 +75,11 @@ function mutate(fn) {
     // Every save fits the recording's share first (fitRecord); one that still fails is an error
     // to the caller, never a step that silently went missing (reviews R40, R43).
     if (result?.save) {
-      fitRecord(result.save);
+      // How full it is (ADR 0006) is decided here only, once the save fits with room for it: a usage
+      // set before this fitRecord could count steps it drops.
+      delete result.save.usage;
+      fitRecord(result.save, USAGE_RESERVE_BYTES);
+      result.save.usage = usageOf(result.save);
       await chrome.storage.session.set({ [REC_KEY]: result.save });
     }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);

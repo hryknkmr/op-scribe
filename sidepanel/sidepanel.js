@@ -9,7 +9,7 @@
 import { availability, rewrite, validate, adopt, promptLines, MAX_AI_STEPS } from './ai.js';
 
 const S = globalThis.OpScribeSanitize;
-const { LIMITS, TOTALS } = globalThis.OpScribeLimits;
+const { LIMITS, TOTALS, nearLimit } = globalThis.OpScribeLimits;
 const D = globalThis.OpScribeDescribe;
 const P = globalThis.OpScribePayload;
 const F = globalThis.OpScribeFormats;
@@ -28,6 +28,17 @@ const ui = {
   startConfirmText: el('start-confirm-text'),
   startConfirmed: el('start-confirmed'),
   startCancel: el('start-cancel'),
+  limitWarning: el('limit-warning'),
+  limitWarningText: el('limit-warning-text'),
+  continueNew: el('continue-new'),
+  draftsConfirm: el('drafts-confirm'),
+  draftsText: el('drafts-text'),
+  draftsSave: el('drafts-save'),
+  draftsDiscard: el('drafts-discard'),
+  draftsCancel: el('drafts-cancel'),
+  continueHint: el('continue-hint'),
+  savePreviewed: el('save-previewed'),
+  continueStart: el('continue-start'),
   scope: el('scope'),
   targetVersion: el('target-version'),
   notTested: el('not-tested'),
@@ -348,6 +359,9 @@ function render() {
   const rec = recording;
   // What the tester confirmed is no longer what is on hand: they confirm again.
   if (pendingStart && (rec?.id !== pendingStart.id || rec.state === 'recording')) hideStartConfirm();
+  // A continuation is of the recording it began from (ADR 0006).
+  if (continueFrom && rec?.id !== continueFrom) endContinuation();
+  renderLimit(rec);
   if ((rec?.id ?? null) !== shownRecordingId) {
     shownRecordingId = rec?.id ?? null;
     ui.notTested.value = '';
@@ -458,15 +472,18 @@ function startHere(previous) {
       ui.tabStatus.textContent = 'サイトへのアクセスが許可されなかったため記録を開始できません';
       return;
     }
-    const result = await send('START', {
-      tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value,
-      expectedPrevious: previous?.id
-    });
+    const scope = ui.scope.value;
+    const targetVersion = ui.targetVersion.value;
+    const result = await send('START', { tabId: tab.id, url: tab.url, scope, targetVersion, expectedPrevious: previous?.id });
     startError = result?.ok ? '' : START_REASONS[result?.error] || `記録を開始できません (${result?.error || 'unknown'})`;
     if (!result?.ok) {
       await refresh();
       return;
     }
+    // What the tester wrote, as written, for the recording this start made only (ADR 0006): its
+    // continuation may begin from it. Never rebuilt from the masked text the recording keeps.
+    startedTexts = { id: result.id, scope, targetVersion };
+    endContinuation();
     ui.scope.value = '';
     ui.targetVersion.value = '';
     verdictDrafts.clear();
@@ -502,6 +519,128 @@ ui.startConfirmed.addEventListener('click', () => {
 
 ui.startCancel.addEventListener('click', hideStartConfirm);
 
+// ------------------------------------------------- continuing in a new recording (ADR 0006)
+
+/** What the tester wrote at the start of the recording this panel started last: { id, scope, targetVersion }. */
+let startedTexts = null;
+/** The recording being saved so that a new one continues it; null when none is. */
+let continueFrom = null;
+
+function endContinuation() {
+  continueFrom = null;
+  ui.draftsConfirm.hidden = true;
+  ui.continueStart.hidden = true;
+  ui.continueHint.textContent = '';
+}
+
+function renderLimit(rec) {
+  const near = rec?.state === 'recording' && nearLimit(rec.usage);
+  ui.limitWarning.hidden = !(rec?.trimmed || near);
+  // A trimmed mark never goes away: it is told for as long as the recording is on hand.
+  ui.limitWarningText.textContent = rec?.trimmed
+    ? '記録の一部が上限で消えました。続けるときは、この記録を保存して、新しい記録で始めてください'
+    : '記録が上限に近づいています。上限を超えると、一部のステップが記録から消えるか、記録されなくなります（ページからの申告・通知・遷移が先）';
+}
+
+/** The expectations of rec whose verdict the tester changed in the form and has not saved. */
+function unsavedVerdicts(rec) {
+  return (rec?.steps || []).filter(isExpectation).flatMap((step) => {
+    const draft = verdictDrafts.get(draftKey(rec, step));
+    const changed = draft && (draft.verdict !== (step.verdict || '') || (draft.verdict === 'ng' && draft.actualEdited));
+    return changed ? [{ step, draft, key: draftKey(rec, step) }] : [];
+  });
+}
+
+ui.continueNew.addEventListener('click', async () => {
+  endContinuation();
+  const rec = await loadRecording();
+  if (!rec) return;
+  continueFrom = rec.id;
+  const unsaved = unsavedVerdicts(rec);
+  if (unsaved.length) {
+    ui.draftsText.textContent = `保存していない判定があります（${unsaved.map((u) => u.step.ref).join('、')}）。保存するか、捨ててから進みます。`;
+    ui.draftsConfirm.hidden = false;
+    return;
+  }
+  await stopAndPreview();
+});
+
+ui.draftsCancel.addEventListener('click', endContinuation);
+
+ui.draftsDiscard.addEventListener('click', async () => {
+  for (const { key } of unsavedVerdicts(recording)) verdictDrafts.delete(key);
+  ui.draftsConfirm.hidden = true;
+  await refresh();
+  await stopAndPreview();
+});
+
+// Each one as its form would save it, one at a time, waiting for the worker and the recording read again.
+// The first that fails stops the continuation; its draft stays until the tester fixes or discards it.
+ui.draftsSave.addEventListener('click', async () => {
+  ui.draftsSave.disabled = true;
+  try {
+    for (const { step, draft, key } of unsavedVerdicts(recording)) {
+      const replace = draft.verdict === 'ng' && draft.actualEdited;
+      if (draft.verdict === 'ng' && (step.verdict !== 'ng' || replace) && !draft.actual.trim()) {
+        ui.continueHint.textContent = `${step.ref}: ${VERDICT_REASONS.NO_ACTUAL}`;
+        return;
+      }
+      const sent = JSON.stringify(draft);
+      const reply = await send('SET_VERDICT', {
+        recordingId: continueFrom, ref: step.ref, verdict: draft.verdict || null, ...(replace && { actual: draft.actual })
+      });
+      if (reply?.ok && JSON.stringify(verdictDrafts.get(key)) === sent) verdictDrafts.delete(key);
+      await refresh();
+      if (!reply?.ok) {
+        ui.continueHint.textContent = `${step.ref}: ${VERDICT_REASONS[reply?.reason] || `保存できませんでした (${reply?.reason || reply?.error || 'unknown'})`}`;
+        return;
+      }
+      if (!continueFrom) return;
+    }
+    ui.draftsConfirm.hidden = true;
+    await stopAndPreview();
+  } finally {
+    ui.draftsSave.disabled = false;
+  }
+});
+
+/** Stops the recording if it is still recording, then previews its JSON to be saved from the preview. */
+async function stopAndPreview() {
+  const rec = await loadRecording();
+  if (!continueFrom || rec?.id !== continueFrom) {
+    endContinuation();
+    return;
+  }
+  if (rec.state === 'recording') {
+    const reply = await stopShown();
+    if (!reply?.ok || !continueFrom) {
+      endContinuation();
+      return;
+    }
+  }
+  const error = await openPreview();
+  if (error) ui.continueHint.textContent = `保存できません: ${error}`;
+  else ui.continueHint.textContent = 'プレビューの「この内容で JSON を保存」で保存してから、「続きを始める」を押してください';
+}
+
+// The start form for the continuation: nothing starts until the tester presses the start button,
+// which confirms the recording on hand like any start (ADR 0006).
+ui.continueStart.addEventListener('click', () => {
+  const from = continueFrom;
+  ui.dialog.close();
+  ui.continueStart.hidden = true;
+  if (!from || recording?.id !== from) {
+    endContinuation();
+    return;
+  }
+  const texts = startedTexts?.id === from ? startedTexts : null;
+  ui.scope.value = texts?.scope || '';
+  ui.targetVersion.value = texts?.targetVersion || '';
+  ui.continueHint.textContent = `続きの記録の「対象と範囲」と「対象のバージョン」を確かめて、「記録開始」を押してください。あとでつなげられるよう、「対象と範囲」に前の記録の ID（${from}）を書き足すことをおすすめします`;
+  ui.scope.closest('details').open = true;
+  ui.scope.focus();
+});
+
 ui.addOrigin.addEventListener('click', () => {
   const tab = activeTab;
   const pattern = pagePattern(tab?.url);
@@ -513,8 +652,8 @@ ui.addOrigin.addEventListener('click', () => {
   })();
 });
 
-ui.stop.addEventListener('click', async () => {
-  // The recording this panel shows, with what was not tested (ADR 0005).
+/** Stops the recording this panel shows, with what was not tested (ADR 0005); the worker's reply. */
+async function stopShown() {
   const reply = await send('STOP', { recordingId: recording?.id, notTested: ui.notTested.value });
   const STOP_REASONS = {
     OTHER_RECORDING: '別の記録に変わったため停止しませんでした',
@@ -523,7 +662,10 @@ ui.stop.addEventListener('click', async () => {
   stopError = reply?.ok ? '' : STOP_REASONS[reply?.reason] || `停止できませんでした (${reply?.reason || reply?.error || 'unknown'})`;
   if (reply?.ok) ui.notTested.value = '';
   await refresh();
-});
+  return reply;
+}
+
+ui.stop.addEventListener('click', () => stopShown());
 
 ui.clear.addEventListener('click', async () => {
   if (!confirm('記録を破棄します。元に戻せません。')) return;
@@ -643,11 +785,12 @@ function blockedMessage(findings) {
   return `伏せ忘れの疑いがあるため中止しました: ${describeFindings(findings).join(' / ')}`;
 }
 
-ui.preview.addEventListener('click', async () => {
+/** Opens the preview of the payload as it is now; the reason it cannot, if any. */
+async function openPreview() {
   const prepared = await preparePayload();
   if (prepared.error) {
     ui.outputStatus.textContent = prepared.error;
-    return;
+    return prepared.error;
   }
   previewed = JSON.stringify(prepared.payload, null, 2);
   previewedBasis = basisOf(prepared.rec);
@@ -671,8 +814,50 @@ ui.preview.addEventListener('click', async () => {
     ? `送信先: ${settings.endpoint}${settings.authHeader ? '（Authorization ヘッダ付き。ヘッダはプレビューに含みません）' : ''}`
     : '送信先が未設定です（「プライバシーと送信先」で設定）';
   ui.send.disabled = Boolean(prepared.findings.length) || !target;
+  ui.savePreviewed.disabled = Boolean(prepared.findings.length);
+  ui.continueStart.hidden = true;
   ui.sendStatus.textContent = '';
   ui.dialog.showModal();
+  return '';
+}
+
+ui.preview.addEventListener('click', () => openPreview());
+
+/**
+ * Whether the recording as it is now, built from what was previewed, is the previewed text: a verdict,
+ * the stop or a tool list changes the payload but not the revision (ADR 0005).
+ */
+const stillPreviewed = (rec, body, inputs) => Boolean(rec) && basisOf(rec) === previewedBasis && Boolean(inputs)
+  && JSON.stringify(P.buildPayload(rec, inputs.reproduction, inputs.environment, inputs.sentAt), null, 2) === body;
+
+// Saves the exact bytes previewed (ADR 0006), after the checks sending makes: the recording read again
+// must still build them, and they pass both exit checks.
+ui.savePreviewed.addEventListener('click', async () => {
+  const body = previewed;
+  const inputs = previewedInputs;
+  if (!body) return;
+  await loadSettings();
+  const rec = await loadRecording();
+  if (!stillPreviewed(rec, body, inputs)) {
+    ui.sendStatus.textContent = 'プレビューのあとに記録が変わりました。もう一度プレビューしてください';
+    return;
+  }
+  const findings = exitFindings(rec, JSON.parse(body));
+  if (findings.length) {
+    ui.sendStatus.textContent = blockedMessage(findings);
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+  link.download = `${rec.id}.opscribe.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  // The extension cannot tell whether the file was saved: the tester checks before going on.
+  const continuing = continueFrom === rec.id && rec.state !== 'recording';
+  ui.continueStart.hidden = !continuing;
+  ui.sendStatus.textContent = continuing
+    ? `${link.download} を保存しました。ファイルを確かめてから「続きを始める」を押してください`
+    : `${link.download} を保存しました`;
 });
 
 ui.send.addEventListener('click', () => {
@@ -698,8 +883,7 @@ ui.send.addEventListener('click', () => {
       const rec = await loadRecording();
       // A verdict, the stop or a tool list changes the payload but not the revision (ADR 0005):
       // the recording as it is now, built from what was previewed, must be the previewed text.
-      if (basisOf(rec) !== previewedBasis || !inputs
-        || JSON.stringify(P.buildPayload(rec, inputs.reproduction, inputs.environment, inputs.sentAt), null, 2) !== body) {
+      if (!stillPreviewed(rec, body, inputs)) {
         ui.sendStatus.textContent = 'プレビューの後に記録が変わりました。もう一度プレビューしてください';
         return;
       }

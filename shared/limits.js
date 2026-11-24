@@ -251,9 +251,17 @@
   });
   const isVocab = (key, value) => Object.hasOwn(VOCAB, key) && typeof value === 'string' && VOCAB[key](value);
 
+  /**
+   * Whether a recording's usage (the worker's { steps, bytes }; ADR 0006) has reached 80 % of either limit,
+   * when the panel tells the tester the recording is near its limits.
+   */
+  const NEAR_LIMIT = 0.8;
+  const nearLimit = (usage) => Boolean(usage)
+    && (usage.steps >= LIMITS.steps * NEAR_LIMIT || usage.bytes >= LIMITS.storeBytes * NEAR_LIMIT);
+
   const api = {
     LIMITS, TOTALS, cut, ellipsize, oneLine, ALIAS_HOST, HIDDEN_CHARS, STEP_RULES, REDACTION_KINDS, TYPED_SCHEMA, typedAllowed, primaryRole,
-    RUN_KINDS, URL_MARKERS, SCHEME, renderRuns, isVocab
+    RUN_KINDS, URL_MARKERS, SCHEME, renderRuns, isVocab, nearLimit
   };
   root.OpScribeLimits = api;
   if (typeof module === 'object' && module.exports) module.exports = api;

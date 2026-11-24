@@ -457,9 +457,9 @@
   /**
    * The one way a recording is made to fit its share of the session storage
    * (storeBytes): appendStep runs it, and the worker runs it on every save,
-   * whatever changed (review R43).
+   * whatever changed (review R43). reserve: bytes kept free for what the worker adds after it (usage).
    */
-  function fitRecord(rec) {
+  function fitRecord(rec, reserve = 0) {
     if (!rec?.steps) return;
     // More reported steps on a site than agentSteps (a recording saved before the limit): its oldest go (W7).
     let changed = false;
@@ -474,7 +474,7 @@
     // One full count a step (at most 3 bytes a UTF-16 unit, so most recordings skip even that),
     // then each removed step's own size and its comma.
     const json = JSON.stringify(rec);
-    if (json.length * 3 <= LIMITS.storeBytes) return;
+    if (json.length * 3 + reserve <= LIMITS.storeBytes) return;
     let bytes = new TextEncoder().encode(json).length;
     // The rest of the recording is bounded (hosts, aliases), so dropping steps always gets under;
     // a single step too large for the room is dropped too rather than break the save (review R41).
@@ -482,8 +482,8 @@
     const before = rec.steps.length;
     // Steps will go, so the recording gets its trimmed mark: room for it is kept, so the
     // recording still fits once marked (ADR 0005). user is shorter than other.
-    const mark = bytes > LIMITS.storeBytes && !rec.trimmed ? bytesOf({ trimmed: 'other' }) : 0;
-    while (rec.steps.length && bytes + mark > LIMITS.storeBytes) {
+    const mark = bytes + reserve > LIMITS.storeBytes && !rec.trimmed ? bytesOf({ trimmed: 'other' }) : 0;
+    while (rec.steps.length && bytes + mark + reserve > LIMITS.storeBytes) {
       const [gone] = rec.steps.splice(nextToDrop(rec), 1);
       promoteTrimmed(rec, gone.source);
       bytes -= bytesOf(gone) + 1;
@@ -540,12 +540,23 @@
     return { ok: true };
   }
 
+  /**
+   * How full a recording is (ADR 0006): its steps, and its bytes counted as fitRecord counts them, without
+   * the usage itself. The worker sets it once a save fits, keeping USAGE_RESERVE_BYTES free for it: the
+   * largest usage there can be, with its key and a comma. The panel reads it; the payload never has it.
+   */
+  const USAGE_RESERVE_BYTES = bytesOf({ usage: { steps: LIMITS.steps, bytes: LIMITS.storeBytes } });
+  function usageOf(rec) {
+    const { usage, ...rest } = rec;
+    return { steps: rest.steps.length, bytes: bytesOf(rest) };
+  }
+
   /** The end of a recording: now, but never before its start, whatever the clock did (ADR 0005). */
   const endAt = (rec, now = Date.now()) => Math.max(now, rec.startedAt);
 
   const api = {
     policyOf, envOf, oneLine, cleanStep, appendStep, addStep, fitRecord, guardReply, webmcpReply,
-    isExpectation, setVerdict, setRecordingText, endAt, countKinds
+    isExpectation, setVerdict, setRecordingText, endAt, countKinds, usageOf, USAGE_RESERVE_BYTES
   };
   root.OpScribeRecord = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
