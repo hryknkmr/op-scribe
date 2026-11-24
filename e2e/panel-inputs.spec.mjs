@@ -199,7 +199,7 @@ test('what was not tested for one recording is not saved into the next another p
   await ui.locator('#not-tested').fill('前の記録のためのメモ');
   // Another panel stops this recording and starts the next.
   await panel.send('STOP', { recordingId: first });
-  await panel.start(site);
+  await panel.start(site, { replacing: true });
   const next = (await panel.recording()).id;
   expect(next).not.toBe(first);
   await expect(ui.locator('#rec-stop')).toBeEnabled();
@@ -236,7 +236,7 @@ test('a start with a recording on hand waits for the tester to confirm it, in a 
   // What was confirmed changed meanwhile (another panel started and stopped one): the tester confirms again.
   await ui.locator('#rec-start').click();
   await expect(ui.locator('#start-confirm')).toBeVisible();
-  await panel.start(site);
+  await panel.start(site, { replacing: true });
   const second = (await panel.recording()).id;
   await expect(ui.locator('#start-confirm')).toBeHidden();
   await panel.send('STOP', { recordingId: second });

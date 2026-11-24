@@ -80,7 +80,13 @@ function mutate(fn) {
       delete result.save.usage;
       fitRecord(result.save, USAGE_RESERVE_BYTES);
       result.save.usage = usageOf(result.save);
-      await chrome.storage.session.set({ [REC_KEY]: result.save });
+      try {
+        await chrome.storage.session.set({ [REC_KEY]: result.save });
+      } catch (error) {
+        // What was done for a save that did not happen is taken back (a start's scripts and badge).
+        try { await result.undo?.(); } catch { /* nothing more to undo with */ }
+        throw error;
+      }
     }
     if (result?.remove) await chrome.storage.session.remove(REC_KEY);
     if (result?.save || result?.remove) await broadcast({ type: 'REC_CHANGED' });
@@ -228,12 +234,23 @@ async function start({ tabId, url, scope, targetVersion, expectedPrevious }) {
     setRecordingText(rec, 'scope', scope, settings);
     setRecordingText(rec, 'targetVersion', targetVersion, settings);
     addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url, tab: 1 });
-    // The recording on hand is stopped (above): a failure here leaves it as it was.
-    await syncContentScripts(rec.grantedPatterns);
-    await setBadge(true);
+    // The recording on hand is stopped (above): a failure here leaves it as it was, and takes back the
+    // scripts registered for the start that did not happen (review of #89).
+    // The badge may already say REC (its text set, its colour not): it says what is on hand, stopped.
+    const undo = async () => {
+      try { await syncContentScripts([]); } catch { /* nothing more to undo with */ }
+      try { await setBadge(false); } catch { /* nothing more to undo with */ }
+    };
+    try {
+      await syncContentScripts(rec.grantedPatterns);
+      await setBadge(true);
+    } catch (error) {
+      await undo();
+      throw error;
+    }
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
-    return { save: rec, reply: { ok: true, id: rec.id }, after: () => injectNow(tabId) };
+    return { save: rec, reply: { ok: true, id: rec.id }, after: () => injectNow(tabId), undo };
   });
 }
 
