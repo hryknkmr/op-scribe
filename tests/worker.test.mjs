@@ -60,14 +60,18 @@ function worker(options = {}) {
         control.hello = hello().then((reply) => seen.push(reply));
       }
     },
-    action: { onClicked: on('clicked'), setBadgeText: noop, setBadgeBackgroundColor: noop },
+    action: { onClicked: on('clicked'), setBadgeText: async ({ text }) => { control.badge = text; }, setBadgeBackgroundColor: noop },
     tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => { await control.holdGet; if (control.gone?.includes(id)) throw new Error('No tab'); return control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }; }, sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
   // A recorder names the recording it was told about (HELLO); a test may name another.
   // The panel's messages come from the panel's page unless a test names another sender.
   const send = (message, sender = message.from === 'op-scribe/panel' ? { url: PANEL } : {}) => new Promise((resolve) => {
-    const named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
+    let named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
+    // The panel confirms the recording on hand before a start (ADR 0006); a test may say otherwise.
+    if (message.from === 'op-scribe/panel' && message.type === 'START' && !('expectedPrevious' in (message.detail || {}))) {
+      named = { ...message, detail: { ...message.detail, expectedPrevious: session.opsRecording?.id, stopRecording: true } };
+    }
     listeners.message(named, sender, resolve);
   });
   const hello = () => send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' });
@@ -807,6 +811,61 @@ test('if the settings cannot be closed to content scripts, nothing is recorded o
   assert.equal(control.injected, undefined);
   // Stopping and clearing do not wait on it.
   assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
+});
+
+test('a start replaces the recording on hand only when the panel names it, and stops it only when told to (ADR 0006)', async () => {
+  const { send, session, control } = worker();
+  const at = (detail) => send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', ...detail } });
+  // No recording yet: a start names none.
+  assert.equal((await at({ expectedPrevious: 'other' })).error, 'PREVIOUS_CHANGED');
+  const first = await at({ expectedPrevious: undefined });
+  assert.equal(first.ok, true);
+  assert.equal(first.id, session.opsRecording.id);
+  await control.hello;
+  const before = structuredClone(session.opsRecording);
+  control.toTabs = [];
+  for (const [detail, error] of [
+    [{ expectedPrevious: undefined }, 'PREVIOUS_CHANGED'],
+    [{ expectedPrevious: 'other' }, 'PREVIOUS_CHANGED'],
+    [{ expectedPrevious: first.id }, 'PREVIOUS_RECORDING'],
+    [{ expectedPrevious: first.id, stopRecording: 'yes' }, 'PREVIOUS_RECORDING']
+  ]) {
+    assert.equal((await at(detail)).error, error, JSON.stringify(detail));
+  }
+  assert.deepEqual(session.opsRecording, before);
+  assert.deepEqual(control.toTabs, [], 'no tab was told to stop');
+  assert.equal(control.badge, 'REC');
+  // Told to stop the one it names: the recording is replaced.
+  const second = await at({ expectedPrevious: first.id, stopRecording: true });
+  assert.equal(second.ok, true);
+  assert.notEqual(second.id, first.id);
+  // A stopped recording is replaced when named, with or without stopRecording.
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: second.id } });
+  assert.equal((await at({ expectedPrevious: undefined })).error, 'PREVIOUS_CHANGED');
+  assert.equal((await at({ expectedPrevious: second.id })).ok, true);
+});
+
+test('a start refused because the settings are open to content scripts leaves the recording on hand as it was (ADR 0006)', async () => {
+  const { send, session, control } = worker({ failAccessLevel: true });
+  // A recording from before this worker started (the worker restarts; the session storage stays).
+  session.opsRecording = { id: 'r1', state: 'recording', tabId: 7, tabIds: [7], tabOrder: [7], steps: [], startedAt: 1, endedAt: null };
+  control.badge = 'REC';
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: 'r1', stopRecording: true } });
+  assert.equal(reply.error, 'SETTINGS_EXPOSED');
+  assert.equal(session.opsRecording.state, 'recording');
+  assert.equal(session.opsRecording.id, 'r1');
+  assert.equal(control.toTabs, undefined, 'no tab was told to stop');
+  assert.equal(control.badge, 'REC');
+});
+
+test('a start from anywhere but the panel\'s page changes nothing (ADR 0006)', async () => {
+  const { send, session } = worker();
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  const before = structuredClone(session.opsRecording);
+  const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: before.id, stopRecording: true } }, page);
+  assert.equal(reply.error, 'UNTRUSTED_SENDER');
+  assert.deepEqual(session.opsRecording, before);
 });
 
 test('what the panel sends is taken only from the panel\'s page, in the side panel or a tab', async () => {

@@ -168,13 +168,32 @@ const httpUrl = (url) => { try { return ['http:', 'https:'].includes(new URL(url
 
 // ------------------------------------------------------------------ actions
 
-async function start({ tabId, url, scope, targetVersion }) {
+/**
+ * A start replaces the recording on hand only when the panel confirmed that one (ADR 0006): the id it
+ * showed (expectedPrevious), and stopRecording when it was still recording. Anything else is refused,
+ * so a start from another panel meanwhile never takes a recording nobody confirmed.
+ */
+function previousRefusal(previous, expectedPrevious, stopRecording) {
+  if (previous ? expectedPrevious !== previous.id : expectedPrevious !== undefined) return 'PREVIOUS_CHANGED';
+  if (previous?.state === 'recording' && stopRecording !== true) return 'PREVIOUS_RECORDING';
+  return '';
+}
+
+async function start({ tabId, url, scope, targetVersion, expectedPrevious, stopRecording }) {
   const pattern = originPattern(url);
   // Outside mutate, so this is the reply itself, not a { reply } for mutate to unwrap.
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
+    const refused = previousRefusal(previous, expectedPrevious, stopRecording);
+    if (refused) return { reply: { ok: false, error: refused } };
+    // What can refuse before the previous recording is stopped does, leaving it as it was (ADR 0006).
+    try {
+      await lockSettings();
+    } catch (error) {
+      return { reply: { ok: false, error: error.message } };
+    }
     // Keywords added while this start waited apply to what it masks now (K2; ADR 0005).
     const settings = await getSettings();
     const rec = {
@@ -215,7 +234,7 @@ async function start({ tabId, url, scope, targetVersion }) {
     }
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
-    return { save: rec, reply: { ok: true }, after: () => injectNow(tabId) };
+    return { save: rec, reply: { ok: true, id: rec.id }, after: () => injectNow(tabId) };
   });
 }
 

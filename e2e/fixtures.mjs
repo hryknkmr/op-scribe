@@ -82,7 +82,9 @@ export const test = base.extend({
       send,
       async start(site) {
         const tab = await page.evaluate(async (url) => (await chrome.tabs.query({ url: `${url}*` }))[0], site.url().replace(/[?#].*$/, '').replace(/[^/]*$/, ''));
-        const reply = await send('START', { tabId: tab.id, url: tab.url });
+        // As the panel sends it once the tester confirmed the recording on hand (ADR 0006).
+        const previous = await page.evaluate(async () => (await chrome.storage.session.get('opsRecording')).opsRecording);
+        const reply = await send('START', { tabId: tab.id, url: tab.url, expectedPrevious: previous?.id, stopRecording: true });
         if (!reply?.ok) throw new Error(`START: ${JSON.stringify(reply)}`);
         // The recorder says HELLO once it listens.
         await page.waitForFunction(async () => (await chrome.storage.session.get('opsRecording')).opsRecording?.attached === true);
