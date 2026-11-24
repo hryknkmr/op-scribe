@@ -117,6 +117,8 @@ button:disabled { opacity: 0.5; cursor: default; }
   gap: 0.4rem;
 }
 
+/* display: grid above would show a hidden callout (the origin gate, the start confirmation). */
+.callout[hidden] { display: none; }
 .callout p { margin: 0; font-size: 0.75rem; }
 .callout button { justify-self: start; }
 

@@ -11,7 +11,7 @@ test('the panel takes a verdict on each expectation and what was not tested at t
   await site.goto('http://a.test/');
   // The start as the panel sends it; this panel is a tab, so its own start button has no page to record.
   const tab = await panel.page.evaluate(async () => (await chrome.tabs.query({ url: 'http://a.test/*' }))[0]);
-  expect(await panel.send('START', { tabId: tab.id, url: tab.url, scope: '検索画面の絞り込み', targetVersion: '2.3.0' })).toEqual({ ok: true });
+  expect(await panel.send('START', { tabId: tab.id, url: tab.url, scope: '検索画面の絞り込み', targetVersion: '2.3.0' })).toMatchObject({ ok: true });
   await panel.page.reload();
   const ui = panel.page;
   await openSection(ui, 'rec-meta');
@@ -148,7 +148,7 @@ test('an untouched verdict form shows what another panel saved, and a saved actu
   const { id, steps } = await panel.recording();
   const { ref } = steps.find((s) => s.type === 'note');
   // Another panel saves an NG whose actual result has a masked part.
-  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ng', actual: '確認メールが tester@example.com に届かない' })).toEqual({ ok: true });
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ng', actual: '確認メールが tester@example.com に届かない' })).toMatchObject({ ok: true });
   const form = ui.locator('form.verdict');
   await expect(form.getByLabel('NG', { exact: true })).toBeChecked();
   await expect(form.locator('small')).toContainText('保存済み: 確認メールが ‹メールアドレス› に届かない');
@@ -166,7 +166,7 @@ test('an untouched verdict form shows what another panel saved, and a saved actu
   expect(await ui.evaluate(() => window.__verdicts)).toBe(0);
   expect((await panel.recording()).steps.find((s) => s.ref === ref).actual).toEqual(saved);
   // And another panel's OK is what this one shows next.
-  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toEqual({ ok: true });
+  expect(await panel.send('SET_VERDICT', { recordingId: id, ref, verdict: 'ok' })).toMatchObject({ ok: true });
   await expect(ui.locator('form.verdict').getByLabel('OK', { exact: true })).toBeChecked();
 });
 
@@ -207,4 +207,44 @@ test('what was not tested for one recording is not saved into the next another p
   await ui.locator('#rec-stop').click();
   await expect.poll(async () => (await panel.recording()).state).toBe('stopped');
   expect((await panel.recording()).notTested).toBeUndefined();
+});
+
+test('a start with a recording on hand waits for the tester to confirm it, in a click of its own (ADR 0006)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  const first = (await panel.recording()).id;
+  await panel.send('STOP', { recordingId: first });
+  await panel.page.reload();
+  const ui = panel.page;
+  // This panel is a tab: it is told the site is the active tab, then draws again.
+  await ui.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ url: 'http://a.test/*' });
+    chrome.tabs.query = async () => [tab];
+  });
+  await panel.send('ADD_NOTE', { text: 'x', kind: 'idea' });
+  await openSection(ui, 'rec-start');
+  await expect(ui.locator('#rec-start')).toBeEnabled();
+
+  await ui.locator('#rec-start').click();
+  await expect(ui.locator('#start-confirm')).toBeVisible();
+  await expect(ui.locator('#start-confirm-text')).toContainText('保存したファイルがあるか確かめてください');
+  await ui.locator('#start-cancel').click();
+  await expect(ui.locator('#start-confirm')).toBeHidden();
+  expect((await panel.recording()).id).toBe(first);
+
+  // What was confirmed changed meanwhile (another panel started and stopped one): the tester confirms again.
+  await ui.locator('#rec-start').click();
+  await expect(ui.locator('#start-confirm')).toBeVisible();
+  await panel.start(site);
+  const second = (await panel.recording()).id;
+  await expect(ui.locator('#start-confirm')).toBeHidden();
+  await panel.send('STOP', { recordingId: second });
+  await expect(ui.locator('#rec-start')).toBeEnabled();
+
+  await ui.locator('#rec-start').click();
+  await ui.locator('#start-confirmed').click();
+  await expect.poll(async () => (await panel.recording()).id).not.toBe(second);
+  expect((await panel.recording()).state).toBe('recording');
+  await expect(ui.locator('#start-confirm')).toBeHidden();
 });

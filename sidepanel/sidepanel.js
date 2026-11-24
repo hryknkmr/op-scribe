@@ -24,6 +24,10 @@ const ui = {
   recState: el('rec-state'),
   start: el('rec-start'),
   stop: el('rec-stop'),
+  startConfirm: el('start-confirm'),
+  startConfirmText: el('start-confirm-text'),
+  startConfirmed: el('start-confirmed'),
+  startCancel: el('start-cancel'),
   scope: el('scope'),
   targetVersion: el('target-version'),
   notTested: el('not-tested'),
@@ -342,6 +346,8 @@ let shownRecordingId;
 
 function render() {
   const rec = recording;
+  // What the tester confirmed is no longer what is on hand: they confirm again.
+  if (pendingStart && (rec?.id !== pendingStart.id || rec.state === 'recording')) hideStartConfirm();
   if ((rec?.id ?? null) !== shownRecordingId) {
     shownRecordingId = rec?.id ?? null;
     ui.notTested.value = '';
@@ -423,31 +429,78 @@ async function refresh() {
 
 // --------------------------------------------------------------- recording
 
-ui.start.addEventListener('click', () => {
+const START_REASONS = {
+  PREVIOUS_CHANGED: '別の記録に変わったため開始しませんでした。もう一度確かめてください',
+  PREVIOUS_RECORDING: '記録中の記録があるため開始しませんでした。先に停止してください',
+  SETTINGS_EXPOSED: '設定をページから守れないため開始しませんでした。前の記録はそのままです',
+  PERMISSION_DENIED: 'サイトへのアクセスが許可されていないため開始しませんでした'
+};
+
+/**
+ * The recording a start is to replace, as this panel showed it when the tester confirmed (ADR 0006);
+ * null when none is waiting for a confirmation.
+ */
+let pendingStart = null;
+
+function hideStartConfirm() {
+  pendingStart = null;
+  ui.startConfirm.hidden = true;
+}
+
+/** Starts at the active tab. The first statement of a click: the permission request may not wait. */
+function startHere(previous) {
   const tab = activeTab;
   const pattern = pagePattern(tab?.url);
   if (!pattern) return;
-  // First statement of the gesture: nothing may be awaited before this.
   const granted = chrome.permissions.request({ origins: [pattern] });
   (async () => {
     if (!(await granted)) {
       ui.tabStatus.textContent = 'サイトへのアクセスが許可されなかったため記録を開始できません';
       return;
     }
-    const result = await send('START', { tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value });
-    startError = result?.ok ? '' : `記録を開始できません (${result?.error || 'unknown'})`;
-    if (result?.ok) {
-      ui.scope.value = '';
-      ui.targetVersion.value = '';
-      verdictDrafts.clear();
+    const result = await send('START', {
+      tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value,
+      expectedPrevious: previous?.id
+    });
+    startError = result?.ok ? '' : START_REASONS[result?.error] || `記録を開始できません (${result?.error || 'unknown'})`;
+    if (!result?.ok) {
+      await refresh();
+      return;
     }
+    ui.scope.value = '';
+    ui.targetVersion.value = '';
+    verdictDrafts.clear();
     ui.repro.value = '';
     generator = 'none';
     basis = null;
     await chrome.storage.session.remove(DRAFT_KEY);
     await refresh();
   })();
+}
+
+ui.start.addEventListener('click', () => {
+  if (!pagePattern(activeTab?.url)) return;
+  if (!recording) {
+    hideStartConfirm();
+    startHere(null);
+    return;
+  }
+  // A stopped recording on hand is lost by a start (the button is off while recording): the tester
+  // confirms it first, in a click of its own, since the permission request must be the first thing a
+  // click does (ADR 0006). Every time: the extension cannot tell whether the recording was saved.
+  pendingStart = { id: recording.id };
+  ui.startConfirmText.textContent = '新しい記録を始めます。前の記録は手元から消えます。保存したファイルがあるか確かめてください（拡張は保存できたかを確かめられません）。';
+  ui.startConfirm.hidden = false;
+  ui.startConfirmed.focus();
 });
+
+ui.startConfirmed.addEventListener('click', () => {
+  const previous = pendingStart;
+  hideStartConfirm();
+  if (previous) startHere(previous);
+});
+
+ui.startCancel.addEventListener('click', hideStartConfirm);
 
 ui.addOrigin.addEventListener('click', () => {
   const tab = activeTab;
