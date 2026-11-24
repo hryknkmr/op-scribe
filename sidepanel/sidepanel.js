@@ -552,16 +552,11 @@ function unsavedVerdicts(rec) {
 }
 
 ui.continueNew.addEventListener('click', async () => {
+  // The recording whose warning was pressed, as this panel showed it: never one that replaced it meanwhile.
+  const shown = recording?.id;
   endContinuation();
-  const rec = await loadRecording();
-  if (!rec) return;
-  continueFrom = rec.id;
-  const unsaved = unsavedVerdicts(rec);
-  if (unsaved.length) {
-    ui.draftsText.textContent = `保存していない判定があります（${unsaved.map((u) => u.step.ref).join('、')}）。保存するか、捨ててから進みます。`;
-    ui.draftsConfirm.hidden = false;
-    return;
-  }
+  if (!shown) return;
+  continueFrom = shown;
   await stopAndPreview();
 });
 
@@ -569,7 +564,6 @@ ui.draftsCancel.addEventListener('click', endContinuation);
 
 ui.draftsDiscard.addEventListener('click', async () => {
   for (const { key } of unsavedVerdicts(recording)) verdictDrafts.delete(key);
-  ui.draftsConfirm.hidden = true;
   await refresh();
   await stopAndPreview();
 });
@@ -597,20 +591,31 @@ ui.draftsSave.addEventListener('click', async () => {
       }
       if (!continueFrom) return;
     }
-    ui.draftsConfirm.hidden = true;
     await stopAndPreview();
   } finally {
     ui.draftsSave.disabled = false;
   }
 });
 
-/** Stops the recording if it is still recording, then previews its JSON to be saved from the preview. */
+/**
+ * Stops the recording if it is still recording, then previews its JSON to be saved from the preview.
+ * Unsaved verdicts come first, checked again each time: one changed while others were being saved is
+ * saved or discarded too before the stop.
+ */
 async function stopAndPreview() {
   const rec = await loadRecording();
   if (!continueFrom || rec?.id !== continueFrom) {
     endContinuation();
+    ui.continueHint.textContent = '別の記録に変わったため、保存と続きの記録は中止しました';
     return;
   }
+  const unsaved = unsavedVerdicts(rec);
+  if (unsaved.length) {
+    ui.draftsText.textContent = `保存していない判定があります（${unsaved.map((u) => u.step.ref).join('、')}）。保存するか、捨ててから進みます。`;
+    ui.draftsConfirm.hidden = false;
+    return;
+  }
+  ui.draftsConfirm.hidden = true;
   if (rec.state === 'recording') {
     const reply = await stopShown();
     if (!reply?.ok || !continueFrom) {

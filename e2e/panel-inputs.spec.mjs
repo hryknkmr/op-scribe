@@ -298,6 +298,17 @@ test('near the limits the panel saves the recording and continues it in a new on
   expect(stopped.state).toBe('stopped');
   expect(stopped.steps.find((s) => s.ref)?.verdict).toBe('ok');
 
+  // Changed after the preview (another panel's verdict): nothing is saved until it builds the previewed text again.
+  const ref = stopped.steps.find((s) => s.ref).ref;
+  await panel.send('SET_VERDICT', { recordingId: first, ref, verdict: null });
+  let downloads = 0;
+  ui.on('download', () => { downloads += 1; });
+  await ui.locator('#save-previewed').click();
+  await expect(ui.locator('#send-status')).toContainText('プレビューのあとに記録が変わりました');
+  await expect(ui.locator('#continue-start')).toBeHidden();
+  expect(downloads).toBe(0);
+  await panel.send('SET_VERDICT', { recordingId: first, ref, verdict: 'ok' });
+
   // What is saved is the previewed text itself.
   const downloaded = ui.waitForEvent('download');
   await ui.locator('#save-previewed').click();
@@ -331,4 +342,37 @@ test('near the limits the panel saves the recording and continues it in a new on
   await panel.send('ADD_NOTE', { text: '次', kind: 'idea' });
   await expect(ui.locator('#limit-warning-text')).toContainText('上限で消えました');
   await expect(ui.locator('#continue-new')).toBeVisible();
+});
+
+test('a verdict that cannot be saved holds the continuation before the stop (ADR 0006)', async ({ context, panel }) => {
+  const site = await context.newPage();
+  await site.goto('http://a.test/');
+  await panel.start(site);
+  const ui = panel.page;
+  await ui.reload();
+  await openSection(ui, 'note-input');
+  await ui.locator('#note-input').fill('一覧に結果が出る');
+  await ui.locator('#note-form button[type="submit"]').click();
+  // NG with no actual result: the worker would refuse it.
+  await ui.locator('form.verdict input[value="ng"]').check();
+  await ui.evaluate(() => {
+    const get = chrome.storage.session.get.bind(chrome.storage.session);
+    chrome.storage.session.get = async (key) => {
+      const got = await get(key);
+      return got.opsRecording ? { ...got, opsRecording: { ...got.opsRecording, trimmed: 'other' } } : got;
+    };
+  });
+  await panel.send('ADD_NOTE', { text: '並び順', kind: 'idea' });
+  await openSection(ui, 'continue-new');
+  await ui.locator('#continue-new').click();
+  await expect(ui.locator('#drafts-confirm')).toBeVisible();
+  await ui.locator('#drafts-save').click();
+  await expect(ui.locator('#continue-hint')).toContainText('NG には実際の結果が必要です');
+  expect((await panel.recording()).state).toBe('recording');
+  await expect(ui.locator('#preview-dialog')).toBeHidden();
+  // Discarded instead: then the stop and the preview.
+  await ui.locator('#drafts-discard').click();
+  await expect(ui.locator('#preview-dialog')).toBeVisible();
+  expect((await panel.recording()).state).toBe('stopped');
+  expect((await panel.recording()).steps.find((s) => s.ref)?.verdict).toBeUndefined();
 });
