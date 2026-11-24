@@ -235,6 +235,8 @@ async function start({ tabId, url, scope, targetVersion, expectedPrevious }) {
       await setBadge(true);
     } catch (error) {
       try { await syncContentScripts([]); } catch { /* nothing more to undo with */ }
+      // The badge may already say REC (its text set, its colour not): it says what is on hand, stopped.
+      try { await setBadge(false); } catch { /* nothing more to undo with */ }
       throw error;
     }
     // After the save: the injected script asks at once whether this tab is recording.

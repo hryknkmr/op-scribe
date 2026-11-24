@@ -60,7 +60,7 @@ function worker(options = {}) {
         control.hello = hello().then((reply) => seen.push(reply));
       }
     },
-    action: { onClicked: on('clicked'), setBadgeText: async ({ text }) => { if (control.failBadge) throw new Error('badge failed'); control.badge = text; }, setBadgeBackgroundColor: noop },
+    action: { onClicked: on('clicked'), setBadgeText: async ({ text }) => { if (control.failBadge) throw new Error('badge failed'); control.badge = text; }, setBadgeBackgroundColor: async () => { if (control.failBadgeColor) throw new Error('badge colour failed'); } },
     tabs: { onUpdated: { addListener: (fn) => { updated.push(fn); } }, onRemoved: on('removed'), onCreated: on('created'), get: async (id) => { await control.holdGet; if (control.gone?.includes(id)) throw new Error('No tab'); return control.tabs?.[id] ? { id, ...control.tabs[id] } : { id }; }, sendMessage: async (id, message) => { (control.toTabs ||= []).push([id, message.type]); if (control.noRecorder) throw new Error('no receiver'); if (message.type === 'OPS_PING') await control.ping; if (message.type === 'OPS_FLUSH') await control.flush?.(); } },
     sidePanel: { setPanelBehavior: noop }
   };
@@ -288,11 +288,15 @@ test('a start that fails after registering its scripts takes them back (ADR 0006
   await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
   assert.deepEqual(control.registered, []);
   const before = structuredClone(session.opsRecording);
-  control.failBadge = true;
-  const reply = await restart(send, session);
-  assert.equal(reply.ok, false);
-  assert.deepEqual(session.opsRecording, before);
-  assert.deepEqual(control.registered, [], 'no script is left to reach a page for a recording that did not start');
+  for (const fail of ['failBadge', 'failBadgeColor']) {
+    control[fail] = true;
+    const reply = await restart(send, session);
+    control[fail] = false;
+    assert.equal(reply.ok, false, fail);
+    assert.deepEqual(session.opsRecording, before, fail);
+    assert.deepEqual(control.registered, [], `${fail}: no script is left to reach a page for a recording that did not start`);
+    assert.notEqual(control.badge, 'REC', `${fail}: the badge does not say it records`);
+  }
 });
 
 test('a start that cannot clear the scripts registered before leaves the stopped recording on hand as it was (ADR 0006)', async () => {
