@@ -67,11 +67,7 @@ function worker(options = {}) {
   // A recorder names the recording it was told about (HELLO); a test may name another.
   // The panel's messages come from the panel's page unless a test names another sender.
   const send = (message, sender = message.from === 'op-scribe/panel' ? { url: PANEL } : {}) => new Promise((resolve) => {
-    let named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
-    // The panel confirms the recording on hand before a start (ADR 0006); a test may say otherwise.
-    if (message.from === 'op-scribe/panel' && message.type === 'START' && !('expectedPrevious' in (message.detail || {}))) {
-      named = { ...message, detail: { ...message.detail, expectedPrevious: session.opsRecording?.id, stopRecording: true } };
-    }
+    const named = message.from === 'op-scribe/content' && !('recording' in message) ? { ...message, recording: session.opsRecording?.id } : message;
     listeners.message(named, sender, resolve);
   });
   const hello = () => send({ from: 'op-scribe/content', type: 'HELLO' }, { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' });
@@ -86,6 +82,13 @@ function worker(options = {}) {
   const openTab = (tab) => listeners.created(tab);
   const urlChanged = (id, url) => Promise.all(updated.map((fn) => fn(id, { url })));
   return { send, hello, pageLoaded, removeTab, openTab, urlChanged, listeners, updatedListeners: updated, seen, control, session };
+}
+
+// The panel's next start (ADR 0006): it stops the recording on hand, then names it when it starts.
+async function restart(send, session, detail = { tabId: 7, url: 'https://example.com/' }) {
+  const previous = session.opsRecording;
+  if (previous?.state === 'recording') await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: previous.id } });
+  return send({ from: 'op-scribe/panel', type: 'START', detail: { ...detail, expectedPrevious: previous?.id } });
 }
 
 test('the page open at the start of a recording is told it is being recorded', async () => {
@@ -154,7 +157,7 @@ test('a late failed ping of an earlier recording leaves the new one attached', a
   let fail;
   control.ping = new Promise((resolve, reject) => { fail = reject; });
   const loaded = pageLoaded();
-  await send(start);
+  await restart(send, session);
   await control.hello;
   fail(new Error('no receiver'));
   await loaded;
@@ -181,14 +184,17 @@ test('a value the page commits when asked before the stop is in the recording (#
   assert.equal(session.opsRecording.steps.at(-1).type, 'click');
 });
 
-test('a recording started while the earlier one commits its last value is not the one stopped (#9)', async () => {
+test('a start asked for while the recording commits its last value is refused, and the stop ends that recording (#9; ADR 0006)', async () => {
   const { send, control, session } = worker();
-  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
-  await send(start);
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   await control.hello;
-  control.flush = () => { control.flush = null; return send(start); };
-  await send({ from: 'op-scribe/panel', type: 'STOP' });
-  assert.equal(session.opsRecording.state, 'recording');
+  const id = session.opsRecording.id;
+  let started;
+  control.flush = () => { control.flush = null; return send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: id } }).then((r) => { started = r; }); };
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: id } });
+  assert.equal(started.error, 'PREVIOUS_RECORDING');
+  assert.equal(session.opsRecording.id, id);
+  assert.equal(session.opsRecording.state, 'stopped');
 });
 
 test('a step sent for an earlier recording is not added to the one that follows it in the tab (#9)', async () => {
@@ -197,7 +203,7 @@ test('a step sent for an earlier recording is not added to the one that follows 
   await send(start);
   await control.hello;
   const earlier = session.opsRecording.id;
-  await send(start);
+  await restart(send, session);
   await control.hello;
   const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
   const reply = await send({ from: 'op-scribe/content', type: 'STEP', recording: earlier, detail: { type: 'click', pageUrl: 'https://example.com/', target: { tag: 'button' } } }, page);
@@ -225,7 +231,7 @@ test('a closed tab stops its own recording, not one started in another tab meanw
   // The closed tab's recording is read, and another start is asked for meanwhile. The close is
   // handled in the queue (#40), so the start comes after it and is not the one the close ends.
   const removed = removeTab(7);
-  const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 8, url: 'https://example.com/' } });
+  const started = send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 8, url: 'https://example.com/', expectedPrevious: session.opsRecording.id } });
   release();
   await removed;
   await started;
@@ -233,14 +239,15 @@ test('a closed tab stops its own recording, not one started in another tab meanw
   assert.equal(session.opsRecording.state, 'recording');
 });
 
-test('a restart that fails does not leave the earlier recording saved as recording', async () => {
+test('a start that fails leaves the stopped recording on hand as it was (ADR 0006)', async () => {
   const { send, control, session } = worker();
-  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
-  await send(start);
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
+  const before = structuredClone(session.opsRecording);
   control.failRegister = true;
-  const reply = await send(start);
+  const reply = await restart(send, session);
   assert.equal(reply.ok, false);
-  assert.equal(session.opsRecording.state, 'stopped');
+  assert.deepEqual(session.opsRecording, before);
 });
 
 test('a note keeps a known kind and drops any other', async () => {
@@ -275,14 +282,15 @@ test('a step is deleted only by an index it has, on the recording the panel show
   assert.deepEqual(session.opsRecording.steps, [before.steps[0], ...before.steps.slice(2)]);
 });
 
-test('a restart that cannot stop the earlier recording does not leave it saved as recording', async () => {
+test('a start that cannot clear the scripts registered before leaves the stopped recording on hand as it was (ADR 0006)', async () => {
   const { send, control, session } = worker();
-  const start = { from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } };
-  await send(start);
+  await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: session.opsRecording.id } });
+  const before = structuredClone(session.opsRecording);
   control.failUnregister = true;
-  const reply = await send(start);
+  const reply = await restart(send, session);
   assert.equal(reply.ok, false);
-  assert.equal(session.opsRecording.state, 'stopped');
+  assert.deepEqual(session.opsRecording, before);
 });
 
 test('a page the recorder could not reach stays unattached until a recorder says HELLO', async () => {
@@ -813,49 +821,45 @@ test('if the settings cannot be closed to content scripts, nothing is recorded o
   assert.equal((await send({ from: 'op-scribe/panel', type: 'CLEAR' })).ok, true);
 });
 
-test('a start replaces the recording on hand only when the panel names it, and stops it only when told to (ADR 0006)', async () => {
+test('a start replaces the recording on hand only when it is stopped and the panel names it (ADR 0006)', async () => {
   const { send, session, control } = worker();
   const at = (detail) => send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', ...detail } });
   // No recording yet: a start names none.
   assert.equal((await at({ expectedPrevious: 'other' })).error, 'PREVIOUS_CHANGED');
-  const first = await at({ expectedPrevious: undefined });
+  const first = await at({});
   assert.equal(first.ok, true);
   assert.equal(first.id, session.opsRecording.id);
   await control.hello;
   const before = structuredClone(session.opsRecording);
   control.toTabs = [];
   for (const [detail, error] of [
-    [{ expectedPrevious: undefined }, 'PREVIOUS_CHANGED'],
+    [{}, 'PREVIOUS_CHANGED'],
     [{ expectedPrevious: 'other' }, 'PREVIOUS_CHANGED'],
+    // A start never stops a recording: the tester stops it (STOP flushes what was typed), then starts.
     [{ expectedPrevious: first.id }, 'PREVIOUS_RECORDING'],
-    [{ expectedPrevious: first.id, stopRecording: 'yes' }, 'PREVIOUS_RECORDING']
+    [{ expectedPrevious: first.id, stopRecording: true }, 'PREVIOUS_RECORDING']
   ]) {
     assert.equal((await at(detail)).error, error, JSON.stringify(detail));
   }
   assert.deepEqual(session.opsRecording, before);
   assert.deepEqual(control.toTabs, [], 'no tab was told to stop');
   assert.equal(control.badge, 'REC');
-  // Told to stop the one it names: the recording is replaced.
-  const second = await at({ expectedPrevious: first.id, stopRecording: true });
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: first.id } });
+  assert.equal((await at({})).error, 'PREVIOUS_CHANGED');
+  const second = await at({ expectedPrevious: first.id });
   assert.equal(second.ok, true);
   assert.notEqual(second.id, first.id);
-  // A stopped recording is replaced when named, with or without stopRecording.
-  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: second.id } });
-  assert.equal((await at({ expectedPrevious: undefined })).error, 'PREVIOUS_CHANGED');
-  assert.equal((await at({ expectedPrevious: second.id })).ok, true);
 });
 
 test('a start refused because the settings are open to content scripts leaves the recording on hand as it was (ADR 0006)', async () => {
   const { send, session, control } = worker({ failAccessLevel: true });
   // A recording from before this worker started (the worker restarts; the session storage stays).
-  session.opsRecording = { id: 'r1', state: 'recording', tabId: 7, tabIds: [7], tabOrder: [7], steps: [], startedAt: 1, endedAt: null };
-  control.badge = 'REC';
-  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: 'r1', stopRecording: true } });
+  session.opsRecording = { id: 'r1', state: 'stopped', tabId: 7, tabIds: [7], tabOrder: [7], steps: [], startedAt: 1, endedAt: 2 };
+  const before = structuredClone(session.opsRecording);
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: 'r1' } });
   assert.equal(reply.error, 'SETTINGS_EXPOSED');
-  assert.equal(session.opsRecording.state, 'recording');
-  assert.equal(session.opsRecording.id, 'r1');
-  assert.equal(control.toTabs, undefined, 'no tab was told to stop');
-  assert.equal(control.badge, 'REC');
+  assert.deepEqual(session.opsRecording, before);
+  assert.equal(control.badge, undefined);
 });
 
 test('a start from anywhere but the panel\'s page changes nothing (ADR 0006)', async () => {
@@ -863,9 +867,11 @@ test('a start from anywhere but the panel\'s page changes nothing (ADR 0006)', a
   await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/' } });
   const before = structuredClone(session.opsRecording);
   const page = { tab: { id: 7, url: 'https://example.com/' }, url: 'https://example.com/' };
-  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: before.id, stopRecording: true } }, page);
+  await send({ from: 'op-scribe/panel', type: 'STOP', detail: { recordingId: before.id } });
+  const stopped = structuredClone(session.opsRecording);
+  const reply = await send({ from: 'op-scribe/panel', type: 'START', detail: { tabId: 7, url: 'https://example.com/', expectedPrevious: before.id } }, page);
   assert.equal(reply.error, 'UNTRUSTED_SENDER');
-  assert.deepEqual(session.opsRecording, before);
+  assert.deepEqual(session.opsRecording, stopped);
 });
 
 test('what the panel sends is taken only from the panel\'s page, in the side panel or a tab', async () => {

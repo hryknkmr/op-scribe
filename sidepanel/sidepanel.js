@@ -347,7 +347,7 @@ let shownRecordingId;
 function render() {
   const rec = recording;
   // What the tester confirmed is no longer what is on hand: they confirm again.
-  if (pendingStart && (rec?.id !== pendingStart.id || (rec.state === 'recording') !== pendingStart.recording)) hideStartConfirm();
+  if (pendingStart && (rec?.id !== pendingStart.id || rec.state === 'recording')) hideStartConfirm();
   if ((rec?.id ?? null) !== shownRecordingId) {
     shownRecordingId = rec?.id ?? null;
     ui.notTested.value = '';
@@ -431,7 +431,7 @@ async function refresh() {
 
 const START_REASONS = {
   PREVIOUS_CHANGED: '別の記録に変わったため開始しませんでした。もう一度確かめてください',
-  PREVIOUS_RECORDING: '記録中の記録があるため開始しませんでした。もう一度確かめてください',
+  PREVIOUS_RECORDING: '記録中の記録があるため開始しませんでした。先に停止してください',
   SETTINGS_EXPOSED: '設定をページから守れないため開始しませんでした。前の記録はそのままです',
   PERMISSION_DENIED: 'サイトへのアクセスが許可されていないため開始しませんでした'
 };
@@ -460,7 +460,7 @@ function startHere(previous) {
     }
     const result = await send('START', {
       tabId: tab.id, url: tab.url, scope: ui.scope.value, targetVersion: ui.targetVersion.value,
-      expectedPrevious: previous?.id, stopRecording: previous?.recording === true
+      expectedPrevious: previous?.id
     });
     startError = result?.ok ? '' : START_REASONS[result?.error] || `記録を開始できません (${result?.error || 'unknown'})`;
     if (!result?.ok) {
@@ -485,11 +485,11 @@ ui.start.addEventListener('click', () => {
     startHere(null);
     return;
   }
-  // A recording on hand is lost by a start: the tester confirms it first, in a click of its own, since
-  // the permission request must be the first thing a click does (ADR 0006). Every time: the extension
-  // cannot tell whether the recording was saved.
-  pendingStart = { id: recording.id, recording: recording.state === 'recording' };
-  ui.startConfirmText.textContent = `${pendingStart.recording ? '記録中の記録を止めて、' : ''}新しい記録を始めます。前の記録は手元から消えます。保存したファイルがあるか確かめてください（拡張は保存できたかを確かめられません）。`;
+  // A stopped recording on hand is lost by a start (the button is off while recording): the tester
+  // confirms it first, in a click of its own, since the permission request must be the first thing a
+  // click does (ADR 0006). Every time: the extension cannot tell whether the recording was saved.
+  pendingStart = { id: recording.id };
+  ui.startConfirmText.textContent = '新しい記録を始めます。前の記録は手元から消えます。保存したファイルがあるか確かめてください（拡張は保存できたかを確かめられません）。';
   ui.startConfirm.hidden = false;
   ui.startConfirmed.focus();
 });

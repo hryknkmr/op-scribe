@@ -169,26 +169,27 @@ const httpUrl = (url) => { try { return ['http:', 'https:'].includes(new URL(url
 // ------------------------------------------------------------------ actions
 
 /**
- * A start replaces the recording on hand only when the panel confirmed that one (ADR 0006): the id it
- * showed (expectedPrevious), and stopRecording when it was still recording. Anything else is refused,
- * so a start from another panel meanwhile never takes a recording nobody confirmed.
+ * A start replaces the recording on hand only when it is stopped and the panel confirmed that one, by
+ * the id it showed (expectedPrevious; ADR 0006). One still recording is stopped first, as STOP does
+ * (flushing what was typed); a start never stops it. So a start from another panel meanwhile never
+ * takes a recording nobody confirmed.
  */
-function previousRefusal(previous, expectedPrevious, stopRecording) {
+function previousRefusal(previous, expectedPrevious) {
   if (previous ? expectedPrevious !== previous.id : expectedPrevious !== undefined) return 'PREVIOUS_CHANGED';
-  if (previous?.state === 'recording' && stopRecording !== true) return 'PREVIOUS_RECORDING';
+  if (previous?.state === 'recording') return 'PREVIOUS_RECORDING';
   return '';
 }
 
-async function start({ tabId, url, scope, targetVersion, expectedPrevious, stopRecording }) {
+async function start({ tabId, url, scope, targetVersion, expectedPrevious }) {
   const pattern = originPattern(url);
   // Outside mutate, so this is the reply itself, not a { reply } for mutate to unwrap.
   if (!(await chrome.permissions.contains({ origins: [pattern] }))) {
     return { ok: false, error: 'PERMISSION_DENIED' };
   }
   return mutate(async (previous) => {
-    const refused = previousRefusal(previous, expectedPrevious, stopRecording);
+    const refused = previousRefusal(previous, expectedPrevious);
     if (refused) return { reply: { ok: false, error: refused } };
-    // What can refuse before the previous recording is stopped does, leaving it as it was (ADR 0006).
+    // Refused before anything changes: the recording on hand stays as it was (ADR 0006).
     try {
       await lockSettings();
     } catch (error) {
@@ -223,15 +224,9 @@ async function start({ tabId, url, scope, targetVersion, expectedPrevious, stopR
     setRecordingText(rec, 'scope', scope, settings);
     setRecordingText(rec, 'targetVersion', targetVersion, settings);
     addStep(rec, { type: 'navigate', pageUrl: url, source: 'unknown' }, settings, { tabUrl: url, tab: 1 });
-    try {
-      if (previous?.state === 'recording') await stopTab(previous);
-      await syncContentScripts(rec.grantedPatterns);
-      await setBadge(true);
-    } catch (error) {
-      if (previous?.state !== 'recording') throw error;
-      // stopTab may have ended it already, in part: do not leave it saved as still recording.
-      return { save: { ...previous, state: 'stopped', endedAt: endAt(previous) }, reply: { ok: false, error: String(error?.message || error) } };
-    }
+    // The recording on hand is stopped (above): a failure here leaves it as it was.
+    await syncContentScripts(rec.grantedPatterns);
+    await setBadge(true);
     // After the save: the injected script asks at once whether this tab is recording.
     // A failed injection is not a failed start: the registered scripts still reach the next page.
     return { save: rec, reply: { ok: true, id: rec.id }, after: () => injectNow(tabId) };
