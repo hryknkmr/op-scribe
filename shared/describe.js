@@ -467,22 +467,41 @@
   const UNKNOWN_SCREEN = '画面不明';
   const TRIMMED = '記録の一部が欠けている可能性がある';
 
-  /** The masked URL of the closest step before index that has one, shown, or 画面不明. */
+  /**
+   * The tab an expectation at index is about (#40): the tab of the closest person's operation or tool
+   * call before it, where the tester was; else of the closest step that has a tab. A note written in the
+   * side panel has none of its own. undefined for a recording without tab numbers.
+   */
+  function tabAt(steps, index) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if ((isOperation(steps[i]) || steps[i].type === 'tool') && steps[i].tab !== undefined) return steps[i].tab;
+    }
+    for (let i = index - 1; i >= 0; i -= 1) if (steps[i].tab !== undefined) return steps[i].tab;
+    return undefined;
+  }
+  /** Whether a step belongs to tab: one without a tab (a panel note, an older recording) belongs to every tab. */
+  const inTab = (step, tab) => tab === undefined || step.tab === undefined || step.tab === tab;
+
+  /** The masked URL of the closest step before index in its tab that has one, shown, or 画面不明. */
   function screenBefore(steps, index) {
-    for (let i = index - 1; i >= 0; i -= 1) if (steps[i].url) return shown(txt(steps[i].url));
+    const tab = tabAt(steps, index);
+    for (let i = index - 1; i >= 0; i -= 1) if (steps[i].url && inTab(steps[i], tab)) return shown(txt(steps[i].url));
     return UNKNOWN_SCREEN;
   }
 
   /**
    * The notices shown for the expectation at index: from the closest person's operation, tool
-   * call or navigation before it (else the start), up to it, in order (ADR 0005).
+   * call or navigation before it (else the start), up to it, in order (ADR 0005). Only those of
+   * its tab (#40): another tab's notice or navigation neither shows nor cuts them off.
    */
   function noticesBefore(steps, index) {
+    const tab = tabAt(steps, index);
     let from = 0;
     for (let i = index - 1; i >= 0; i -= 1) {
+      if (!inTab(steps[i], tab)) continue;
       if (isOperation(steps[i]) || steps[i].type === 'tool' || steps[i].type === 'navigate') { from = i + 1; break; }
     }
-    return steps.slice(from, index).filter((s) => s.type === 'notice').map((s) => shown(describeStep(s)));
+    return steps.slice(from, index).filter((s) => s.type === 'notice' && inTab(s, tab)).map((s) => shown(describeStep(s)));
   }
 
   /** The environment and the version under test, one line each. */
@@ -607,16 +626,22 @@
    * The masked URLs in the order they changed (ADR 0005): a new part wherever a step's URL
    * differs from the part it is in; a step without one stays in the part it is in, or a first
    * 画面不明 part. Each part counts the person's operations, tool calls and the page's notes.
+   * By tab (#40): a step in another tab goes to that tab's latest part, or a new one, so a page
+   * in one tab is never counted under another tab's URL.
    */
   function screenParts(steps) {
     const parts = [];
+    const latest = new Map();
     let current = null;
     for (const step of steps) {
       const url = step.url ? txt(step.url) : null;
+      const tab = step.tab ?? current?.tab;
+      if (current && tab !== current.tab) current = latest.get(tab) || null;
       if (!current || (url !== null && url !== current.url)) {
-        current = { url, operations: 0, tools: 0, reports: 0 };
+        current = { tab, url, operations: 0, tools: 0, reports: 0 };
         parts.push(current);
       }
+      latest.set(tab, current);
       if (isOperation(step)) current.operations += 1;
       else if (step.type === 'tool') current.tools += 1;
       else if (step.type === 'note' && step.source === 'agent') current.reports += 1;
@@ -648,8 +673,10 @@
     lines.push('', '## 対象のバージョン・環境', ...environmentLines(recording));
     lines.push('', '## 実施した時間', `${recording.startedAt} 〜 ${recording.endedAt}（${minutes} 分）`);
     lines.push('', '## 実施した操作', '伏せた URL の移り変わり（記録された操作は、ブラウザが人の操作として届けたもの）:');
+    // The tab of each part, only when the recording has more than one (#40).
+    const tabbed = new Set(steps.map((s) => s.tab).filter((t) => t !== undefined)).size > 1;
     screenParts(steps).forEach((part, i) => {
-      lines.push(`${i + 1}. ${part.url === null ? UNKNOWN_SCREEN : shown(part.url)}: 記録された操作 ${part.operations} 件 / ツール呼び出し ${part.tools} 件 / ページからの申告 ${part.reports} 件`);
+      lines.push(`${i + 1}. ${tabbed && part.tab !== undefined ? `タブ ${part.tab}: ` : ''}${part.url === null ? UNKNOWN_SCREEN : shown(part.url)}: 記録された操作 ${part.operations} 件 / ツール呼び出し ${part.tools} 件 / ページからの申告 ${part.reports} 件`);
     });
     lines.push('', '## 確かめたこと');
     const expectations = steps.map((s, i) => [s, i]).filter(([s]) => isExpectation(s));
@@ -670,7 +697,16 @@
       if (of.length) lines.push(`- ${NOTE_KIND_LABELS[kind]}`, ...of.map((s) => `  - ${shown(txt(s.note))}`));
     }
     lines.push('', '## やっていないこと', recording.notTested ? shown(txt(recording.notTested)) : '（記録なし）');
-    lines.push('', '## 付録: 記録したステップ', ...steps.map(appendixLine));
+    // Where the steps switch tabs (#40), as the Markdown and the Gherkin say it; the numbers stay the steps'.
+    lines.push('', '## 付録: 記録したステップ');
+    let tab = firstTab(steps);
+    steps.forEach((step, i) => {
+      if (step.tab !== undefined && step.tab !== tab) {
+        lines.push(`- ${switchText(step.tab)}`);
+        tab = step.tab;
+      }
+      lines.push(appendixLine(step, i));
+    });
     return `${lines.map((l) => humanize(line(l))).join('\n')}\n`;
   }
 

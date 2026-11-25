@@ -551,3 +551,45 @@ test('a bug ticket\'s steps say where the tabs switch (format A; #40)', () => {
   const [ticket] = D.bugTickets(r);
   assert.ok(ticket.text.includes('3. タブ 2 に切り替える\n4. https://site-2.invalid/ を開く\n5. 「保存」ボタンをクリックする'), ticket.text);
 });
+
+// A recording that works in tab 1 while tab 2, opened from it, navigates and tells something by itself.
+const twoTabs = (expectation) => ({ id: 'rec-tabs-rest', startedAt: '2026-11-04T00:00:00.000Z', endedAt: '2026-11-04T00:02:00.000Z', startUrl: 'https://site-1.invalid/', environment: {}, steps: [
+  { type: 'navigate', t: 0, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/' },
+  { type: 'click', t: 100, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'button', name: '保存' } },
+  { type: 'notice', t: 150, env: 'standard', source: 'unknown', tab: 1, url: 'https://site-1.invalid/', level: 'status', notice: ['保存しました'] },
+  { type: 'navigate', t: 200, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/' },
+  { type: 'notice', t: 250, env: 'standard', source: 'unknown', tab: 2, url: 'https://site-2.invalid/', level: 'status', notice: ['広告です'] },
+  { type: 'note', t: 300, env: 'standard', source: 'user', note: '保存できる', ref: 'E-aaaaaa', ...expectation }
+] });
+
+test('a bug ticket names the screen and the notices of the tab the tester worked in, not another tab\'s (format A; #40)', () => {
+  const [ticket] = D.bugTickets(twoTabs({ verdict: 'ng', actual: 'エラー' }));
+  assert.ok(ticket.text.split('\n')[0].includes('（https://site-1.invalid/）'), ticket.text);
+  assert.ok(ticket.text.includes('画面に出た通知:\n- '), ticket.text);
+  const notices = ticket.text.slice(ticket.text.indexOf('画面に出た通知:')).split('\n## ')[0];
+  assert.ok(notices.includes('保存しました'), notices);
+  assert.ok(!notices.includes('広告です'), notices);
+});
+
+test('a session record keeps each tab\'s screens apart and says where the appendix switches tabs (format B; #40)', () => {
+  const r = twoTabs({ verdict: 'ng', actual: 'エラー' });
+  r.steps.push({ type: 'click', t: 400, env: 'standard', source: 'user', tab: 1, url: 'https://site-1.invalid/', target: { role: 'button', name: '戻る' } });
+  const text = D.sessionRecord(r);
+  const parts = text.slice(text.indexOf('伏せた URL の移り変わり')).split('\n## ')[0];
+  assert.ok(parts.includes('1. タブ 1: https://site-1.invalid/: 記録された操作 2 件'), parts);
+  assert.ok(parts.includes('2. タブ 2: https://site-2.invalid/: 記録された操作 0 件'), parts);
+  assert.ok(text.includes('[E-aaaaaa] 保存できる（画面: https://site-1.invalid/）: NG'), text);
+  const checked = text.slice(text.indexOf('## 確かめたこと')).split('\n## ')[1];
+  assert.ok(!text.slice(text.indexOf('## 確かめたこと'), text.indexOf('## 見つけたこと')).includes('広告です'), checked);
+  const appendix = text.slice(text.indexOf('## 付録'));
+  assert.ok(/3\. [^\n]*\n- タブ 2 に切り替える\n4\. /.test(appendix), appendix);
+  assert.ok(/5\. [^\n]*\n6\. [^\n]*\n- タブ 1 に切り替える\n7\. /.test(appendix), appendix);
+});
+
+test('a recording in one tab reads as before in formats A and B: no tab names, no switches (#40)', () => {
+  const r = twoTabs({ verdict: 'ng', actual: 'エラー' });
+  r.steps = r.steps.filter((s) => s.tab !== 2).map(({ tab, ...rest }) => rest);
+  const text = D.sessionRecord(r);
+  assert.ok(!text.includes('タブ'), text);
+  assert.ok(!D.bugTickets(r)[0].text.includes('タブ'));
+});
